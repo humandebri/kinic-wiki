@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ic-hybrid-engine = { path = "../../../llm-wiki/ic-hybrid-sqlite/crates/ic_hybrid_engine" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 wiki-types = { path = "../wiki_types" }
 
 [dev-dependencies]

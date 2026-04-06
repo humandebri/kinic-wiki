@@ -1,79 +1,56 @@
 // Where: crates/wiki_store/src/schema.rs
-// What: Schema setup for the wiki source-of-truth tables.
-// Why: Revision state, citations, and rendered system pages must exist independently from the search engine.
-use rusqlite::Connection;
+// What: Versioned SQL-file migrations for the wiki source-of-truth schema.
+// Why: The app schema should evolve through explicit one-time migrations, not IF NOT EXISTS DDL.
+use rusqlite::{Connection, OptionalExtension, params};
 
-pub fn run_migrations(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS wiki_pages (
-            id TEXT PRIMARY KEY,
-            slug TEXT NOT NULL UNIQUE,
-            page_type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            current_revision_id TEXT,
-            summary_1line TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
+const MIGRATIONS: &[(&str, &str)] =
+    &[("wiki_store:000_initial", include_str!("../migrations/000_initial.sql"))];
+const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
+    include_str!("../migrations/000_schema_migrations.sql");
+pub fn run_migrations(conn: &mut Connection) -> Result<(), String> {
+    ensure_schema_migrations_table(conn)?;
 
-        CREATE TABLE IF NOT EXISTS wiki_revisions (
-            id TEXT PRIMARY KEY,
-            page_id TEXT NOT NULL,
-            revision_no INTEGER NOT NULL,
-            markdown TEXT NOT NULL,
-            change_reason TEXT NOT NULL,
-            author_type TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            UNIQUE(page_id, revision_no)
-        );
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for (version, sql) in MIGRATIONS {
+        if migration_already_applied(&tx, version)? {
+            continue;
+        }
+        tx.execute_batch(sql).map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![version],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
 
-        CREATE TABLE IF NOT EXISTS wiki_sections (
-            id TEXT PRIMARY KEY,
-            page_id TEXT NOT NULL,
-            revision_id TEXT NOT NULL,
-            section_path TEXT NOT NULL,
-            ordinal INTEGER NOT NULL,
-            heading TEXT,
-            text TEXT NOT NULL,
-            content_hash TEXT NOT NULL,
-            is_current INTEGER NOT NULL,
-            UNIQUE(page_id, revision_id, section_path, ordinal)
-        );
+fn ensure_schema_migrations_table(conn: &Connection) -> Result<(), String> {
+    if table_exists(conn, "schema_migrations")? {
+        return Ok(());
+    }
+    conn.execute_batch(SCHEMA_MIGRATIONS_BOOTSTRAP_SQL)
+        .map_err(|error| error.to_string())
+}
 
-        CREATE TABLE IF NOT EXISTS revision_citations (
-            id TEXT PRIMARY KEY,
-            revision_id TEXT NOT NULL,
-            source_id TEXT NOT NULL,
-            chunk_id TEXT,
-            evidence_kind TEXT NOT NULL,
-            note TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS log_events (
-            id TEXT PRIMARY KEY,
-            event_type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            body_markdown TEXT NOT NULL,
-            related_page_id TEXT,
-            created_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS system_pages (
-            slug TEXT PRIMARY KEY,
-            markdown TEXT NOT NULL,
-            updated_at INTEGER NOT NULL,
-            etag TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_wiki_pages_slug ON wiki_pages(slug);
-        CREATE INDEX IF NOT EXISTS idx_wiki_revisions_page_revision_no
-            ON wiki_revisions(page_id, revision_no);
-        CREATE INDEX IF NOT EXISTS idx_wiki_sections_page_current_ordinal
-            ON wiki_sections(page_id, is_current, ordinal);
-        CREATE INDEX IF NOT EXISTS idx_log_events_created_at
-            ON log_events(created_at DESC);
-        ",
+fn migration_already_applied(conn: &Connection, version: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM schema_migrations WHERE version = ?1",
+        params![version],
+        |row| row.get::<_, i64>(0),
     )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        params![table],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|row| row.is_some())
     .map_err(|error| error.to_string())
 }

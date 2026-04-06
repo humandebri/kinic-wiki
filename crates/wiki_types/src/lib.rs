@@ -143,12 +143,6 @@ pub struct SearchProjectionDoc {
     pub updated_at: i64,
 }
 
-pub trait SearchProjectionWriter {
-    fn upsert_docs(&self, docs: &[SearchProjectionDoc]) -> Result<(), String>;
-    fn delete_docs_by_external_ids(&self, ids: &[String]) -> Result<(), String>;
-    fn delete_docs_by_prefix(&self, prefix: &str) -> Result<usize, String>;
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreatePageInput {
     pub slug: String,

@@ -3,8 +3,13 @@
 // Why: Runtime code should interact with one store object instead of raw SQL calls.
 use std::path::{Path, PathBuf};
 
+use ic_hybrid_engine::{
+    configure_vector_dimension_connection, consistency_report_connection, migrate_connection,
+    register_sqlite_vec,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
+use wiki_search::WikiSearch;
 use wiki_types::{CreatePageInput, PageBundle, PageSectionView, WikiPage, WikiPageType, WikiRevision};
 
 use crate::{render, schema};
@@ -23,8 +28,17 @@ impl WikiStore {
     }
 
     pub fn run_migrations(&self) -> Result<(), String> {
-        let conn = self.open()?;
-        schema::run_migrations(&conn)
+        let mut conn = self.open()?;
+        schema::run_migrations(&mut conn)?;
+        migrate_connection(&mut conn).map_err(|error| error.to_string())?;
+        if consistency_report_connection(&conn)
+            .map_err(|error| error.to_string())?
+            .configured_dimension
+            .is_none()
+        {
+            configure_vector_dimension_connection(&conn, 1).map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn create_page(&self, input: CreatePageInput) -> Result<String, String> {
@@ -74,7 +88,16 @@ impl WikiStore {
         }))
     }
 
+    pub fn search_lexical(
+        &self,
+        request: wiki_types::LexicalSearchRequest,
+    ) -> Result<Vec<wiki_types::SearchHit>, String> {
+        let conn = self.open()?;
+        WikiSearch::lexical_search(&conn, request)
+    }
+
     pub(crate) fn open(&self) -> Result<Connection, String> {
+        register_sqlite_vec().map_err(|error| error.to_string())?;
         Connection::open(&self.database_path).map_err(|error| error.to_string())
     }
 }

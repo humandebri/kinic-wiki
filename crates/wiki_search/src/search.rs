@@ -1,50 +1,69 @@
 // Where: crates/wiki_search/src/search.rs
-// What: Projection writer and lexical search wrapper over ic_hybrid_engine.
-// Why: Reuse the existing retrieval core without letting app code depend on engine-specific types.
-use std::path::{Path, PathBuf};
+// What: Stateless projection writes and lexical search over a shared SQLite connection.
+// Why: The wiki store and retrieval engine must share one DB transaction to stay atomic.
+use rusqlite::Connection;
 
-use ic_hybrid_engine::{HybridEngine, HybridQueryFilters, HybridQueryRequest, IndexedDocument};
-use wiki_types::{
-    LexicalSearchRequest, SearchDocKind, SearchHit, SearchProjectionDoc, SearchProjectionWriter,
+use ic_hybrid_engine::{
+    HybridQueryFilters, HybridQueryRequest, IndexedDocument, delete_document_by_external_id_in_connection,
+    delete_documents_by_prefix_in_connection, hybrid_query_connection,
+    upsert_document_by_external_id_in_connection,
 };
+use wiki_types::{LexicalSearchRequest, SearchDocKind, SearchHit, SearchProjectionDoc};
 
 const LEXICAL_VECTOR_DISABLED: u32 = 0;
 const DEFAULT_KINDS: &[SearchDocKind] = &[SearchDocKind::WikiSection, SearchDocKind::IndexPage];
 
-pub struct WikiSearch {
-    database_path: PathBuf,
-}
+pub struct WikiSearch;
 
 impl WikiSearch {
-    pub fn new(database_path: PathBuf) -> Self {
-        Self { database_path }
+    pub fn upsert_docs_in_tx(conn: &Connection, docs: &[SearchProjectionDoc]) -> Result<(), String> {
+        for doc in docs {
+            upsert_document_by_external_id_in_connection(
+                conn,
+                &IndexedDocument {
+                    external_id: Some(doc.external_id.clone()),
+                    kind: Some(doc.kind.as_str().to_string()),
+                    title: doc.title.clone(),
+                    snippet: doc.snippet.clone(),
+                    citation: doc.citation.clone(),
+                    content: doc.content.clone(),
+                    version: None,
+                    section: doc.section.clone(),
+                    tags: doc.tags.clone(),
+                    embedding: vec![1.0],
+                    updated_at: Some(doc.updated_at),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
-    pub fn database_path(&self) -> &Path {
-        &self.database_path
-    }
-
-    pub fn run_migrations(&self) -> Result<(), String> {
-        let mut engine = self.open_engine()?;
-        engine.migrate().map_err(|error| error.to_string())?;
-        if engine
-            .consistency_report()
-            .map_err(|error| error.to_string())?
-            .configured_dimension
-            .is_none()
-        {
-            engine
-                .configure_vector_dimension(1)
+    pub fn delete_docs_by_external_ids_in_tx(
+        conn: &Connection,
+        ids: &[String],
+    ) -> Result<(), String> {
+        for id in ids {
+            delete_document_by_external_id_in_connection(conn, id)
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
 
-    pub fn lexical_search(&self, request: LexicalSearchRequest) -> Result<Vec<SearchHit>, String> {
-        let engine = self.open_engine()?;
+    pub fn delete_docs_by_prefix_in_tx(conn: &Connection, prefix: &str) -> Result<usize, String> {
+        delete_documents_by_prefix_in_connection(conn, prefix).map_err(|error| error.to_string())
+    }
+
+    pub fn lexical_search(
+        conn: &Connection,
+        request: LexicalSearchRequest,
+    ) -> Result<Vec<SearchHit>, String> {
         let has_query_text = !request.query_text.trim().is_empty();
         let kinds = if request.kinds.is_empty() {
-            DEFAULT_KINDS.iter().map(|kind| kind.as_str().to_string()).collect()
+            DEFAULT_KINDS
+                .iter()
+                .map(|kind| kind.as_str().to_string())
+                .collect()
         } else {
             request
                 .kinds
@@ -52,8 +71,9 @@ impl WikiSearch {
                 .map(|kind| kind.as_str().to_string())
                 .collect()
         };
-        let results = engine
-            .hybrid_query(&HybridQueryRequest {
+        let results = hybrid_query_connection(
+            conn,
+            &HybridQueryRequest {
                 query_text: request.query_text,
                 query_embedding: vec![1.0],
                 version: None,
@@ -68,8 +88,9 @@ impl WikiSearch {
                     tags: request.tags,
                     kinds,
                 }),
-            })
-            .map_err(|error| error.to_string())?;
+            },
+        )
+        .map_err(|error| error.to_string())?;
         results
             .into_iter()
             .filter(|result| !has_query_text || result.breakdown.keyword_score > 0.0)
@@ -97,50 +118,5 @@ impl WikiSearch {
                 ))
             })
             .collect()
-    }
-
-    fn open_engine(&self) -> Result<HybridEngine, String> {
-        HybridEngine::open(&self.database_path).map_err(|error| error.to_string())
-    }
-}
-
-impl SearchProjectionWriter for WikiSearch {
-    fn upsert_docs(&self, docs: &[SearchProjectionDoc]) -> Result<(), String> {
-        let engine = self.open_engine()?;
-        for doc in docs {
-            engine
-                .upsert_document_by_external_id(&IndexedDocument {
-                    external_id: Some(doc.external_id.clone()),
-                    kind: Some(doc.kind.as_str().to_string()),
-                    title: doc.title.clone(),
-                    snippet: doc.snippet.clone(),
-                    citation: doc.citation.clone(),
-                    content: doc.content.clone(),
-                    version: None,
-                    section: doc.section.clone(),
-                    tags: doc.tags.clone(),
-                    embedding: vec![1.0],
-                    updated_at: Some(doc.updated_at),
-                })
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    }
-
-    fn delete_docs_by_external_ids(&self, ids: &[String]) -> Result<(), String> {
-        let engine = self.open_engine()?;
-        for id in ids {
-            engine
-                .delete_document_by_external_id(id)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    }
-
-    fn delete_docs_by_prefix(&self, prefix: &str) -> Result<usize, String> {
-        let engine = self.open_engine()?;
-        engine
-            .delete_documents_by_prefix(prefix)
-            .map_err(|error| error.to_string())
     }
 }

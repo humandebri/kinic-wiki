@@ -1094,8 +1094,8 @@ dependencies = [
 name = "wiki-runtime"
 version = "0.1.0"
 dependencies = [
+ "rusqlite",
  "tempfile",
- "wiki-search",
  "wiki-store",
  "wiki-types",
 ]
@@ -1105,6 +1105,7 @@ name = "wiki-search"
 version = "0.1.0"
 dependencies = [
  "ic-hybrid-engine",
+ "rusqlite",
  "tempfile",
  "wiki-types",
 ]
@@ -1114,12 +1115,14 @@ name = "wiki-store"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "ic-hybrid-engine",
  "pulldown-cmark",
  "rusqlite",
  "sha2",
  "tempfile",
  "time",
  "uuid",
+ "wiki-search",
  "wiki-types",
 ]
 

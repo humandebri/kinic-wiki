@@ -3,9 +3,9 @@
 // Why: The wiki's compounding behavior depends on deterministic revision storage plus search projection maintenance.
 use rusqlite::{Connection, params};
 use uuid::Uuid;
+use wiki_search::WikiSearch;
 use wiki_types::{
-    CommitPageRevisionInput, CommitPageRevisionOutput, RevisionCitationInput, SearchProjectionDoc,
-    SearchProjectionWriter, SystemPage,
+    CommitPageRevisionInput, CommitPageRevisionOutput, RevisionCitationInput, SystemPage,
 };
 
 use crate::{
@@ -19,25 +19,9 @@ use crate::{
 };
 
 impl WikiStore {
-    pub fn commit_page_revision<P: SearchProjectionWriter>(
-        &self,
-        search: &P,
-        input: CommitPageRevisionInput,
-    ) -> Result<CommitPageRevisionOutput, String> {
+    pub fn commit_page_revision(&self, input: CommitPageRevisionInput) -> Result<CommitPageRevisionOutput, String> {
         let mut conn = self.open()?;
-        let (output, projection_docs, deleted_ids, system_pages) =
-            commit_revision_tx(&mut conn, &input)?;
-        if !projection_docs.is_empty() {
-            search.upsert_docs(&projection_docs)?;
-        }
-        if !deleted_ids.is_empty() {
-            search.delete_docs_by_external_ids(&deleted_ids)?;
-        }
-        let system_projection_docs = system_pages_to_docs(&system_pages);
-        if !system_projection_docs.is_empty() {
-            search.upsert_docs(&system_projection_docs)?;
-        }
-        Ok(output)
+        commit_revision_tx(&mut conn, &input)
     }
 
     pub fn render_index_page(&self, updated_at: i64) -> Result<SystemPage, String> {
@@ -50,16 +34,15 @@ impl WikiStore {
         render_log_page_now(&conn, limit, updated_at)
     }
 
-    pub fn refresh_system_pages<P: SearchProjectionWriter>(
-        &self,
-        search: &P,
-        updated_at: i64,
-    ) -> Result<Vec<SystemPage>, String> {
+    pub fn refresh_system_pages(&self, updated_at: i64) -> Result<Vec<SystemPage>, String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let pages = refresh_system_pages_tx(&tx, updated_at)?;
+        let projection_docs = system_pages_to_docs(&pages);
+        if !projection_docs.is_empty() {
+            WikiSearch::upsert_docs_in_tx(&tx, &projection_docs)?;
+        }
         tx.commit().map_err(|error| error.to_string())?;
-        search.upsert_docs(&system_pages_to_docs(&pages))?;
         Ok(pages)
     }
 }
@@ -67,7 +50,7 @@ impl WikiStore {
 fn commit_revision_tx(
     conn: &mut Connection,
     input: &CommitPageRevisionInput,
-) -> Result<(CommitPageRevisionOutput, Vec<SearchProjectionDoc>, Vec<String>, Vec<SystemPage>), String> {
+) -> Result<CommitPageRevisionOutput, String> {
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let mut page = load_page_by_id(&tx, &input.page_id)?.ok_or_else(|| "page does not exist".to_string())?;
     if input.markdown.trim().is_empty() {
@@ -128,6 +111,16 @@ fn commit_revision_tx(
     let (projection_docs, deleted_ids, unchanged_count) =
         build_projection_changes(&page, &revision_id, &new_sections, &old_by_path, input.updated_at);
     let system_pages = refresh_system_pages_tx(&tx, input.updated_at)?;
+    if !projection_docs.is_empty() {
+        WikiSearch::upsert_docs_in_tx(&tx, &projection_docs)?;
+    }
+    if !deleted_ids.is_empty() {
+        WikiSearch::delete_docs_by_external_ids_in_tx(&tx, &deleted_ids)?;
+    }
+    let system_projection_docs = system_pages_to_docs(&system_pages);
+    if !system_projection_docs.is_empty() {
+        WikiSearch::upsert_docs_in_tx(&tx, &system_projection_docs)?;
+    }
     tx.commit().map_err(|error| error.to_string())?;
 
     let mut upserted_ids = projection_docs
@@ -135,20 +128,15 @@ fn commit_revision_tx(
         .map(|doc| doc.external_id.clone())
         .collect::<Vec<_>>();
     upserted_ids.push(format!("page:{}:index", page.id));
-    Ok((
-        CommitPageRevisionOutput {
-            revision_id,
-            revision_no,
-            section_count: new_sections.len() as u32,
-            unchanged_section_count: unchanged_count,
-            upserted_projection_ids: upserted_ids,
-            deleted_projection_ids: deleted_ids.clone(),
-            rendered_system_pages: system_pages.iter().map(|page| page.slug.clone()).collect(),
-        },
-        projection_docs,
-        deleted_ids,
-        system_pages,
-    ))
+    Ok(CommitPageRevisionOutput {
+        revision_id,
+        revision_no,
+        section_count: new_sections.len() as u32,
+        unchanged_section_count: unchanged_count,
+        upserted_projection_ids: upserted_ids,
+        deleted_projection_ids: deleted_ids,
+        rendered_system_pages: system_pages.iter().map(|page| page.slug.clone()).collect(),
+    })
 }
 
 #[derive(Clone, Debug)]

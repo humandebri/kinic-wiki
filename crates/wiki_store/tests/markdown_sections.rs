@@ -1,40 +1,7 @@
-use std::sync::Mutex;
-
 use rusqlite::Connection;
 use tempfile::tempdir;
 use wiki_store::WikiStore;
-use wiki_types::{
-    CommitPageRevisionInput, CreatePageInput, SearchProjectionDoc, SearchProjectionWriter,
-    WikiPageType,
-};
-
-#[derive(Default)]
-struct RecordingSearch {
-    upserts: Mutex<Vec<String>>,
-    deletes: Mutex<Vec<String>>,
-}
-
-impl SearchProjectionWriter for RecordingSearch {
-    fn upsert_docs(&self, docs: &[SearchProjectionDoc]) -> Result<(), String> {
-        self.upserts
-            .lock()
-            .expect("mutex should lock")
-            .extend(docs.iter().map(|doc| doc.external_id.clone()));
-        Ok(())
-    }
-
-    fn delete_docs_by_external_ids(&self, ids: &[String]) -> Result<(), String> {
-        self.deletes
-            .lock()
-            .expect("mutex should lock")
-            .extend(ids.iter().cloned());
-        Ok(())
-    }
-
-    fn delete_docs_by_prefix(&self, _prefix: &str) -> Result<usize, String> {
-        Ok(0)
-    }
-}
+use wiki_types::{CommitPageRevisionInput, CreatePageInput, WikiPageType};
 
 #[test]
 fn migrations_create_required_tables() {
@@ -44,12 +11,17 @@ fn migrations_create_required_tables() {
 
     let conn = Connection::open(store.database_path()).expect("db should open");
     for table in [
+        "schema_migrations",
         "wiki_pages",
         "wiki_revisions",
         "wiki_sections",
         "revision_citations",
         "log_events",
         "system_pages",
+        "documents",
+        "documents_fts",
+        "document_tags",
+        "engine_config",
     ] {
         let exists = conn
             .query_row(
@@ -63,10 +35,33 @@ fn migrations_create_required_tables() {
 }
 
 #[test]
+fn migrations_are_recorded_and_rerunnable() {
+    let dir = tempdir().expect("temp dir should exist");
+    let store = WikiStore::new(dir.path().join("wiki.sqlite3"));
+    store.run_migrations().expect("first migration should succeed");
+    store.run_migrations().expect("second migration should succeed");
+
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let versions = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT version FROM schema_migrations
+                 WHERE version LIKE 'wiki_store:%'
+                 ORDER BY version",
+            )
+            .expect("statement should prepare");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query should work")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("versions should collect")
+    };
+    assert_eq!(versions, vec!["wiki_store:000_initial".to_string()]);
+}
+
+#[test]
 fn commit_revision_reports_unchanged_and_deleted_sections() {
     let dir = tempdir().expect("temp dir should exist");
     let store = WikiStore::new(dir.path().join("wiki.sqlite3"));
-    let search = RecordingSearch::default();
     store.run_migrations().expect("migrations should succeed");
     let page_id = store
         .create_page(CreatePageInput {
@@ -78,37 +73,31 @@ fn commit_revision_reports_unchanged_and_deleted_sections() {
         .expect("page should create");
 
     let first = store
-        .commit_page_revision(
-            &search,
-            CommitPageRevisionInput {
-                page_id: page_id.clone(),
-                expected_current_revision_id: None,
-                title: "Diff Page".to_string(),
-                markdown: "# Keep\n\nsame\n\n# Remove\n\nold".to_string(),
-                change_reason: "first".to_string(),
-                author_type: "test".to_string(),
-                citations: Vec::new(),
-                tags: Vec::new(),
-                updated_at: 1_700_000_001,
-            },
-        )
+        .commit_page_revision(CommitPageRevisionInput {
+            page_id: page_id.clone(),
+            expected_current_revision_id: None,
+            title: "Diff Page".to_string(),
+            markdown: "# Keep\n\nsame\n\n# Remove\n\nold".to_string(),
+            change_reason: "first".to_string(),
+            author_type: "test".to_string(),
+            citations: Vec::new(),
+            tags: Vec::new(),
+            updated_at: 1_700_000_001,
+        })
         .expect("first revision should commit");
 
     let second = store
-        .commit_page_revision(
-            &search,
-            CommitPageRevisionInput {
-                page_id,
-                expected_current_revision_id: Some(first.revision_id),
-                title: "Diff Page".to_string(),
-                markdown: "# Keep\n\nsame\n\n# Add\n\nnew".to_string(),
-                change_reason: "second".to_string(),
-                author_type: "test".to_string(),
-                citations: Vec::new(),
-                tags: Vec::new(),
-                updated_at: 1_700_000_002,
-            },
-        )
+        .commit_page_revision(CommitPageRevisionInput {
+            page_id: page_id.clone(),
+            expected_current_revision_id: Some(first.revision_id),
+            title: "Diff Page".to_string(),
+            markdown: "# Keep\n\nsame\n\n# Add\n\nnew".to_string(),
+            change_reason: "second".to_string(),
+            author_type: "test".to_string(),
+            citations: Vec::new(),
+            tags: Vec::new(),
+            updated_at: 1_700_000_002,
+        })
         .expect("second revision should commit");
 
     assert_eq!(second.unchanged_section_count, 1);
@@ -118,13 +107,29 @@ fn commit_revision_reports_unchanged_and_deleted_sections() {
             .iter()
             .any(|id| id.ends_with(":section:remove"))
     );
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let removed_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE external_id = ?1",
+            [format!("page:{page_id}:section:remove")],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("removed query should succeed");
+    let keep_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE external_id = ?1",
+            [format!("page:{page_id}:section:keep")],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("keep query should succeed");
+    assert_eq!(removed_count, 0);
+    assert_eq!(keep_count, 1);
 }
 
 #[test]
 fn current_page_bundle_uses_intro_and_duplicate_section_paths() {
     let dir = tempdir().expect("temp dir should exist");
     let store = WikiStore::new(dir.path().join("wiki.sqlite3"));
-    let search = RecordingSearch::default();
     store.run_migrations().expect("migrations should succeed");
     store.create_page(CreatePageInput {
         slug: "shape".to_string(),
@@ -133,20 +138,17 @@ fn current_page_bundle_uses_intro_and_duplicate_section_paths() {
         created_at: 1_700_000_000,
     })
     .and_then(|page_id| {
-        store.commit_page_revision(
-            &search,
-            CommitPageRevisionInput {
-                page_id,
-                expected_current_revision_id: None,
-                title: "Shape".to_string(),
-                markdown: "Lead\n\n# Root\n\n## Child\n\none\n\n## Child\n\ntwo".to_string(),
-                change_reason: "shape".to_string(),
-                author_type: "test".to_string(),
-                citations: Vec::new(),
-                tags: Vec::new(),
-                updated_at: 1_700_000_001,
-            },
-        )
+        store.commit_page_revision(CommitPageRevisionInput {
+            page_id,
+            expected_current_revision_id: None,
+            title: "Shape".to_string(),
+            markdown: "Lead\n\n# Root\n\n## Child\n\none\n\n## Child\n\ntwo".to_string(),
+            change_reason: "shape".to_string(),
+            author_type: "test".to_string(),
+            citations: Vec::new(),
+            tags: Vec::new(),
+            updated_at: 1_700_000_001,
+        })
     })
     .expect("revision should commit");
 

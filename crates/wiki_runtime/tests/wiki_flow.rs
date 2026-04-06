@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use tempfile::tempdir;
 use wiki_runtime::WikiService;
 use wiki_types::{
@@ -7,8 +8,8 @@ use wiki_types::{
 #[test]
 fn commit_and_search_lexical_returns_current_sections() {
     let dir = tempdir().expect("temp dir should exist");
-    let service =
-        WikiService::new(dir.path().join("wiki.sqlite3"), dir.path().join("search.sqlite3"));
+    let db_path = dir.path().join("wiki.sqlite3");
+    let service = WikiService::new(db_path);
     service.run_migrations().expect("migrations should succeed");
     let page_id = service
         .create_page(CreatePageInput {
@@ -47,8 +48,8 @@ fn commit_and_search_lexical_returns_current_sections() {
 #[test]
 fn revision_update_replaces_old_keywords_and_keeps_system_index_searchable() {
     let dir = tempdir().expect("temp dir should exist");
-    let service =
-        WikiService::new(dir.path().join("wiki.sqlite3"), dir.path().join("search.sqlite3"));
+    let db_path = dir.path().join("wiki.sqlite3");
+    let service = WikiService::new(db_path);
     service.run_migrations().expect("migrations should succeed");
     let page_id = service
         .create_page(CreatePageInput {
@@ -126,8 +127,8 @@ fn revision_update_replaces_old_keywords_and_keeps_system_index_searchable() {
 #[test]
 fn expected_revision_mismatch_fails() {
     let dir = tempdir().expect("temp dir should exist");
-    let service =
-        WikiService::new(dir.path().join("wiki.sqlite3"), dir.path().join("search.sqlite3"));
+    let db_path = dir.path().join("wiki.sqlite3");
+    let service = WikiService::new(db_path);
     service.run_migrations().expect("migrations should succeed");
     let page_id = service
         .create_page(CreatePageInput {
@@ -151,4 +152,67 @@ fn expected_revision_mismatch_fails() {
         })
         .expect_err("conflicting revision should fail");
     assert!(error.contains("expected_current_revision_id"));
+}
+
+#[test]
+fn projection_failure_rolls_back_revision_write() {
+    let dir = tempdir().expect("temp dir should exist");
+    let db_path = dir.path().join("wiki.sqlite3");
+    let service = WikiService::new(db_path.clone());
+    service.run_migrations().expect("migrations should succeed");
+    let page_id = service
+        .create_page(CreatePageInput {
+            slug: "rollback".to_string(),
+            page_type: WikiPageType::Overview,
+            title: "Rollback".to_string(),
+            created_at: 1_700_000_000,
+        })
+        .expect("page should create");
+    let conn = Connection::open(&db_path).expect("db should open");
+    conn.execute_batch(
+        "
+        CREATE TRIGGER fail_projection_insert
+        BEFORE INSERT ON documents
+        BEGIN
+            SELECT RAISE(ABORT, 'projection insert failed');
+        END;
+        ",
+    )
+    .expect("trigger should create");
+
+    let error = service
+        .commit_page_revision(CommitPageRevisionInput {
+            page_id: page_id.clone(),
+            expected_current_revision_id: None,
+            title: "Rollback".to_string(),
+            markdown: "# Rollback\n\nbody".to_string(),
+            change_reason: "seed".to_string(),
+            author_type: "test".to_string(),
+            citations: Vec::new(),
+            tags: Vec::new(),
+            updated_at: 1_700_000_001,
+        })
+        .expect_err("projection failure should abort commit");
+    assert!(error.contains("projection insert failed"));
+
+    let revision_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM wiki_revisions WHERE page_id = ?1",
+            [&page_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("revision count should query");
+    let section_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM wiki_sections WHERE page_id = ?1",
+            [&page_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("section count should query");
+    let document_count = conn
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get::<_, i64>(0))
+        .expect("document count should query");
+    assert_eq!(revision_count, 0);
+    assert_eq!(section_count, 0);
+    assert_eq!(document_count, 0);
 }
