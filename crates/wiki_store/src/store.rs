@@ -6,14 +6,21 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 use wiki_types::{
-    CommitPageRevisionInput, CommitPageRevisionOutput, CreatePageInput, CreateSourceInput,
-    LogEvent, PageBundle, PageSectionView, SearchHit, SearchRequest, Status, SystemPage, WikiPage,
-    WikiPageType, WikiRevision,
+    AppendSourceChunkInput, BeginSourceUploadInput, CommitPageRevisionInput,
+    CommitPageRevisionOutput, CommitWikiChangesRequest, CommitWikiChangesResponse, CreatePageInput,
+    CreateSourceInput, ExportWikiSnapshotRequest, ExportWikiSnapshotResponse,
+    FetchWikiUpdatesRequest, FetchWikiUpdatesResponse, FinalizeSourceUploadInput,
+    FinalizeSourceUploadOutput, HealthCheckReport, LogEvent, PageBundle, PageSectionView,
+    SearchHit, SearchRequest, SourceUploadStatus, Status, SystemPage, WikiPage, WikiPageType,
+    WikiRevision,
 };
 
 use crate::{
+    health::run_health_checks,
     render, schema,
     source::{count_sources, create_source_row, load_system_page},
+    source_upload::{append_source_chunk_row, begin_source_upload_row, finalize_source_upload_row},
+    sync::{commit_wiki_changes, export_snapshot, fetch_updates},
 };
 
 pub struct WikiStore {
@@ -58,6 +65,27 @@ impl WikiStore {
     pub fn create_source(&self, input: CreateSourceInput) -> Result<String, String> {
         let conn = self.open()?;
         create_source_row(&conn, input)
+    }
+
+    pub fn begin_source_upload(&self, input: BeginSourceUploadInput) -> Result<String, String> {
+        let conn = self.open()?;
+        begin_source_upload_row(&conn, input)
+    }
+
+    pub fn append_source_chunk(
+        &self,
+        input: AppendSourceChunkInput,
+    ) -> Result<SourceUploadStatus, String> {
+        let conn = self.open()?;
+        append_source_chunk_row(&conn, input)
+    }
+
+    pub fn finalize_source_upload(
+        &self,
+        input: FinalizeSourceUploadInput,
+    ) -> Result<FinalizeSourceUploadOutput, String> {
+        let mut conn = self.open()?;
+        finalize_source_upload_row(&mut conn, input)
     }
 
     pub fn commit_page_revision(
@@ -129,6 +157,35 @@ impl WikiStore {
             source_count: count_sources(&conn)?,
             system_page_count: count_table_rows(&conn, "system_pages")?,
         })
+    }
+
+    pub fn lint_health(&self) -> Result<HealthCheckReport, String> {
+        let conn = self.open()?;
+        run_health_checks(&conn)
+    }
+
+    pub fn export_wiki_snapshot(
+        &self,
+        request: ExportWikiSnapshotRequest,
+    ) -> Result<ExportWikiSnapshotResponse, String> {
+        let conn = self.open()?;
+        export_snapshot(&conn, request)
+    }
+
+    pub fn fetch_wiki_updates(
+        &self,
+        request: FetchWikiUpdatesRequest,
+    ) -> Result<FetchWikiUpdatesResponse, String> {
+        let conn = self.open()?;
+        fetch_updates(&conn, request)
+    }
+
+    pub fn commit_wiki_changes(
+        &self,
+        request: CommitWikiChangesRequest,
+    ) -> Result<CommitWikiChangesResponse, String> {
+        let mut conn = self.open()?;
+        commit_wiki_changes(&mut conn, request)
     }
 
     pub(crate) fn open(&self) -> Result<Connection, String> {

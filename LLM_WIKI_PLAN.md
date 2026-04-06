@@ -124,8 +124,9 @@ ICP canister entrypoint です。
 ### 4.4 `wiki_agent_schema`
 
 LLM 用の運用規約をまとめる層です。
-初期段階では独立 crate をまだ持たず、`AGENTS.md` と `LLM_WIKI_PLAN.md` で代替します。
-将来的には専用 crate または専用規約ファイル群として切り出します。
+初期実装では `AGENTS.md` と `LLM_WIKI_PLAN.md` を正本にしつつ、
+runtime から参照できる最小の独立 crate として `wiki_agent_schema` を持ちます。
+詳細な規約ファイル群への分割は将来拡張です。
 
 役割:
 
@@ -425,13 +426,13 @@ LLM やユーザーが読む raw source の本体です。
 - `create_source(input)` に `body_text` を含めて一発登録する
 - DB には transport chunk を残さない
 
-将来拡張:
+実装済みの upload API:
 
 - `begin_source_upload`
 - `append_source_chunk`
 - `finalize_source_upload`
 
-のような upload 専用 API を別レイヤとして追加し、
+これらは upload 専用レイヤとして使い、
 `finalize` 時に chunk を結合して `source_bodies.body_text` へ 1 回だけ保存します。
 この時も wiki の正本は `source_bodies` の全文であり、chunk 自体は永続正本にしません。
 
@@ -658,9 +659,10 @@ request:
 
 ```text
 {
+  change_type: "update" | "delete",
   page_id: String,
   base_revision_id: String,
-  new_markdown: String,
+  new_markdown: Option<String>,
 }
 ```
 
@@ -671,6 +673,7 @@ response:
   committed_pages: Vec<CommittedPageResult>,
   rejected_pages: Vec<RejectedPageResult>,
   snapshot_revision: String,
+  snapshot_was_stale: bool,
   system_pages: Vec<SystemPageSnapshot>,
   manifest_delta: WikiSyncManifestDelta,
 }
@@ -691,17 +694,24 @@ response:
 ```text
 {
   page_id: String,
-  current_revision_id: String,
   reason: String,
+  conflicting_section_paths: Vec<String>,
+  local_changed_section_paths: Vec<String>,
+  remote_changed_section_paths: Vec<String>,
+  conflict_markdown: Option<String>,
 }
 ```
 
 基本動作:
 
-1. `base_revision_id` が current と一致する page だけ commit する
-2. canister 側で markdown を section 分割し、hash を再計算する
-3. page revision 確定後に system pages を更新する
-4. 成功した page の新しい revision と manifest 差分を返す
+1. `base_snapshot_revision` は remote が進んでいるかを示す補助値として扱い、request 全体の hard gate にはしない
+2. `base_snapshot_revision` が古い場合でも、page ごとに `base_revision_id` を見て適用可否を判断する
+3. `base_revision_id` が current と一致する page だけ commit する
+4. `change_type = update` の場合は canister 側で markdown を section 分割し、hash を再計算する
+5. `change_type = delete` の場合は page / revision / section / FTS rows を削除し、system pages を更新する
+6. `base_revision_id` が不一致の場合は section diff を計算し、`RejectedPageResult` に conflict 情報を返す
+7. 必要なら `conflict_markdown` に `<<<<<<<` 形式の marker を含めて返してよい
+8. 成功した page の新しい revision または removed page と manifest 差分を返す
 
 ### 12.13 manifest の最小項目
 
@@ -821,6 +831,9 @@ canister 側に持たせない責務:
 
 - wiki の保守作業を LLM が継続的に提案できる
 
+初期実装では、明示マーカー検出と可視 citation の有無、
+inbound link の有無に基づく軽量チェックから始めます。
+
 ### Phase E: local sync
 
 やること:
@@ -836,6 +849,9 @@ canister 側に持たせない責務:
 - canister からローカル working copy を作れる
 - changed pages / sections だけを push できる
 - remote 競合時に安全に reject される
+
+初期実装では page 単位 snapshot/export と base snapshot 競合 reject を先に入れ、
+削除や高度な merge は後段に回します。
 
 ## 14. やらないこと
 

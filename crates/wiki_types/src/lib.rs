@@ -1,7 +1,15 @@
 // Where: crates/wiki_types/src/lib.rs
 // What: Shared wiki domain types and public runtime contracts.
 // Why: Keep store and runtime aligned on the source-of-truth model from LLM_WIKI_PLAN.md.
+mod health;
+mod sync;
+mod upload;
+
 use serde::{Deserialize, Serialize};
+
+pub use health::*;
+pub use sync::*;
+pub use upload::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WikiPageType {

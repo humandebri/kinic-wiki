@@ -20,6 +20,8 @@ fn migrations_create_required_tables() {
         "system_pages",
         "sources",
         "source_bodies",
+        "source_uploads",
+        "source_upload_chunks",
     ] {
         let exists = conn
             .query_row(
@@ -64,6 +66,7 @@ fn migrations_are_recorded_and_rerunnable() {
             "wiki_store:001_sources".to_string(),
             "wiki_store:002_plan_alignment".to_string(),
             "wiki_store:003_section_search".to_string(),
+            "wiki_store:004_source_uploads".to_string(),
         ]
     );
 }

@@ -660,6 +660,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki-agent-schema"
+version = "0.1.0"
+
+[[package]]
 name = "wiki-runtime"
 version = "0.1.0"
 dependencies = [

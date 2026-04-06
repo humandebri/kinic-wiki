@@ -20,6 +20,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "wiki_store:003_section_search",
         include_str!("../migrations/003_section_search.sql"),
     ),
+    (
+        "wiki_store:004_source_uploads",
+        include_str!("../migrations/004_source_uploads.sql"),
+    ),
 ];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
     include_str!("../migrations/000_schema_migrations.sql");
