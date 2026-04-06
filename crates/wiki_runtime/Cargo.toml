@@ -1,0 +1,12 @@
+[package]
+name = "wiki-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wiki-search = { path = "../wiki_search" }
+wiki-store = { path = "../wiki_store" }
+wiki-types = { path = "../wiki_types" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

@@ -1,0 +1,157 @@
+// Where: crates/wiki_store/src/store.rs
+// What: Public wiki store API and read/write helpers over the source-of-truth database.
+// Why: Runtime code should interact with one store object instead of raw SQL calls.
+use std::path::{Path, PathBuf};
+
+use rusqlite::{Connection, OptionalExtension, params};
+use uuid::Uuid;
+use wiki_types::{CreatePageInput, PageBundle, PageSectionView, WikiPage, WikiPageType, WikiRevision};
+
+use crate::{render, schema};
+
+pub struct WikiStore {
+    database_path: PathBuf,
+}
+
+impl WikiStore {
+    pub fn new(database_path: PathBuf) -> Self {
+        Self { database_path }
+    }
+
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
+    }
+
+    pub fn run_migrations(&self) -> Result<(), String> {
+        let conn = self.open()?;
+        schema::run_migrations(&conn)
+    }
+
+    pub fn create_page(&self, input: CreatePageInput) -> Result<String, String> {
+        let conn = self.open()?;
+        let page_id = format!("page_{}", Uuid::new_v4());
+        conn.execute(
+            "INSERT INTO wiki_pages (
+                id, slug, page_type, title, current_revision_id, summary_1line, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+            params![
+                page_id,
+                input.slug,
+                input.page_type.as_str(),
+                input.title,
+                render::summary_from_title(&input.title, &input.page_type),
+                input.created_at,
+                input.created_at,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(page_id)
+    }
+
+    pub fn get_page_by_slug(&self, slug: &str) -> Result<Option<PageBundle>, String> {
+        let conn = self.open()?;
+        let page = load_page_by_slug(&conn, slug)?;
+        let Some(page) = page else {
+            return Ok(None);
+        };
+        let Some(revision_id) = page.current_revision_id.clone() else {
+            return Ok(None);
+        };
+        let revision = load_revision(&conn, &revision_id)?
+            .ok_or_else(|| "current revision is missing".to_string())?;
+        let sections = load_current_sections(&conn, &page.id)?
+            .into_iter()
+            .map(|section| PageSectionView {
+                section_path: section.0,
+                heading: section.1,
+                text: section.2,
+            })
+            .collect();
+        Ok(Some(PageBundle {
+            page,
+            revision,
+            sections,
+        }))
+    }
+
+    pub(crate) fn open(&self) -> Result<Connection, String> {
+        Connection::open(&self.database_path).map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) fn load_page_by_id(conn: &Connection, page_id: &str) -> Result<Option<WikiPage>, String> {
+    conn.query_row(
+        "SELECT id, slug, page_type, title, current_revision_id, summary_1line, created_at, updated_at
+         FROM wiki_pages WHERE id = ?1",
+        params![page_id],
+        map_page,
+    )
+    .optional()
+    .map_err(|error| error.to_string())
+}
+
+fn load_page_by_slug(conn: &Connection, slug: &str) -> Result<Option<WikiPage>, String> {
+    conn.query_row(
+        "SELECT id, slug, page_type, title, current_revision_id, summary_1line, created_at, updated_at
+         FROM wiki_pages WHERE slug = ?1",
+        params![slug],
+        map_page,
+    )
+    .optional()
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_revision(conn: &Connection, revision_id: &str) -> Result<Option<WikiRevision>, String> {
+    conn.query_row(
+        "SELECT id, page_id, revision_no, markdown, change_reason, author_type, created_at
+         FROM wiki_revisions WHERE id = ?1",
+        params![revision_id],
+        |row| {
+            Ok(WikiRevision {
+                id: row.get(0)?,
+                page_id: row.get(1)?,
+                revision_no: row.get(2)?,
+                markdown: row.get(3)?,
+                change_reason: row.get(4)?,
+                author_type: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_current_sections(
+    conn: &Connection,
+    page_id: &str,
+) -> Result<Vec<(String, Option<String>, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT section_path, heading, text
+             FROM wiki_sections
+             WHERE page_id = ?1 AND is_current = 1
+             ORDER BY ordinal",
+        )
+        .map_err(|error| error.to_string())?;
+    stmt.query_map(params![page_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<std::result::Result<Vec<_>, _>>()
+    .map_err(|error| error.to_string())
+}
+
+fn map_page(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiPage> {
+    let page_type = row.get::<_, String>(2)?;
+    Ok(WikiPage {
+        id: row.get(0)?,
+        slug: row.get(1)?,
+        page_type: WikiPageType::from_str(&page_type).unwrap_or(WikiPageType::Overview),
+        title: row.get(3)?,
+        current_revision_id: row.get(4)?,
+        summary_1line: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}

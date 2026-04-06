@@ -1,0 +1,16 @@
+[package]
+name = "wiki-store"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hex = "0.4.3"
+pulldown-cmark = "0.13.0"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+sha2 = "0.10.9"
+time = { version = "0.3.44", features = ["formatting", "macros"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+wiki-types = { path = "../wiki_types" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

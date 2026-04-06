@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Rust build artifacts
+/target/
+**/target/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# Temp files
+/tmp/
+*.tmp
+
+# Keep ic-hybrid-sqlite as its own repo for now
+/ic-hybrid-sqlite/
