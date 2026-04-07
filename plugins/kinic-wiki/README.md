@@ -1,15 +1,49 @@
 # Kinic Wiki Plugin
 
-Obsidian desktop plugin that mirrors the Kinic-backed wiki into your vault under `Wiki/`.
+Obsidian desktop plugin that mirrors a Kinic wiki canister into your vault under `Wiki/`.
 
 ## What it does
 
 - mirrors `index.md`, `log.md`, and wiki pages into the vault
 - normalizes internal links to `[[slug]]`
 - supports pull, push, delete, and conflict notes
-- relies on the existing wiki HTTP adapter, not direct canister calls
+- calls the canister directly with `query` / `update`
 
-The plugin is **desktop-only**.
+The plugin is **desktop-only** and currently uses an **anonymous** identity.
+
+## Local canister workflow with `icp`
+
+This repo is configured for `icp-cli` with a single Rust canister named `wiki`.
+
+One-time setup:
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+Inspect the effective project config:
+
+```bash
+icp project show
+```
+
+Run the local replica and deploy:
+
+```bash
+icp network start -d
+icp deploy -e local
+```
+
+Get the local canister ID for the plugin:
+
+```bash
+icp canister status wiki -e local --id-only
+```
+
+For local Obsidian testing, use:
+
+- `Replica Host`: `http://127.0.0.1:8000`
+- `Canister ID`: output of `icp canister status wiki -e local --id-only`
 
 ## Local development
 
@@ -30,6 +64,7 @@ Useful commands:
 ```bash
 npm run dev
 npm run build
+npm run test
 npm run typecheck
 npm run lint
 ```
@@ -63,207 +98,53 @@ Required files in that directory:
 
 The plugin requires these settings:
 
-- `Adapter base URL`
+- `Replica Host`
+- `Canister ID`
 - `Mirror root`
 - `Auto pull on startup`
 - `Open index after initial sync`
 
-`Adapter base URL` is the base URL for the local HTTP adapter. Example:
+Example local replica host:
 
 ```text
-http://127.0.0.1:8787
+http://127.0.0.1:8000
 ```
 
-The plugin will call:
+The plugin calls these canister methods directly:
 
-- `POST /export_wiki_snapshot`
-- `POST /fetch_wiki_updates`
-- `POST /commit_wiki_changes`
-- `GET /status`
+- `status`
+- `export_wiki_snapshot`
+- `fetch_wiki_updates`
+- `commit_wiki_changes`
 
-## HTTP adapter contract
+When the host is `localhost` or `127.0.0.1`, the plugin automatically fetches the local root key before the first request.
 
-The plugin expects a thin JSON adapter whose routes exactly match the runtime DTOs.
+## Candid interface
 
-## Run the local HTTP adapter
+The canister interface is defined in:
 
-From the repo root:
-
-```bash
-cargo run -p wiki-http-adapter -- --db-path /absolute/path/to/wiki.sqlite3 --bind 127.0.0.1:8787
+```text
+crates/wiki_canister/wiki.did
 ```
 
-The adapter runs migrations on startup and only needs a SQLite DB path.
+The plugin keeps its local IDL in `candid.ts`, matching the same four methods.
 
-### `POST /export_wiki_snapshot`
+## Manual E2E checklist
 
-Request:
-
-```json
-{
-  "include_system_pages": true,
-  "page_slugs": null
-}
-```
-
-Response shape:
-
-```json
-{
-  "snapshot_revision": "string",
-  "pages": [
-    {
-      "page_id": "string",
-      "slug": "string",
-      "title": "string",
-      "page_type": "entity",
-      "revision_id": "string",
-      "updated_at": 1700000000,
-      "markdown": "string",
-      "section_hashes": [
-        { "section_path": "string", "content_hash": "string" }
-      ]
-    }
-  ],
-  "system_pages": [
-    {
-      "slug": "index.md",
-      "markdown": "string",
-      "updated_at": 1700000000,
-      "etag": "string"
-    }
-  ]
-}
-```
-
-### `POST /fetch_wiki_updates`
-
-Request:
-
-```json
-{
-  "known_snapshot_revision": "string",
-  "known_page_revisions": [
-    { "page_id": "string", "revision_id": "string" }
-  ],
-  "include_system_pages": true
-}
-```
-
-Response shape:
-
-```json
-{
-  "snapshot_revision": "string",
-  "changed_pages": [],
-  "removed_page_ids": [],
-  "system_pages": [],
-  "manifest_delta": {
-    "upserted_pages": [
-      {
-        "page_id": "string",
-        "slug": "string",
-        "revision_id": "string",
-        "updated_at": 1700000000
-      }
-    ],
-    "removed_page_ids": []
-  }
-}
-```
-
-### `POST /commit_wiki_changes`
-
-Request:
-
-```json
-{
-  "base_snapshot_revision": "string",
-  "page_changes": [
-    {
-      "change_type": "Update",
-      "page_id": "string",
-      "base_revision_id": "string",
-      "new_markdown": "string"
-    }
-  ]
-}
-```
-
-Delete request example:
-
-```json
-{
-  "base_snapshot_revision": "string",
-  "page_changes": [
-    {
-      "change_type": "Delete",
-      "page_id": "string",
-      "base_revision_id": "string",
-      "new_markdown": null
-    }
-  ]
-}
-```
-
-Response shape:
-
-```json
-{
-  "committed_pages": [
-    {
-      "page_id": "string",
-      "revision_id": "string",
-      "section_hashes": []
-    }
-  ],
-  "rejected_pages": [
-    {
-      "page_id": "string",
-      "reason": "string",
-      "conflicting_section_paths": [],
-      "local_changed_section_paths": [],
-      "remote_changed_section_paths": [],
-      "conflict_markdown": "<<<<<<< LOCAL\n..."
-    }
-  ],
-  "snapshot_revision": "string",
-  "snapshot_was_stale": false,
-  "system_pages": [],
-  "manifest_delta": {
-    "upserted_pages": [],
-    "removed_page_ids": []
-  }
-}
-```
-
-### `GET /status`
-
-Response:
-
-```json
-{
-  "page_count": 1,
-  "source_count": 2,
-  "system_page_count": 2
-}
-```
+1. Start a local replica or target replica host.
+2. If using the local project network, run `icp network start -d` and `icp deploy -e local`.
+3. Build the plugin and place it in `<Vault>/.obsidian/plugins/kinic-wiki/`.
+4. Set `Replica Host` and `Canister ID`.
+5. Run `Wiki: Initial Sync`.
+6. Confirm `Wiki/index.md`, `Wiki/log.md`, and `Wiki/pages/*.md` are created.
+7. Confirm `[[slug]]` links resolve and Graph View / Backlinks / Search work.
+8. Run `Wiki: Pull Updates` after a remote change.
+9. Edit a mirrored page and run `Wiki: Push Current Note`.
+10. Run `Wiki: Delete Current Wiki Page`.
+11. Force a conflict and confirm `Wiki/conflicts/*.conflict.md` is created.
 
 ## Notes
 
 - The plugin does not currently install itself into a vault automatically.
-- The HTTP adapter must expose these routes with JSON payloads matching the runtime DTOs.
-- If the adapter changes route names or wire format, `client.ts` must be updated to match.
-
-## Manual E2E checklist
-
-1. Start the HTTP adapter.
-2. Build the plugin and place it in `<Vault>/.obsidian/plugins/kinic-wiki/`.
-3. Set `Adapter base URL` to `http://127.0.0.1:8787`.
-4. Run `Wiki: Initial Sync`.
-5. Confirm `Wiki/index.md`, `Wiki/log.md`, and `Wiki/pages/*.md` are created.
-6. Confirm `[[slug]]` links resolve and Graph View / Backlinks / Search work.
-7. Run `Wiki: Pull Updates` after a remote change.
-8. Edit a mirrored page and run `Wiki: Push Current Note`.
-9. Run `Wiki: Delete Current Wiki Page`.
-10. Force a conflict and confirm `Wiki/conflicts/*.conflict.md` is created.
+- Anonymous update calls must be allowed by the canister, otherwise push/delete will fail.
+- If the Candid interface changes, `plugins/kinic-wiki/candid.ts` must be updated to match.

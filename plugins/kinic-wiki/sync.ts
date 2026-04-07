@@ -3,7 +3,7 @@
 // Why: Commands should delegate to one service that owns wiki sync behavior end to end.
 import { App, Notice, TFile, normalizePath } from "obsidian";
 
-import { WikiHttpClient } from "./client";
+import { KinicCanisterClient } from "./client";
 import {
   collectChangedManagedPageFiles,
   collectKnownPages,
@@ -27,7 +27,7 @@ export class WikiSyncService {
   ) {}
 
   isConfigured(): boolean {
-    return this.settings.adapterBaseUrl.trim().length > 0;
+    return this.settings.replicaHost.trim().length > 0 && this.settings.canisterId.trim().length > 0;
   }
 
   async initialSync(): Promise<void> {
@@ -165,7 +165,7 @@ export class WikiSyncService {
     new Notice(`Push complete: ${response.committed_pages.length} committed, ${response.rejected_pages.length} rejected`);
   }
 
-  private async afterCommit(response: Awaited<ReturnType<WikiHttpClient["commitWikiChanges"]>>): Promise<void> {
+  private async afterCommit(response: Awaited<ReturnType<KinicCanisterClient["commitWikiChanges"]>>): Promise<void> {
     for (const entry of response.manifest_delta.upserted_pages) {
       await updateLocalRevisionMetadata(
         this.app,
@@ -189,7 +189,7 @@ export class WikiSyncService {
     await this.saveSettings();
   }
 
-  private client(): WikiHttpClient {
-    return new WikiHttpClient(this.settings.adapterBaseUrl);
+  private client(): KinicCanisterClient {
+    return new KinicCanisterClient(this.settings.replicaHost, this.settings.canisterId);
   }
 }

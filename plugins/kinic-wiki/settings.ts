@@ -20,14 +20,27 @@ export class KinicWikiSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Adapter base URL")
-      .setDesc("Local HTTP adapter base URL. The plugin calls /export_wiki_snapshot and related JSON endpoints.")
+      .setName("Replica Host")
+      .setDesc("Replica or gateway host used for direct canister query/update calls.")
       .addText((text) =>
         text
-          .setPlaceholder("http://127.0.0.1:8787")
-          .setValue(this.owner.settings.adapterBaseUrl)
+          .setPlaceholder("http://127.0.0.1:8000")
+          .setValue(this.owner.settings.replicaHost)
           .onChange(async (value) => {
-            this.owner.settings.adapterBaseUrl = value.trim();
+            this.owner.settings.replicaHost = value.trim();
+            await this.owner.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Canister ID")
+      .setDesc("Principal text of the Kinic wiki canister.")
+      .addText((text) =>
+        text
+          .setPlaceholder("uxrrr-q7777-77774-qaaaq-cai")
+          .setValue(this.owner.settings.canisterId)
+          .onChange(async (value) => {
+            this.owner.settings.canisterId = value.trim();
             await this.owner.saveSettings();
           })
       );

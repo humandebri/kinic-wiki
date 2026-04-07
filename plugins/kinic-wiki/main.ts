@@ -72,7 +72,11 @@ export default class KinicWikiPlugin extends Plugin {
   }
 
   private async autoPullOnStartup(): Promise<void> {
-    if (!this.settings.autoPullOnStartup || this.settings.adapterBaseUrl.trim().length === 0) {
+    if (
+      !this.settings.autoPullOnStartup
+      || this.settings.replicaHost.trim().length === 0
+      || this.settings.canisterId.trim().length === 0
+    ) {
       return;
     }
     await this.run("Auto pull failed", async (service) => service.pullUpdates(), false);
@@ -85,7 +89,7 @@ export default class KinicWikiPlugin extends Plugin {
   ): Promise<void> {
     const service = new WikiSyncService(this.app, this.settings, () => this.saveSettings());
     if (requireConfig && !service.isConfigured()) {
-      new Notice("Set the adapter base URL in plugin settings first");
+      new Notice("Set the replica host and canister ID in plugin settings first");
       return;
     }
     try {

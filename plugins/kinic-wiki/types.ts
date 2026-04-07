@@ -10,7 +10,8 @@ export type PluginPageType =
   | "source_summary";
 
 export interface PluginSettings {
-  adapterBaseUrl: string;
+  replicaHost: string;
+  canisterId: string;
   mirrorRoot: string;
   autoPullOnStartup: boolean;
   openIndexAfterInitialSync: boolean;
@@ -109,7 +110,8 @@ export interface CommitWikiChangesResponse {
 }
 
 const DEFAULTS: PluginSettings = {
-  adapterBaseUrl: "",
+  replicaHost: "",
+  canisterId: "",
   mirrorRoot: "Wiki",
   autoPullOnStartup: true,
   openIndexAfterInitialSync: true,
@@ -126,7 +128,8 @@ export function parsePluginSettings(input: unknown): PluginSettings {
     return defaultPluginSettings();
   }
   return {
-    adapterBaseUrl: readString(input, "adapterBaseUrl", DEFAULTS.adapterBaseUrl),
+    replicaHost: readString(input, "replicaHost", DEFAULTS.replicaHost),
+    canisterId: readString(input, "canisterId", DEFAULTS.canisterId),
     mirrorRoot: readString(input, "mirrorRoot", DEFAULTS.mirrorRoot),
     autoPullOnStartup: readBoolean(input, "autoPullOnStartup", DEFAULTS.autoPullOnStartup),
     openIndexAfterInitialSync: readBoolean(
