@@ -9,8 +9,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/005_fs_nodes.sql"),
     ),
     (
-        "wiki_store:001_fs_snapshot_nodes",
-        include_str!("../migrations/006_fs_snapshot_nodes.sql"),
+        "wiki_store:002_fs_change_log",
+        include_str!("../migrations/007_fs_change_log.sql"),
     ),
 ];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =

@@ -1,5 +1,21 @@
+type AppendNodeRequest = record {
+  content : text;
+  separator : opt text;
+  kind : opt NodeKind;
+  path : text;
+  expected_etag : opt text;
+  metadata_json : opt text;
+};
 type DeleteNodeRequest = record { path : text; expected_etag : opt text };
 type DeleteNodeResult = record { etag : text; path : text; deleted_at : int64 };
+type EditNodeRequest = record {
+  path : text;
+  old_text : text;
+  replace_all : bool;
+  expected_etag : opt text;
+  new_text : text;
+};
+type EditNodeResult = record { node : Node; replacement_count : nat32 };
 type ExportSnapshotRequest = record {
   include_deleted : bool;
   prefix : opt text;
@@ -18,10 +34,40 @@ type FetchUpdatesResponse = record {
   snapshot_revision : text;
   changed_nodes : vec Node;
 };
+type GlobNodeHit = record {
+  kind : NodeEntryKind;
+  path : text;
+  has_children : bool;
+};
+type GlobNodeType = variant { Any; File; Directory };
+type GlobNodesRequest = record {
+  node_type : opt GlobNodeType;
+  pattern : text;
+  path : opt text;
+};
 type ListNodesRequest = record {
   include_deleted : bool;
   recursive : bool;
   prefix : text;
+};
+type MkdirNodeRequest = record { path : text };
+type MkdirNodeResult = record { created : bool; path : text };
+type MoveNodeRequest = record {
+  from_path : text;
+  to_path : text;
+  expected_etag : opt text;
+  overwrite : bool;
+};
+type MoveNodeResult = record {
+  from_path : text;
+  node : Node;
+  overwrote : bool;
+};
+type MultiEdit = record { old_text : text; new_text : text };
+type MultiEditNodeRequest = record {
+  path : text;
+  edits : vec MultiEdit;
+  expected_etag : opt text;
 };
 type Node = record {
   updated_at : int64;
@@ -43,13 +89,30 @@ type NodeEntry = record {
 };
 type NodeEntryKind = variant { File; Source; Directory };
 type NodeKind = variant { File; Source };
-type Result = variant { Ok : DeleteNodeResult; Err : text };
-type Result_1 = variant { Ok : ExportSnapshotResponse; Err : text };
-type Result_2 = variant { Ok : FetchUpdatesResponse; Err : text };
-type Result_3 = variant { Ok : vec NodeEntry; Err : text };
-type Result_4 = variant { Ok : opt Node; Err : text };
-type Result_5 = variant { Ok : vec SearchNodeHit; Err : text };
-type Result_6 = variant { Ok : WriteNodeResult; Err : text };
+type RecentNodeHit = record {
+  updated_at : int64;
+  etag : text;
+  kind : NodeKind;
+  path : text;
+  deleted_at : opt int64;
+};
+type RecentNodesRequest = record {
+  include_deleted : bool;
+  path : opt text;
+  limit : nat32;
+};
+type Result = variant { Ok : WriteNodeResult; Err : text };
+type Result_1 = variant { Ok : DeleteNodeResult; Err : text };
+type Result_10 = variant { Ok : vec RecentNodeHit; Err : text };
+type Result_11 = variant { Ok : vec SearchNodeHit; Err : text };
+type Result_2 = variant { Ok : EditNodeResult; Err : text };
+type Result_3 = variant { Ok : ExportSnapshotResponse; Err : text };
+type Result_4 = variant { Ok : FetchUpdatesResponse; Err : text };
+type Result_5 = variant { Ok : vec GlobNodeHit; Err : text };
+type Result_6 = variant { Ok : vec NodeEntry; Err : text };
+type Result_7 = variant { Ok : MkdirNodeResult; Err : text };
+type Result_8 = variant { Ok : MoveNodeResult; Err : text };
+type Result_9 = variant { Ok : opt Node; Err : text };
 type SearchNodeHit = record {
   kind : NodeKind;
   path : text;
@@ -76,12 +139,19 @@ type WriteNodeRequest = record {
 };
 type WriteNodeResult = record { created : bool; node : Node };
 service : () -> {
-  delete_node : (DeleteNodeRequest) -> (Result);
-  export_snapshot : (ExportSnapshotRequest) -> (Result_1) query;
-  fetch_updates : (FetchUpdatesRequest) -> (Result_2) query;
-  list_nodes : (ListNodesRequest) -> (Result_3) query;
-  read_node : (text) -> (Result_4) query;
-  search_nodes : (SearchNodesRequest) -> (Result_5) query;
+  append_node : (AppendNodeRequest) -> (Result);
+  delete_node : (DeleteNodeRequest) -> (Result_1);
+  edit_node : (EditNodeRequest) -> (Result_2);
+  export_snapshot : (ExportSnapshotRequest) -> (Result_3) query;
+  fetch_updates : (FetchUpdatesRequest) -> (Result_4) query;
+  glob_nodes : (GlobNodesRequest) -> (Result_5) query;
+  list_nodes : (ListNodesRequest) -> (Result_6) query;
+  mkdir_node : (MkdirNodeRequest) -> (Result_7) query;
+  move_node : (MoveNodeRequest) -> (Result_8);
+  multi_edit_node : (MultiEditNodeRequest) -> (Result_2);
+  read_node : (text) -> (Result_9) query;
+  recent_nodes : (RecentNodesRequest) -> (Result_10) query;
+  search_nodes : (SearchNodesRequest) -> (Result_11) query;
   status : () -> (Status) query;
-  write_node : (WriteNodeRequest) -> (Result_6);
+  write_node : (WriteNodeRequest) -> (Result);
 }

@@ -3,6 +3,7 @@
 // Why: The plugin mirrors node paths directly and persists tracked etags in settings.
 export type NodeKind = "file" | "source";
 export type NodeEntryKind = "directory" | NodeKind;
+export type GlobNodeType = "file" | "directory" | "any";
 
 export interface TrackedNodeState {
   path: string;
@@ -62,6 +63,46 @@ export interface FetchUpdatesResponse {
 export interface WriteNodeResult {
   node: NodeSnapshot;
   created: boolean;
+}
+
+export interface EditNodeResult {
+  node: NodeSnapshot;
+  replacement_count: number;
+}
+
+export interface MkdirNodeResult {
+  path: string;
+  created: boolean;
+}
+
+export interface MoveNodeResult {
+  node: NodeSnapshot;
+  from_path: string;
+  overwrote: boolean;
+}
+
+export interface GlobNodeHit {
+  path: string;
+  kind: NodeEntryKind;
+  has_children: boolean;
+}
+
+export interface RecentNodeHit {
+  path: string;
+  kind: NodeKind;
+  updated_at: number;
+  etag: string;
+  deleted_at: number | null;
+}
+
+export interface MultiEdit {
+  old_text: string;
+  new_text: string;
+}
+
+export interface MultiEditNodeResult {
+  node: NodeSnapshot;
+  replacement_count: number;
 }
 
 export interface DeleteNodeResult {
@@ -170,6 +211,53 @@ export function isWriteNodeResult(input: unknown): input is WriteNodeResult {
   return isRecord(input)
     && isNodeSnapshot(input.node)
     && isBooleanValue(input.created);
+}
+
+export function isEditNodeResult(input: unknown): input is EditNodeResult {
+  return isRecord(input)
+    && isNodeSnapshot(input.node)
+    && isNumberValue(input.replacement_count);
+}
+
+export function isMkdirNodeResult(input: unknown): input is MkdirNodeResult {
+  return isRecord(input)
+    && isString(input.path)
+    && isBooleanValue(input.created);
+}
+
+export function isMoveNodeResult(input: unknown): input is MoveNodeResult {
+  return isRecord(input)
+    && isNodeSnapshot(input.node)
+    && isString(input.from_path)
+    && isBooleanValue(input.overwrote);
+}
+
+export function isGlobNodeHit(input: unknown): input is GlobNodeHit {
+  return isRecord(input)
+    && isString(input.path)
+    && isNodeEntryKind(input.kind)
+    && isBooleanValue(input.has_children);
+}
+
+export function isRecentNodeHit(input: unknown): input is RecentNodeHit {
+  return isRecord(input)
+    && isString(input.path)
+    && isNodeKind(input.kind)
+    && isNumberValue(input.updated_at)
+    && isString(input.etag)
+    && (input.deleted_at === null || isNumberValue(input.deleted_at));
+}
+
+export function isMultiEdit(input: unknown): input is MultiEdit {
+  return isRecord(input)
+    && isString(input.old_text)
+    && isString(input.new_text);
+}
+
+export function isMultiEditNodeResult(input: unknown): input is MultiEditNodeResult {
+  return isRecord(input)
+    && isNodeSnapshot(input.node)
+    && isNumberValue(input.replacement_count);
 }
 
 export function isDeleteNodeResult(input: unknown): input is DeleteNodeResult {

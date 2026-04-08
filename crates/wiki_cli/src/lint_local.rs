@@ -82,7 +82,12 @@ pub fn print_local_lint_report(report: &LocalLintReport, json: bool) -> Result<(
         return Ok(());
     }
     for issue in &report.issues {
-        println!("{}\t{}\t{}", issue.kind.as_str(), issue.path.display(), issue.message);
+        println!(
+            "{}\t{}\t{}",
+            issue.kind.as_str(),
+            issue.path.display(),
+            issue.message
+        );
     }
     Ok(())
 }

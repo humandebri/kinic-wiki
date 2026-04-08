@@ -6,9 +6,12 @@ use async_trait::async_trait;
 use candid::{Decode, Encode};
 use ic_agent::{Agent, export::Principal};
 use wiki_types::{
-    DeleteNodeRequest, DeleteNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
-    FetchUpdatesRequest, FetchUpdatesResponse, ListNodesRequest, Node, NodeEntry,
-    SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
+    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
 };
 
 #[async_trait]
@@ -17,7 +20,14 @@ pub trait WikiApi {
     async fn read_node(&self, path: &str) -> Result<Option<Node>>;
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>>;
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult>;
+    async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult>;
+    async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult>;
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult>;
+    async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult>;
+    async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult>;
+    async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>>;
+    async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>>;
+    async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult>;
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>>;
     async fn export_snapshot(
         &self,
@@ -90,7 +100,8 @@ impl WikiApi for CanisterWikiClient {
     }
 
     async fn read_node(&self, path: &str) -> Result<Option<Node>> {
-        let result: Result<Option<Node>, String> = self.query("read_node", &path.to_string()).await?;
+        let result: Result<Option<Node>, String> =
+            self.query("read_node", &path.to_string()).await?;
         result.map_err(|error| anyhow!(error))
     }
 
@@ -104,13 +115,51 @@ impl WikiApi for CanisterWikiClient {
         result.map_err(|error| anyhow!(error))
     }
 
+    async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult> {
+        let result: Result<WriteNodeResult, String> = self.update("append_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult> {
+        let result: Result<EditNodeResult, String> = self.update("edit_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
         let result: Result<DeleteNodeResult, String> = self.update("delete_node", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 
+    async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
+        let result: Result<MoveNodeResult, String> = self.update("move_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+        let result: Result<MkdirNodeResult, String> = self.query("mkdir_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+        let result: Result<Vec<GlobNodeHit>, String> = self.query("glob_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+        let result: Result<Vec<RecentNodeHit>, String> =
+            self.query("recent_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult> {
+        let result: Result<MultiEditNodeResult, String> =
+            self.update("multi_edit_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
-        let result: Result<Vec<SearchNodeHit>, String> = self.query("search_nodes", &request).await?;
+        let result: Result<Vec<SearchNodeHit>, String> =
+            self.query("search_nodes", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

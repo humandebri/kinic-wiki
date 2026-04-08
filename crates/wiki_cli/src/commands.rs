@@ -7,16 +7,17 @@ use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::mirror::{
     MirrorState, collect_changed_nodes, collect_managed_nodes, deleted_tracked_nodes, load_state,
     merge_tracked_nodes, now_millis, read_managed_node_content, remove_mirror_paths,
-    remove_stale_managed_files, save_state, tracked_nodes_from_snapshot, update_local_node_metadata,
-    write_conflict_file, write_snapshot_mirror,
+    remove_stale_managed_files, save_state, tracked_nodes_from_snapshot,
+    update_local_node_metadata, write_conflict_file, write_snapshot_mirror,
 };
 use anyhow::{Result, anyhow};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use wiki_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListNodesRequest,
-    SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
+    FetchUpdatesRequest, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest,
+    MultiEdit, MultiEditNodeRequest, RecentNodesRequest, SearchNodesRequest, WriteNodeRequest,
 };
 const REMOTE_PREFIX: &str = "/Wiki";
 
@@ -78,6 +79,55 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", result.node.etag);
             }
         }
+        Command::AppendNode {
+            path,
+            input,
+            kind,
+            metadata_json,
+            expected_etag,
+            separator,
+            json,
+        } => {
+            let content = fs::read_to_string(&input)?;
+            let result = client
+                .append_node(AppendNodeRequest {
+                    path,
+                    content,
+                    expected_etag,
+                    separator,
+                    metadata_json,
+                    kind: kind.map(|value| value.to_node_kind()),
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", result.node.etag);
+            }
+        }
+        Command::EditNode {
+            path,
+            old_text,
+            new_text,
+            expected_etag,
+            replace_all,
+            json,
+        } => {
+            let result = client
+                .edit_node(EditNodeRequest {
+                    path,
+                    old_text,
+                    new_text,
+                    expected_etag,
+                    replace_all,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}\t{}", result.replacement_count, result.node.etag);
+            }
+        }
         Command::DeleteNode {
             path,
             expected_etag,
@@ -93,6 +143,97 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!("{}", result.etag);
+            }
+        }
+        Command::MkdirNode { path, json } => {
+            let result = client.mkdir_node(MkdirNodeRequest { path }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", result.path);
+            }
+        }
+        Command::MoveNode {
+            from_path,
+            to_path,
+            expected_etag,
+            overwrite,
+            json,
+        } => {
+            let result = client
+                .move_node(MoveNodeRequest {
+                    from_path,
+                    to_path,
+                    expected_etag,
+                    overwrite,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}\t{}", result.from_path, result.node.path);
+            }
+        }
+        Command::GlobNodes {
+            pattern,
+            path,
+            node_type,
+            json,
+        } => {
+            let hits = client
+                .glob_nodes(GlobNodesRequest {
+                    pattern,
+                    path: Some(path),
+                    node_type: node_type.map(|value| value.to_glob_node_type()),
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                for hit in hits {
+                    println!("{}\t{:?}\t{}", hit.path, hit.kind, hit.has_children);
+                }
+            }
+        }
+        Command::RecentNodes {
+            limit,
+            path,
+            include_deleted,
+            json,
+        } => {
+            let hits = client
+                .recent_nodes(RecentNodesRequest {
+                    limit,
+                    path: Some(path),
+                    include_deleted,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                for hit in hits {
+                    println!("{}\t{}\t{}", hit.updated_at, hit.path, hit.etag);
+                }
+            }
+        }
+        Command::MultiEditNode {
+            path,
+            edits_file,
+            expected_etag,
+            json,
+        } => {
+            let edits = read_multi_edit_file(&edits_file)?;
+            let result = client
+                .multi_edit_node(MultiEditNodeRequest {
+                    path,
+                    edits,
+                    expected_etag,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}\t{}", result.replacement_count, result.node.etag);
             }
         }
         Command::SearchRemote {
@@ -177,7 +318,11 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         write_snapshot_mirror(mirror_root, &snapshot.nodes)?;
         remove_stale_managed_files(
             mirror_root,
-            &snapshot.nodes.iter().map(|node| node.path.clone()).collect::<HashSet<_>>(),
+            &snapshot
+                .nodes
+                .iter()
+                .map(|node| node.path.clone())
+                .collect::<HashSet<_>>(),
         )?;
         save_state(
             mirror_root,
@@ -212,7 +357,11 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
             ),
         },
     )?;
-    println!("pull complete: {} changed, {} removed", updates.changed_nodes.len(), updates.removed_paths.len());
+    println!(
+        "pull complete: {} changed, {} removed",
+        updates.changed_nodes.len(),
+        updates.removed_paths.len()
+    );
     Ok(())
 }
 
@@ -294,7 +443,10 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
             ),
         },
     )?;
-    println!("push complete: {} written, {} deleted, {} conflicts", writes, deletes, conflicts);
+    println!(
+        "push complete: {} written, {} deleted, {} conflicts",
+        writes, deletes, conflicts
+    );
     Ok(())
 }
 
@@ -302,4 +454,9 @@ fn read_local_status(mirror_root: &Path) -> Result<(MirrorState, usize)> {
     let state = load_state(mirror_root)?;
     let tracked_count = collect_managed_nodes(mirror_root)?.len();
     Ok((state, tracked_count))
+}
+
+fn read_multi_edit_file(path: &Path) -> Result<Vec<MultiEdit>> {
+    let content = fs::read_to_string(path)?;
+    serde_json::from_str(&content).map_err(Into::into)
 }

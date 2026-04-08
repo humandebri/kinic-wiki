@@ -1,15 +1,19 @@
 use tempfile::tempdir;
 use wiki_runtime::WikiService;
 use wiki_types::{
-    ExportSnapshotRequest, FetchUpdatesRequest, ListNodesRequest, NodeEntryKind, NodeKind,
-    SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, EditNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType,
+    GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
+    MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodesRequest,
+    WriteNodeRequest,
 };
 
 fn new_service() -> WikiService {
     let dir = tempdir().expect("temp dir should exist");
     let db_path = dir.keep().join("wiki.sqlite3");
     let service = WikiService::new(db_path);
-    service.run_fs_migrations().expect("fs migrations should succeed");
+    service
+        .run_fs_migrations()
+        .expect("fs migrations should succeed");
     service
 }
 
@@ -99,4 +103,114 @@ fn fs_service_delegates_to_fs_store() {
     assert_eq!(status.file_count, 2);
     assert_eq!(status.source_count, 0);
     assert_eq!(status.deleted_count, 0);
+}
+
+#[test]
+fn fs_service_exposes_minimal_vfs_methods() {
+    let service = new_service();
+
+    let mkdir = service
+        .mkdir_node(MkdirNodeRequest {
+            path: "/Wiki/work".to_string(),
+        })
+        .expect("mkdir should succeed");
+    assert!(mkdir.created);
+
+    let appended = service
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/work/log.md".to_string(),
+                content: "alpha".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            20,
+        )
+        .expect("append create should succeed");
+    let edited = service
+        .edit_node(
+            EditNodeRequest {
+                path: "/Wiki/work/log.md".to_string(),
+                old_text: "alpha".to_string(),
+                new_text: "beta".to_string(),
+                expected_etag: Some(appended.node.etag),
+                replace_all: false,
+            },
+            21,
+        )
+        .expect("edit should succeed");
+    assert_eq!(edited.replacement_count, 1);
+    assert_eq!(edited.node.content, "beta");
+}
+
+#[test]
+fn fs_service_exposes_extended_vfs_methods() {
+    let service = new_service();
+    let base = service
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "before alpha".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            30,
+        )
+        .expect("write should succeed");
+
+    let moved = service
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/a.md".to_string(),
+                to_path: "/Wiki/nested/b.md".to_string(),
+                expected_etag: Some(base.node.etag.clone()),
+                overwrite: false,
+            },
+            31,
+        )
+        .expect("move should succeed");
+    assert_eq!(moved.node.path, "/Wiki/nested/b.md");
+
+    let globbed = service
+        .glob_nodes(GlobNodesRequest {
+            pattern: "**/*.md".to_string(),
+            path: Some("/Wiki".to_string()),
+            node_type: Some(GlobNodeType::File),
+        })
+        .expect("glob should succeed");
+    assert_eq!(globbed.len(), 1);
+
+    let recent = service
+        .recent_nodes(RecentNodesRequest {
+            limit: 5,
+            path: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("recent should succeed");
+    assert_eq!(recent[0].path, "/Wiki/nested/b.md");
+
+    let multi_edited = service
+        .multi_edit_node(
+            MultiEditNodeRequest {
+                path: "/Wiki/nested/b.md".to_string(),
+                edits: vec![
+                    MultiEdit {
+                        old_text: "before".to_string(),
+                        new_text: "after".to_string(),
+                    },
+                    MultiEdit {
+                        old_text: "alpha".to_string(),
+                        new_text: "beta".to_string(),
+                    },
+                ],
+                expected_etag: Some(moved.node.etag),
+            },
+            32,
+        )
+        .expect("multi edit should succeed");
+    assert_eq!(multi_edited.replacement_count, 2);
+    assert_eq!(multi_edited.node.content, "after beta");
 }

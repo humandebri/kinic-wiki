@@ -79,7 +79,10 @@ pub fn remove_mirror_paths(mirror_root: &Path, removed_paths: &[String]) -> Resu
     Ok(())
 }
 
-pub fn remove_stale_managed_files(mirror_root: &Path, active_paths: &HashSet<String>) -> Result<()> {
+pub fn remove_stale_managed_files(
+    mirror_root: &Path,
+    active_paths: &HashSet<String>,
+) -> Result<()> {
     for node in collect_managed_nodes(mirror_root)? {
         if !active_paths.contains(&node.metadata.path) {
             fs::remove_file(&node.path)
@@ -121,7 +124,8 @@ pub fn update_local_node_metadata(mirror_root: &Path, node: &Node) -> Result<()>
 }
 
 pub fn tracked_nodes_from_snapshot(nodes: &[Node]) -> Vec<TrackedNodeState> {
-    nodes.iter()
+    nodes
+        .iter()
         .map(|node| TrackedNodeState {
             path: node.path.clone(),
             kind: node.kind.clone(),
@@ -210,7 +214,9 @@ fn collect_files(root: &Path, current: &Path, results: &mut Vec<ManagedNode>) ->
     if !current.exists() {
         return Ok(());
     }
-    for entry in fs::read_dir(current).with_context(|| format!("failed to read {}", current.display()))? {
+    for entry in
+        fs::read_dir(current).with_context(|| format!("failed to read {}", current.display()))?
+    {
         let path = entry?.path();
         if path == state_path(root) || path.starts_with(root.join("conflicts")) {
             continue;
@@ -219,8 +225,8 @@ fn collect_files(root: &Path, current: &Path, results: &mut Vec<ManagedNode>) ->
             collect_files(root, &path, results)?;
             continue;
         }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         if let Some(metadata) = mirror_frontmatter::parse_mirror_frontmatter(&content) {
             results.push(ManagedNode { path, metadata });
         }

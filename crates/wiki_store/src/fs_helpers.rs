@@ -146,13 +146,65 @@ pub(crate) fn build_entries(nodes: &[Node], prefix: &str, recursive: bool) -> Ve
     entries.into_values().collect()
 }
 
-pub(crate) fn snapshot_revision(nodes: &[Node]) -> String {
+pub(crate) fn build_glob_entries(nodes: &[Node], prefix: &str) -> Vec<NodeEntry> {
+    let mut entries = BTreeMap::new();
+    for node in nodes {
+        entries.insert(
+            node.path.clone(),
+            NodeEntry {
+                path: node.path.clone(),
+                kind: entry_kind_from_node_kind(&node.kind),
+                updated_at: node.updated_at,
+                etag: node.etag.clone(),
+                deleted_at: node.deleted_at,
+                has_children: has_visible_descendants(nodes, &node.path),
+            },
+        );
+        for directory_path in ancestor_directory_paths(prefix, &node.path) {
+            entries
+                .entry(directory_path.clone())
+                .or_insert_with(|| NodeEntry {
+                    path: directory_path.clone(),
+                    kind: NodeEntryKind::Directory,
+                    updated_at: directory_updated_at(nodes, &directory_path),
+                    etag: String::new(),
+                    deleted_at: None,
+                    has_children: true,
+                });
+        }
+    }
+    entries.into_values().collect()
+}
+
+pub(crate) fn snapshot_state_hash(nodes: &[Node]) -> String {
     let payload = nodes
         .iter()
         .map(snapshot_line)
         .collect::<Vec<_>>()
         .join("\n");
     sha256_hex(&payload)
+}
+
+pub(crate) fn snapshot_revision_token(
+    prefix: &str,
+    include_deleted: bool,
+    revision: i64,
+    nodes: &[Node],
+) -> String {
+    let include_deleted_flag = if include_deleted { "1" } else { "0" };
+    let prefix_hex = hex_encode(prefix.as_bytes());
+    let state_hash = snapshot_state_hash(nodes);
+    format!("v3:{revision}:{include_deleted_flag}:{prefix_hex}:{state_hash}")
+}
+
+pub(crate) fn relative_to_prefix(prefix: &str, path: &str) -> Option<String> {
+    if prefix == "/" {
+        return path.strip_prefix('/').map(str::to_string);
+    }
+    if path == prefix {
+        return path.rsplit('/').next().map(str::to_string);
+    }
+    path.strip_prefix(&format!("{prefix}/")).map(str::to_string)
 }
 
 pub(crate) fn build_fts_query(query_text: &str) -> Option<String> {
@@ -234,6 +286,42 @@ fn direct_child_path(prefix: &str, path: &str) -> Option<String> {
         return None;
     }
     Some(format!("{prefix}/{child}"))
+}
+
+fn ancestor_directory_paths(prefix: &str, path: &str) -> Vec<String> {
+    let relative = match relative_to_prefix(prefix, path) {
+        Some(value) => value,
+        None => return Vec::new(),
+    };
+    let segments = relative.split('/').collect::<Vec<_>>();
+    if segments.len() <= 1 {
+        return Vec::new();
+    }
+    let mut directories = Vec::new();
+    let mut current = if prefix == "/" {
+        String::new()
+    } else {
+        prefix.to_string()
+    };
+    for segment in segments.iter().take(segments.len() - 1) {
+        if current.is_empty() {
+            current = format!("/{segment}");
+        } else {
+            current = format!("{current}/{segment}");
+        }
+        directories.push(current.clone());
+    }
+    directories
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn directory_updated_at(nodes: &[Node], child_prefix: &str) -> i64 {
