@@ -7,17 +7,18 @@ mod mirror_frontmatter;
 mod mirror_normalize;
 
 use self::mirror_frontmatter::{
-    parse_mirror_frontmatter, serialize_mirror_file, strip_managed_frontmatter,
+    DraftFrontmatter, parse_draft_frontmatter, parse_mirror_frontmatter, serialize_draft_file,
+    serialize_mirror_file, strip_any_frontmatter, strip_managed_frontmatter,
 };
 use self::mirror_normalize::{normalize_page_markdown, normalize_system_markdown};
 use anyhow::{Context, Result};
-pub use mirror_frontmatter::MirrorFrontmatter;
+pub use mirror_frontmatter::{DraftFrontmatter as ParsedDraftFrontmatter, MirrorFrontmatter};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use wiki_types::{KnownPageRevision, SystemPageSnapshot, WikiPageSnapshot};
+use wiki_types::{AdoptDraftPageOutput, KnownPageRevision, SystemPageSnapshot, WikiPageSnapshot};
 
 #[derive(Clone, Debug)]
 pub struct ManagedPage {
@@ -139,6 +140,134 @@ pub fn write_page_mirror(
         ),
     )
     .with_context(|| format!("failed to write {}", path.display()))
+}
+
+pub fn write_draft_page(
+    mirror_root: &Path,
+    slug: &str,
+    title: &str,
+    page_type: &str,
+    markdown: &str,
+    known_slugs: &HashSet<String>,
+) -> Result<PathBuf> {
+    fs::create_dir_all(pages_dir(mirror_root))
+        .with_context(|| format!("failed to create {}", pages_dir(mirror_root).display()))?;
+    let path = page_path(mirror_root, slug);
+    let frontmatter = DraftFrontmatter {
+        slug: slug.to_string(),
+        title: title.to_string(),
+        page_type: page_type.to_string(),
+        draft: true,
+    };
+    fs::write(
+        &path,
+        serialize_draft_file(
+            &frontmatter,
+            &normalize_page_markdown(markdown, known_slugs),
+        ),
+    )
+    .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
+}
+
+pub fn classify_local_draft_target(path: &Path, command_name: &str) -> Result<String> {
+    if !path.exists() {
+        return Ok("created".to_string());
+    }
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if is_managed_mirror_content(&content) {
+        let slug = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "tracked local mirror page already exists for slug {slug}; {command_name} only creates unmanaged drafts"
+        ));
+    }
+    if parse_draft_frontmatter(&content).is_none() {
+        return Err(anyhow::anyhow!(
+            "existing file is not a recognized draft: {}",
+            path.display()
+        ));
+    }
+    Ok("updated".to_string())
+}
+
+pub fn is_managed_mirror_content(content: &str) -> bool {
+    parse_mirror_frontmatter(content).is_some()
+}
+
+pub fn parse_managed_metadata(content: &str) -> Option<MirrorFrontmatter> {
+    parse_mirror_frontmatter(content)
+}
+
+pub fn parse_draft_metadata(content: &str) -> Option<ParsedDraftFrontmatter> {
+    parse_draft_frontmatter(content)
+}
+
+pub fn strip_frontmatter(content: &str) -> String {
+    strip_any_frontmatter(content)
+}
+
+pub fn adopt_local_draft(
+    mirror_root: &Path,
+    slug: &str,
+    page_type: &str,
+    adopted: &AdoptDraftPageOutput,
+) -> Result<PathBuf> {
+    let path = page_path(mirror_root, slug);
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    if parse_mirror_frontmatter(&content).is_some() {
+        return Err(anyhow::anyhow!(
+            "draft is already managed: {}",
+            path.display()
+        ));
+    }
+
+    let known_slugs = collect_managed_pages(mirror_root)?
+        .into_iter()
+        .map(|page| page.metadata.slug)
+        .chain(std::iter::once(slug.to_string()))
+        .collect::<HashSet<_>>();
+    let normalized =
+        normalize_page_markdown(strip_any_frontmatter(&content).trim_start(), &known_slugs);
+    let frontmatter = MirrorFrontmatter {
+        page_id: adopted.page_id.clone(),
+        slug: adopted.slug.clone(),
+        page_type: page_type.to_string(),
+        revision_id: adopted.revision_id.clone(),
+        updated_at: adopted.updated_at,
+        mirror: true,
+    };
+    fs::write(&path, serialize_mirror_file(&frontmatter, &normalized))
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
+}
+
+pub fn write_rendered_system_pages(
+    mirror_root: &Path,
+    index_markdown: &str,
+    log_markdown: &str,
+) -> Result<()> {
+    let known_slugs = collect_managed_pages(mirror_root)?
+        .into_iter()
+        .map(|page| page.metadata.slug)
+        .collect::<HashSet<_>>();
+    fs::create_dir_all(mirror_root)
+        .with_context(|| format!("failed to create {}", mirror_root.display()))?;
+    fs::write(
+        mirror_root.join("index.md"),
+        normalize_system_markdown(index_markdown, &known_slugs),
+    )
+    .with_context(|| format!("failed to write {}", mirror_root.join("index.md").display()))?;
+    fs::write(
+        mirror_root.join("log.md"),
+        normalize_system_markdown(log_markdown, &known_slugs),
+    )
+    .with_context(|| format!("failed to write {}", mirror_root.join("log.md").display()))?;
+    Ok(())
 }
 
 pub fn update_local_revision_metadata(

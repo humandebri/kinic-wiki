@@ -1,6 +1,7 @@
 // Where: crates/wiki_cli/src/commands_tests.rs
 // What: Tests for CLI command handlers.
 // Why: Keep the command implementation file focused on production behavior.
+use crate::adopt::adopt_draft;
 use crate::client::WikiApi;
 use crate::commands::{pull, push};
 use crate::mirror::{MirrorState, save_state, write_snapshot_mirror};
@@ -8,14 +9,17 @@ use async_trait::async_trait;
 use std::sync::Mutex;
 use tempfile::tempdir;
 use wiki_types::{
-    CommitWikiChangesRequest, CommitWikiChangesResponse, ExportWikiSnapshotResponse,
-    FetchWikiUpdatesResponse, PageBundle, RejectedPageResult, SearchHit, SearchRequest,
-    SectionHashEntry, Status, SystemPage, SystemPageSnapshot, WikiPageSnapshot, WikiPageType,
-    WikiSyncManifest, WikiSyncManifestDelta, WikiSyncManifestEntry,
+    AdoptDraftPageInput, AdoptDraftPageOutput, CommitWikiChangesRequest, CommitWikiChangesResponse,
+    CreateSourceInput, ExportWikiSnapshotResponse, FetchWikiUpdatesResponse, HealthCheckReport,
+    PageBundle, RejectedPageResult, SearchHit, SearchRequest, SectionHashEntry, Status, SystemPage,
+    SystemPageSnapshot, WikiPageSnapshot, WikiPageType, WikiSyncManifest, WikiSyncManifestDelta,
+    WikiSyncManifestEntry,
 };
 
 #[derive(Default)]
 struct FakeApi {
+    adopted: Option<AdoptDraftPageOutput>,
+    adopted_requests: Mutex<Vec<AdoptDraftPageInput>>,
     search_hits: Vec<SearchHit>,
     page: Option<PageBundle>,
     system_page: Option<SystemPage>,
@@ -27,6 +31,22 @@ struct FakeApi {
 
 #[async_trait]
 impl WikiApi for FakeApi {
+    async fn adopt_draft_page(
+        &self,
+        request: AdoptDraftPageInput,
+    ) -> anyhow::Result<AdoptDraftPageOutput> {
+        self.adopted_requests.lock().unwrap().push(request);
+        Ok(self.adopted.clone().unwrap())
+    }
+
+    async fn create_source(&self, _request: CreateSourceInput) -> anyhow::Result<String> {
+        panic!("not used in command tests")
+    }
+
+    async fn lint_health(&self) -> anyhow::Result<HealthCheckReport> {
+        Ok(HealthCheckReport { issues: Vec::new() })
+    }
+
     async fn status(&self) -> anyhow::Result<Status> {
         Ok(Status {
             page_count: 1,
@@ -192,4 +212,48 @@ fn incremental_system_page_write_keeps_links_to_unchanged_pages() {
 
     let index = std::fs::read_to_string(mirror_root.join("index.md")).unwrap();
     assert!(index.contains("[[beta]]"));
+}
+
+#[tokio::test]
+async fn adopt_draft_promotes_local_page_into_managed_mirror() {
+    let dir = tempdir().unwrap();
+    let mirror_root = dir.path().join("Wiki");
+    std::fs::create_dir_all(mirror_root.join("pages")).unwrap();
+    std::fs::write(
+        mirror_root.join("pages/draft-alpha.md"),
+        "---\nslug: draft-alpha\ntitle: Draft Alpha\npage_type: entity\ndraft: true\n---\n\n# Draft Alpha\n\nSee [Index](../index.md).\n",
+    )
+    .unwrap();
+
+    let api = FakeApi {
+        adopted: Some(AdoptDraftPageOutput {
+            page_id: "page_1".into(),
+            slug: "draft-alpha".into(),
+            revision_id: "rev_1".into(),
+            updated_at: 10,
+            snapshot_revision: "snapshot_2".into(),
+            index_markdown: "# Index\n\n- [[draft-alpha]]\n".into(),
+            log_markdown: "# Log\n\n- Draft Alpha\n".into(),
+        }),
+        ..Default::default()
+    };
+
+    let response = adopt_draft(&api, &mirror_root, "draft-alpha", None)
+        .await
+        .unwrap();
+
+    let page = std::fs::read_to_string(mirror_root.join("pages/draft-alpha.md")).unwrap();
+    assert!(page.contains("mirror: true"));
+    assert!(mirror_root.join("index.md").exists());
+    assert!(mirror_root.join("log.md").exists());
+    let adopted_requests = api.adopted_requests.lock().unwrap();
+    assert_eq!(adopted_requests.len(), 1);
+    assert_eq!(adopted_requests[0].markdown, "# Draft Alpha\n\nSee [Index](../index.md).\n");
+    assert_eq!(response.action, "adopted");
+    assert_eq!(
+        crate::mirror::load_state(&mirror_root)
+            .unwrap()
+            .snapshot_revision,
+        "snapshot_2"
+    );
 }
