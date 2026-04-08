@@ -16,30 +16,38 @@ canister の正本モデルを wiki 固有の `page/revision/section/system page
 - 競合解決は section 単位ではなく file 単位にする。
 - 検索は current content に対してのみ行い、履歴検索は初期版では扱わない。
 
-## 目標状態
+## 実装結果
 
-### 保存モデル
+この計画は実装済みです。
+現在の repo は FS-first を正本として動作し、旧 wiki 層は削除されています。
 
-中核は単一の `nodes` テーブルとする。
+### 現在の保存モデル
 
-- `path TEXT PRIMARY KEY`
-- `content TEXT NOT NULL`
-- `kind TEXT NOT NULL`
-- `created_at INTEGER NOT NULL`
-- `updated_at INTEGER NOT NULL`
-- `etag TEXT NOT NULL`
-- `deleted_at INTEGER NULL`
-- `metadata_json TEXT NOT NULL DEFAULT '{}'`
+中核テーブルは `fs_nodes` と `fs_nodes_fts` です。
+計画初期の文言では `nodes` / `nodes_fts` と書いていたが、実装では FS-first の責務を明示するため `fs_` prefix を採用しています。
 
-永続化される `kind` は最小限に絞る。
+- `fs_nodes`
+  - `path TEXT PRIMARY KEY`
+  - `content TEXT NOT NULL`
+  - `kind TEXT NOT NULL`
+  - `created_at INTEGER NOT NULL`
+  - `updated_at INTEGER NOT NULL`
+  - `etag TEXT NOT NULL`
+  - `deleted_at INTEGER NULL`
+  - `metadata_json TEXT NOT NULL DEFAULT '{}'`
+- `fs_nodes_fts`
+  - current non-deleted node の FTS index
+- `fs_snapshots`
+- `fs_snapshot_nodes`
+
+永続化される `kind` は次の 2 種類です。
 
 - `file`
 - `source`
 
-`directory` は row として持たず、`path` prefix から仮想的に導出する。
-list API の返り値でのみ仮想 directory entry を返す。
+`directory` は row として永続化せず、`list_nodes` の返り値でのみ仮想的に返します。
 
-### 公開 API
+### 現在の公開 API
 
 canister API は wiki API ではなく FS API に寄せる。
 
@@ -49,16 +57,19 @@ canister API は wiki API ではなく FS API に寄せる。
 - `delete_node(path, expected_etag) -> DeleteResult`
 - `search_nodes(query, prefix, top_k) -> vec SearchHit`
 - `export_snapshot(prefix) -> Snapshot`
-- `fetch_updates(cursor or known_etags) -> Delta`
+- `fetch_updates(known_snapshot_revision, prefix) -> Delta`
 
 競合制御は `expected_etag` に一本化する。
 現行の `expected_current_revision_id` は廃止する。
 
-### 検索
+現時点では batch `write/delete` API は入れていません。
+`commit_wiki_changes` を 1 対 1 で置き換えるのではなく、単発の `write_node` / `delete_node` を公開契約にしています。
 
-検索は `nodes` の current content に対する FTS とする。
+### 現在の検索
 
-- FTS テーブル: `nodes_fts`
+検索は `fs_nodes` の current content に対する FTS です。
+
+- FTS テーブル: `fs_nodes_fts`
 - index 対象: `deleted_at IS NULL` の node
 - write/delete と同じ transaction で更新
 
@@ -77,110 +88,107 @@ canister API は wiki API ではなく FS API に寄せる。
 
 必要ならそれらは agent が普通の file として表現する。
 
-## 置き換え方針
+## 置き換え結果
 
-### API の置き換え
+### API
 
 - `get_page` は `read_node` に統合する
 - `get_system_page` は廃止する
-- `commit_wiki_changes` は複数 `write/delete` の batch API に置き換える
-- `create_source` は `write_node` に統合するか、`kind=source` の thin wrapper にする
+- `commit_wiki_changes` は廃止した
+- `create_source` は廃止し、`kind=source` の `write_node` に統一した
 - `search` は `search_nodes` に置き換える
 
-### mirror / sync の置き換え
+### mirror / sync
 
 Obsidian 側の `Wiki/` は remote nodes の working copy として扱う。
 
-- pull: remote の `nodes` を path ベースで mirror する
+- pull: remote の node を path ベースで mirror する
 - push: local file を path 単位で `write_node` / `delete_node` に反映する
 - conflict: `etag` mismatch のみ扱う
 
-frontmatter で page 固有 metadata を持つ前提はやめる。
-必要なら mirror 管理用に最小限の hidden metadata を別ファイルで持つ。
+mirror 管理 metadata は hidden sidecar file ではなく frontmatter で保持しています。
+この点は初期案からの変更で、理由は managed file 単位で `path/kind/etag/updated_at` を閉じ込めた方が実装と運用が単純だったためです。
 
-## 段階的移行
+## 段階的移行の結果
 
 ### Phase 1: 型と API の確定
 
-やること:
+実施内容:
 
 - `wiki_types` に FS-first の型を追加する
 - `wiki.did` の新しい interface を定義する
 - path ルール、etag ルール、delete semantics を固定する
 
-決めること:
-
-- path は `/Wiki/...` 形式にするか
-- tombstone を返すか
-- batch write/delete を初期版で入れるか
-
-完了条件:
+結果:
 
 - Rust 型
 - Candid interface
 - API 契約メモ
 
-が揃っていること。
+を揃えて完了。
 
 ### Phase 2: 新 store 実装
 
-やること:
+実施内容:
 
-- `nodes` schema migration を追加する
-- `nodes` の read/write/list/delete/search を実装する
-- `nodes_fts` を実装する
+- `fs_nodes` schema migration を追加する
+- `fs_nodes` の read/write/list/delete/search を実装する
+- `fs_nodes_fts` を実装する
 
-方針:
-
-- 旧 schema を延命する migration は書かない
-- 必要なら schema version を切り替えて新 DB として扱う
-
-完了条件:
+結果:
 
 - store 単体テストで file 単位の read/write/delete/search が通ること
 - etag mismatch の衝突が確認できること
 
+を満たして完了。
+
 ### Phase 3: runtime / canister 差し替え
 
-やること:
+実施内容:
 
 - `WikiService` を FS API 中心に差し替える
 - canister entrypoint を FS API に置き換える
 - `wiki.did` を更新する
 
-完了条件:
+結果:
 
 - canister テストが新 API 前提で通ること
 - migration 後に `read/list/write/search` が一貫して動くこと
 
+を満たして完了。
+
 ### Phase 4: CLI / plugin 更新
 
-やること:
+実施内容:
 
 - CLI を path ベース操作へ更新する
 - plugin を node mirror に更新する
 - pull/push/conflict を etag ベースに揃える
 
-完了条件:
+結果:
 
 - local `Wiki/` と remote node の roundtrip が成立すること
 - agent が file path ベースで自然に扱えること
 
+を満たして完了。
+
 ### Phase 5: 旧実装削除
 
-やること:
+実施内容:
 
 - wiki 固有 schema とコードを削除する
 - README と計画書を FS-first 前提に更新する
 - 不要テストを削除し、新モデルのテストに置き換える
 
-完了条件:
+結果:
 
 - `page/revision/section/system page` 依存コードが残っていないこと
 
+を満たして完了。
+
 ## 実装順
 
-実装順は次で固定する。
+実装順は次の順で完了した。
 
 1. `wiki_types` に新型を追加
 2. `wiki.did` 新案を追加
@@ -194,7 +202,7 @@ frontmatter で page 固有 metadata を持つ前提はやめる。
 
 ## テスト方針
 
-最低限必要なテストは次の通り。
+最低限必要なテストは実装済みです。
 
 - write 後に read できる
 - list が prefix ごとに正しく返る
@@ -204,9 +212,11 @@ frontmatter で page 固有 metadata を持つ前提はやめる。
 - snapshot/export/fetch_updates が path 単位で整合する
 - CLI pull/push の roundtrip が崩れない
 
+加えて plugin の `npm run check` と canister の Candid 一致テストも通しています。
+
 ## 主な設計判断
 
-初期案として以下を採用する。
+最終的に以下を採用しています。
 
 - path は absolute-like な `/Wiki/...` 文字列
 - rename は初期版では未対応
@@ -215,6 +225,13 @@ frontmatter で page 固有 metadata を持つ前提はやめる。
 - search は全文検索のみ
 - history は持たない
 - index/log は agent が普通の file として管理する
+
+初期案からの差分は次の通りです。
+
+- テーブル名は `nodes` ではなく `fs_nodes`
+- FTS テーブル名は `fs_nodes_fts`
+- mirror metadata は hidden sidecar file ではなく frontmatter
+- batch write/delete API は未採用
 
 ## リスク
 
