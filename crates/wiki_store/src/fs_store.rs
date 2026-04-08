@@ -480,13 +480,15 @@ impl FsStore {
             match current_node {
                 Some(node) if node.deleted_at.is_none() => changed_nodes.push(node),
                 Some(node) => {
-                    if path_was_visible_in_scope_at_revision(
+                    if !request.include_deleted
+                        && path_was_visible_in_scope_at_revision(
                         &conn,
                         &path,
                         &prefix,
                         false,
                         known_snapshot.revision,
-                    )? {
+                    )?
+                    {
                         removed_paths.push(path);
                     }
                     if request.include_deleted {

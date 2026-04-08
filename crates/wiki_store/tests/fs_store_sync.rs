@@ -137,6 +137,47 @@ fn fetch_updates_reports_tombstones_with_include_deleted() {
 }
 
 #[test]
+fn fetch_updates_same_scope_with_include_deleted_does_not_duplicate_tombstones() {
+    let (_dir, store) = new_store();
+    let alpha = write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
+    let beta = write_node(&store, "/Wiki/beta.md", "beta", None, 11);
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("base snapshot should succeed");
+
+    write_node(&store, "/Wiki/alpha.md", "alpha updated", Some(&alpha), 12);
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/beta.md".to_string(),
+                expected_etag: Some(beta),
+            },
+            13,
+        )
+        .expect("delete should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 2);
+    assert!(
+        updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/beta.md" && node.deleted_at == Some(13))
+    );
+    assert!(updates.removed_paths.is_empty());
+}
+
+#[test]
 fn fetch_updates_returns_only_changed_nodes_since_known_snapshot() {
     let (_dir, store) = new_store();
     let alpha = write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
