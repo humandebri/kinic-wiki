@@ -187,5 +187,8 @@ pub fn candid_interface() -> String {
     __export_service()
 }
 
+#[cfg(feature = "canbench-rs")]
+mod benches;
+
 #[cfg(test)]
 mod tests;

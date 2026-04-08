@@ -40,6 +40,30 @@ Current scope:
 - text-first
 - `/Wiki/...` as the single public root
 
+## CI and Benchmarks
+
+This repo is expected to stay green on:
+
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cd plugins/kinic-wiki && npm run check`
+
+There is also a dedicated canister build path and an optional `canbench` workflow:
+
+- production-style canister build: `bash scripts/build-wiki-canister.sh`
+- benchmark build config: `canbench.yml`
+- benchmark build script: `bash scripts/build-wiki-canister-canbench.sh`
+- benchmark runner: `bash scripts/run_canbench_guard.sh`
+
+`canbench` uses a fixed PocketIC runtime requirement:
+
+- `canbench 0.4.1` expects `pocket-ic-server 10.0.0`
+- `pocket-ic-server 11.x` and `12.x` are not accepted
+- prefer `POCKET_IC_BIN=/abs/path/to/pocket-ic` or `./.canbench/pocket-ic`
+- CI provisions `./.canbench-tools/bin/canbench` and `./.canbench/pocket-ic` via `bash scripts/setup_canbench_ci.sh`
+- the repo ignores `./.canbench/` and `./.canbench-tools/`, so local runtime and local canbench binaries stay untracked
+
 ## Core operations
 
 The public API is VFS-first.
@@ -68,8 +92,8 @@ You do not need to hand-write tool definitions for every app.
 
 The reusable pieces live in:
 
-- client: [crates/wiki_cli/src/client.rs](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_cli/src/client.rs)
-- tool layer: [crates/wiki_cli/src/agent_tools.rs](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_cli/src/agent_tools.rs)
+- client: [`crates/wiki_cli/src/client.rs`](crates/wiki_cli/src/client.rs)
+- tool layer: [`crates/wiki_cli/src/agent_tools.rs`](crates/wiki_cli/src/agent_tools.rs)
 
 The basic pattern is:
 
@@ -192,7 +216,7 @@ async fn run() -> Result<()> {
 
 ## Use with the CLI
 
-The CLI lives in [crates/wiki_cli](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_cli).
+The CLI lives in [`crates/wiki_cli`](crates/wiki_cli).
 
 Main commands:
 
@@ -217,15 +241,21 @@ Examples:
 
 ```bash
 wiki-cli read-node --path /Wiki/notes.md
-wiki-cli glob-nodes '**/*.md' --path /Wiki --type file
+wiki-cli glob-nodes '**/*.md' --path /Wiki --node-type file
 wiki-cli recent-nodes --limit 20 --path /Wiki
 wiki-cli append-node --path /Wiki/log.md --input ./entry.md
-wiki-cli move-node --from-path /Wiki/draft.md --to-path /Wiki/archive/draft.md --expected-etag etag-1
+wiki-cli move-node --from-path /Wiki/draft.md --to-path /Wiki/archive/draft.md --expected-etag etag-1 --overwrite
 ```
+
+Notes:
+
+- `append_node` appends content only when the node already exists. `kind` and `metadata_json` are only used when append creates a new node.
+- `move_node --overwrite` replaces a live target or revives a tombstoned target at the destination path.
+- `glob_nodes` rejects overlong patterns, but stored node paths do not make the entire glob query fail just because they are long.
 
 ## Use with Obsidian
 
-The plugin lives in [plugins/kinic-wiki](/Users/0xhude/Desktop/work/llm-wiki/plugins/kinic-wiki).
+The plugin lives in [`plugins/kinic-wiki`](plugins/kinic-wiki).
 
 It is responsible for:
 
@@ -317,6 +347,12 @@ Sync uses:
 
 If the client does not know a valid snapshot revision, `fetch_updates` returns a full refresh instead of erroring.
 
+Scope changes compare the known snapshot scope against the current scope:
+
+- tombstones stay in `changed_nodes` when `include_deleted=true`
+- tombstones move to `removed_paths` when `include_deleted=false`
+- moved old paths appear in `removed_paths`, but they are not treated as tombstones
+
 For rename operations, sync observes:
 
 - new path in `changed_nodes`
@@ -324,23 +360,23 @@ For rename operations, sync observes:
 
 ## Current architecture
 
-- canister: [crates/wiki_canister](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_canister)
-- runtime: [crates/wiki_runtime](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_runtime)
-- store: [crates/wiki_store](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_store)
-- public types: [crates/wiki_types](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_types)
-- CLI: [crates/wiki_cli](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_cli)
-- Obsidian plugin: [plugins/kinic-wiki](/Users/0xhude/Desktop/work/llm-wiki/plugins/kinic-wiki)
+- canister: [`crates/wiki_canister`](crates/wiki_canister)
+- runtime: [`crates/wiki_runtime`](crates/wiki_runtime)
+- store: [`crates/wiki_store`](crates/wiki_store)
+- public types: [`crates/wiki_types`](crates/wiki_types)
+- CLI: [`crates/wiki_cli`](crates/wiki_cli)
+- Obsidian plugin: [`plugins/kinic-wiki`](plugins/kinic-wiki)
 
 Important implementation notes:
 
 - search, sync, and writes share the same SQLite database
 - canister init / post-upgrade runs FS migrations only
-- the public contract is defined in [crates/wiki_canister/wiki.did](/Users/0xhude/Desktop/work/llm-wiki/crates/wiki_canister/wiki.did)
+- the public contract is defined in [`crates/wiki_canister/wiki.did`](crates/wiki_canister/wiki.did)
 
 ## Build
 
 Canister build script:
-[scripts/build-wiki-canister.sh](/Users/0xhude/Desktop/work/llm-wiki/scripts/build-wiki-canister.sh)
+[`scripts/build-wiki-canister.sh`](scripts/build-wiki-canister.sh)
 
 Build flow:
 
@@ -349,7 +385,7 @@ Build flow:
 3. `ic-wasm` embeds `candid:service`
 
 Project build config:
-[icp.yaml](/Users/0xhude/Desktop/work/llm-wiki/icp.yaml)
+[`icp.yaml`](icp.yaml)
 
 ## Development checks
 

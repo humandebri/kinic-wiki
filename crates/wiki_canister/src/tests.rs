@@ -1,8 +1,6 @@
 // Where: crates/wiki_canister/src/tests.rs
 // What: Entry-point level tests for the FS-first canister surface.
 // Why: Phase 3 replaces the public canister contract, so tests must assert the wrapper behavior directly.
-use std::path::PathBuf;
-
 use tempfile::tempdir;
 use wiki_runtime::WikiService;
 use wiki_types::{
@@ -20,7 +18,7 @@ use super::{
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
-    let db_path = PathBuf::from(dir.keep()).join("wiki.sqlite3");
+    let db_path = dir.keep().join("wiki.sqlite3");
     let service = WikiService::new(db_path);
     service
         .run_fs_migrations()

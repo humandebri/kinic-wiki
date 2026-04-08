@@ -165,15 +165,11 @@ pub fn deleted_tracked_nodes(
     mirror_root: &Path,
     tracked_nodes: &[TrackedNodeState],
 ) -> Result<Vec<TrackedNodeState>> {
-    let current_paths = collect_managed_nodes(mirror_root)?
-        .into_iter()
-        .map(|node| node.metadata.path)
-        .collect::<HashSet<_>>();
-    Ok(tracked_nodes
-        .iter()
-        .filter(|tracked| !current_paths.contains(&tracked.path))
-        .cloned()
-        .collect())
+    find_deleted_tracked_nodes(
+        tracked_nodes,
+        |remote_path| local_path_for_remote(mirror_root, remote_path),
+        |local_path| local_path.is_file(),
+    )
 }
 
 pub fn write_conflict_file(mirror_root: &Path, remote_path: &str, markdown: &str) -> Result<()> {
@@ -208,6 +204,25 @@ pub fn now_millis() -> i64 {
 
 pub fn strip_frontmatter(content: &str) -> String {
     strip_any_frontmatter(content)
+}
+
+pub fn find_deleted_tracked_nodes<ToLocalPath, LocalFileExists>(
+    tracked_nodes: &[TrackedNodeState],
+    to_local_path: ToLocalPath,
+    local_file_exists: LocalFileExists,
+) -> Result<Vec<TrackedNodeState>>
+where
+    ToLocalPath: Fn(&str) -> Result<PathBuf>,
+    LocalFileExists: Fn(&Path) -> bool,
+{
+    let mut deleted = Vec::new();
+    for tracked in tracked_nodes {
+        let local_path = to_local_path(&tracked.path)?;
+        if !local_file_exists(&local_path) {
+            deleted.push(tracked.clone());
+        }
+    }
+    Ok(deleted)
 }
 
 fn collect_files(root: &Path, current: &Path, results: &mut Vec<ManagedNode>) -> Result<()> {

@@ -69,6 +69,43 @@ fn append_node_creates_updates_and_checks_etag() {
 }
 
 #[test]
+fn append_node_preserves_existing_kind_and_metadata() {
+    let (_dir, store) = new_store();
+
+    let created = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/log.md".to_string(),
+                content: "alpha".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: Some("{\"v\":1}".to_string()),
+                kind: Some(NodeKind::Source),
+            },
+            10,
+        )
+        .expect("append create should succeed");
+
+    let updated = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/log.md".to_string(),
+                content: "beta".to_string(),
+                expected_etag: Some(created.node.etag),
+                separator: Some("\n".to_string()),
+                metadata_json: Some("{\"v\":2}".to_string()),
+                kind: Some(NodeKind::File),
+            },
+            11,
+        )
+        .expect("append update should succeed");
+
+    assert_eq!(updated.node.kind, NodeKind::Source);
+    assert_eq!(updated.node.metadata_json, "{\"v\":1}");
+    assert_eq!(updated.node.content, "alpha\nbeta");
+}
+
+#[test]
 fn edit_node_enforces_plain_text_replacement_rules() {
     let (_dir, store) = new_store();
     let created = store
@@ -219,6 +256,123 @@ fn move_node_renames_and_updates_search() {
 }
 
 #[test]
+fn move_node_overwrite_replaces_live_target() {
+    let (_dir, store) = new_store();
+    let source = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/from.md".to_string(),
+                content: "source".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("source create should succeed");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/to.md".to_string(),
+                content: "target".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("target create should succeed");
+
+    let moved = store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/from.md".to_string(),
+                to_path: "/Wiki/to.md".to_string(),
+                expected_etag: Some(source.node.etag),
+                overwrite: true,
+            },
+            12,
+        )
+        .expect("move should succeed");
+
+    assert!(moved.overwrote);
+    assert_eq!(moved.node.path, "/Wiki/to.md");
+    assert_eq!(moved.node.content, "source");
+    assert!(
+        store
+            .read_node("/Wiki/from.md")
+            .expect("read should succeed")
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .read_node("/Wiki/to.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "source"
+    );
+}
+
+#[test]
+fn move_node_overwrite_revives_tombstoned_target() {
+    let (_dir, store) = new_store();
+    let source = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/from.md".to_string(),
+                content: "source".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("source create should succeed");
+    let target = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/to.md".to_string(),
+                content: "target".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("target create should succeed");
+    store
+        .delete_node(
+            wiki_types::DeleteNodeRequest {
+                path: "/Wiki/to.md".to_string(),
+                expected_etag: Some(target.node.etag),
+            },
+            12,
+        )
+        .expect("delete should succeed");
+
+    let moved = store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/from.md".to_string(),
+                to_path: "/Wiki/to.md".to_string(),
+                expected_etag: Some(source.node.etag),
+                overwrite: true,
+            },
+            13,
+        )
+        .expect("move should succeed");
+
+    assert!(!moved.overwrote);
+    assert!(moved.node.deleted_at.is_none());
+    assert_eq!(moved.node.content, "source");
+}
+
+#[test]
 fn glob_nodes_matches_files_and_virtual_directories() {
     let (_dir, store) = new_store();
     store
@@ -279,6 +433,62 @@ fn glob_nodes_matches_files_and_virtual_directories() {
             .iter()
             .any(|hit| hit.path == "/Wiki/nested" && hit.kind == NodeEntryKind::Directory)
     );
+}
+
+#[test]
+fn glob_nodes_rejects_overlong_patterns() {
+    let (_dir, store) = new_store();
+    let error = store
+        .glob_nodes(GlobNodesRequest {
+            pattern: "*".repeat(513),
+            path: Some("/Wiki".to_string()),
+            node_type: Some(GlobNodeType::Any),
+        })
+        .expect_err("glob should reject long pattern");
+    assert!(error.contains("pattern is too long"));
+}
+
+#[test]
+fn glob_nodes_tolerates_existing_paths_longer_than_previous_match_limit() {
+    let (_dir, store) = new_store();
+    let long_segment = "a".repeat(4097);
+    let long_path = format!("/Wiki/{long_segment}.md");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: long_path,
+                content: "long".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("long path create should succeed");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/short.md".to_string(),
+                content: "short".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("short path create should succeed");
+
+    let hits = store
+        .glob_nodes(GlobNodesRequest {
+            pattern: "*.md".to_string(),
+            path: Some("/Wiki".to_string()),
+            node_type: Some(GlobNodeType::File),
+        })
+        .expect("glob should succeed even with long stored paths");
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().any(|hit| hit.path == "/Wiki/short.md"));
 }
 
 #[test]

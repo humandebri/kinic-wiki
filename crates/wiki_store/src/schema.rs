@@ -3,16 +3,10 @@
 // Why: The repo now has one node-based schema, so migration history only tracks FS tables.
 use rusqlite::{Connection, OptionalExtension, params};
 
-const MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "wiki_store:000_fs_nodes",
-        include_str!("../migrations/005_fs_nodes.sql"),
-    ),
-    (
-        "wiki_store:002_fs_change_log",
-        include_str!("../migrations/007_fs_change_log.sql"),
-    ),
-];
+const MIGRATIONS: &[(&str, &str)] = &[(
+    "wiki_store:000_fs_schema",
+    include_str!("../migrations/000_fs_schema.sql"),
+)];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
     include_str!("../migrations/000_schema_migrations.sql");
 

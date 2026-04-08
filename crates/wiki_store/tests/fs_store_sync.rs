@@ -133,10 +133,7 @@ fn fetch_updates_reports_tombstones_with_include_deleted() {
             .iter()
             .any(|node| node.path == "/Wiki/beta.md" && node.deleted_at == Some(13))
     );
-    assert_eq!(
-        with_deleted.removed_paths,
-        vec!["/Wiki/beta.md".to_string()]
-    );
+    assert!(with_deleted.removed_paths.is_empty());
 }
 
 #[test]
@@ -439,4 +436,260 @@ fn fetch_updates_reports_removed_paths_when_prefix_shrinks_without_new_writes() 
     assert_eq!(updates.changed_nodes.len(), 1);
     assert_eq!(updates.changed_nodes[0].path, "/Wiki/nested/beta.md");
     assert_eq!(updates.removed_paths, vec!["/Wiki/alpha.md".to_string()]);
+}
+
+#[test]
+fn fetch_updates_scope_change_keeps_deleted_nodes_out_of_removed_paths() {
+    let (_dir, store) = new_store();
+    let dead = write_node(&store, "/Wiki/sub/dead.md", "dead", None, 10);
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/sub/dead.md".to_string(),
+                expected_etag: Some(dead),
+            },
+            11,
+        )
+        .expect("delete should succeed");
+
+    let root_snapshot = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("snapshot should succeed");
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: root_snapshot.snapshot_revision,
+            prefix: Some("/Wiki/sub".to_string()),
+            include_deleted: true,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/sub/dead.md");
+    assert_eq!(updates.changed_nodes[0].deleted_at, Some(11));
+    assert!(updates.removed_paths.is_empty());
+}
+
+#[test]
+fn fetch_updates_scope_change_does_not_treat_move_removal_as_tombstone_history() {
+    let (_dir, store) = new_store();
+    let source = write_node(&store, "/Wiki/a.md", "alpha", None, 10);
+    store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/a.md".to_string(),
+                to_path: "/Wiki/archive/a.md".to_string(),
+                expected_etag: Some(source),
+                overwrite: false,
+            },
+            11,
+        )
+        .expect("move should succeed");
+
+    let known = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("snapshot should succeed");
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: known.snapshot_revision,
+            prefix: Some("/Wiki/archive".to_string()),
+            include_deleted: true,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/archive/a.md");
+    assert!(updates.removed_paths.is_empty());
+}
+
+#[test]
+fn fetch_updates_reports_move_overwrite_of_live_target() {
+    let (_dir, store) = new_store();
+    let source = write_node(&store, "/Wiki/source.md", "source", None, 10);
+    write_node(&store, "/Wiki/target.md", "target", None, 11);
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("snapshot should succeed");
+
+    store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/source.md".to_string(),
+                to_path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(source),
+                overwrite: true,
+            },
+            12,
+        )
+        .expect("move should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/target.md");
+    assert_eq!(updates.changed_nodes[0].content, "source");
+    assert_eq!(updates.removed_paths, vec!["/Wiki/source.md".to_string()]);
+}
+
+#[test]
+fn fetch_updates_reports_move_overwrite_of_live_target_with_include_deleted() {
+    let (_dir, store) = new_store();
+    let source = write_node(&store, "/Wiki/source.md", "source", None, 10);
+    write_node(&store, "/Wiki/target.md", "target", None, 11);
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("snapshot should succeed");
+
+    store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/source.md".to_string(),
+                to_path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(source),
+                overwrite: true,
+            },
+            12,
+        )
+        .expect("move should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/target.md");
+    assert_eq!(updates.changed_nodes[0].content, "source");
+    assert_eq!(updates.removed_paths, vec!["/Wiki/source.md".to_string()]);
+    assert!(
+        !updates
+            .removed_paths
+            .contains(&"/Wiki/target.md".to_string())
+    );
+}
+
+#[test]
+fn fetch_updates_reports_move_overwrite_of_tombstoned_target_with_include_deleted() {
+    let (_dir, store) = new_store();
+    let source = write_node(&store, "/Wiki/source.md", "source", None, 10);
+    let target = write_node(&store, "/Wiki/target.md", "target", None, 11);
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(target),
+            },
+            12,
+        )
+        .expect("delete should succeed");
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("snapshot should succeed");
+
+    store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/source.md".to_string(),
+                to_path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(source),
+                overwrite: true,
+            },
+            13,
+        )
+        .expect("move should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: true,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/target.md");
+    assert_eq!(updates.changed_nodes[0].content, "source");
+    assert!(updates.changed_nodes[0].deleted_at.is_none());
+    assert_eq!(updates.removed_paths, vec!["/Wiki/source.md".to_string()]);
+    assert!(
+        !updates
+            .removed_paths
+            .contains(&"/Wiki/target.md".to_string())
+    );
+}
+
+#[test]
+fn fetch_updates_reports_move_overwrite_of_tombstoned_target_without_include_deleted() {
+    let (_dir, store) = new_store();
+    let source = write_node(&store, "/Wiki/source.md", "source", None, 10);
+    let target = write_node(&store, "/Wiki/target.md", "target", None, 11);
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(target),
+            },
+            12,
+        )
+        .expect("delete should succeed");
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("snapshot should succeed");
+
+    store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/source.md".to_string(),
+                to_path: "/Wiki/target.md".to_string(),
+                expected_etag: Some(source),
+                overwrite: true,
+            },
+            13,
+        )
+        .expect("move should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("updates should succeed");
+
+    assert_eq!(updates.changed_nodes.len(), 1);
+    assert_eq!(updates.changed_nodes[0].path, "/Wiki/target.md");
+    assert_eq!(updates.changed_nodes[0].content, "source");
+    assert!(updates.changed_nodes[0].deleted_at.is_none());
+    assert_eq!(updates.removed_paths, vec!["/Wiki/source.md".to_string()]);
+    assert!(
+        !updates
+            .removed_paths
+            .contains(&"/Wiki/target.md".to_string())
+    );
 }

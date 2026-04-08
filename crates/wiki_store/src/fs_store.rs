@@ -20,9 +20,38 @@ use crate::{
         load_scoped_nodes, node_kind_from_db, node_kind_to_db, normalize_node_path,
         prefix_filter_sql, relative_to_prefix, snapshot_revision_token,
     },
-    glob_match::matches_path,
+    glob_match::{matches_path, validate_pattern},
     schema,
 };
+
+// Where: crates/wiki_store/src/fs_store.rs
+// What: Change-log semantics used by delta sync visibility checks.
+// Why: Tombstones and move removals need distinct history meanings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChangeKind {
+    Upsert,
+    Tombstone,
+    PathRemoval,
+}
+
+impl ChangeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Upsert => "upsert",
+            Self::Tombstone => "tombstone",
+            Self::PathRemoval => "path_removal",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "upsert" => Ok(Self::Upsert),
+            "tombstone" => Ok(Self::Tombstone),
+            "path_removal" => Ok(Self::PathRemoval),
+            _ => Err(format!("unknown fs_change_log.change_kind: {value}")),
+        }
+    }
+}
 
 pub struct FsStore {
     database_path: PathBuf,
@@ -199,6 +228,7 @@ impl FsStore {
         if request.pattern.trim().is_empty() {
             return Err("pattern must not be empty".to_string());
         }
+        validate_pattern(&request.pattern)?;
         let prefix = request
             .path
             .as_deref()
@@ -209,18 +239,23 @@ impl FsStore {
         let conn = self.open()?;
         let nodes = load_scoped_nodes(&conn, &prefix, false)?;
         let entries = build_glob_entries(&nodes, &prefix);
-        Ok(entries
-            .into_iter()
-            .filter(|entry| glob_type_matches(&node_type, &entry.kind))
-            .filter_map(|entry| {
-                let relative = relative_to_prefix(&prefix, &entry.path)?;
-                matches_path(&request.pattern, &relative).then_some(GlobNodeHit {
+        let mut hits = Vec::new();
+        for entry in entries {
+            if !glob_type_matches(&node_type, &entry.kind) {
+                continue;
+            }
+            let Some(relative) = relative_to_prefix(&prefix, &entry.path) else {
+                continue;
+            };
+            if matches_path(&request.pattern, &relative)? {
+                hits.push(GlobNodeHit {
                     path: entry.path,
                     kind: entry.kind,
                     has_children: entry.has_children,
-                })
-            })
-            .collect())
+                });
+            }
+        }
+        Ok(hits)
     }
 
     pub fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
@@ -484,9 +519,14 @@ impl FsStore {
 }
 
 fn record_change(tx: &Transaction<'_>, node: &Node) -> Result<(), String> {
+    let change_kind = if node.deleted_at.is_some() {
+        ChangeKind::Tombstone
+    } else {
+        ChangeKind::Upsert
+    };
     tx.execute(
-        "INSERT INTO fs_change_log (path, deleted_at) VALUES (?1, ?2)",
-        params![node.path, node.deleted_at],
+        "INSERT INTO fs_change_log (path, deleted_at, change_kind) VALUES (?1, ?2, ?3)",
+        params![node.path, node.deleted_at, change_kind.as_str()],
     )
     .map(|_| ())
     .map_err(|error| error.to_string())
@@ -494,8 +534,8 @@ fn record_change(tx: &Transaction<'_>, node: &Node) -> Result<(), String> {
 
 fn record_path_removal(tx: &Transaction<'_>, path: &str, deleted_at: i64) -> Result<(), String> {
     tx.execute(
-        "INSERT INTO fs_change_log (path, deleted_at) VALUES (?1, ?2)",
-        params![path, deleted_at],
+        "INSERT INTO fs_change_log (path, deleted_at, change_kind) VALUES (?1, ?2, ?3)",
+        params![path, deleted_at, ChangeKind::PathRemoval.as_str()],
     )
     .map(|_| ())
     .map_err(|error| error.to_string())
@@ -631,20 +671,25 @@ fn path_was_visible_in_scope_at_revision(
         return Ok(false);
     }
     conn.query_row(
-        "SELECT deleted_at
+        "SELECT deleted_at, change_kind
          FROM fs_change_log
          WHERE path = ?1 AND revision <= ?2
          ORDER BY revision DESC
          LIMIT 1",
         params![path, revision],
-        |row| row.get::<_, Option<i64>>(0),
+        |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?)),
     )
     .optional()
     .map_err(|error| error.to_string())
-    .map(|state| match state {
-        Some(None) => true,
-        Some(Some(_)) => include_deleted,
-        None => false,
+    .and_then(|state| {
+        Ok(match state {
+            Some((_, change_kind)) => match ChangeKind::from_db(&change_kind)? {
+                ChangeKind::Upsert => true,
+                ChangeKind::Tombstone => include_deleted,
+                ChangeKind::PathRemoval => false,
+            },
+            None => false,
+        })
     })
 }
 
@@ -652,7 +697,7 @@ fn path_is_visible_in_scope_now(
     conn: &Connection,
     path: &str,
     prefix: &str,
-    _include_deleted: bool,
+    include_deleted: bool,
 ) -> Result<bool, String> {
     if !path_matches_prefix(path, prefix) {
         return Ok(false);
@@ -660,6 +705,7 @@ fn path_is_visible_in_scope_now(
     let current = load_node(conn, path)?;
     Ok(match current {
         Some(node) if node.deleted_at.is_none() => true,
+        Some(node) if include_deleted && node.deleted_at.is_some() => true,
         _ => false,
     })
 }
@@ -672,7 +718,7 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 }
 
 fn decode_hex_to_string(value: &str) -> Option<String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(value.len() / 2);
@@ -758,8 +804,6 @@ fn append_existing_node(
     current.content = format!("{}{}{}", current.content, separator, request.content);
     current.updated_at = now;
     current.deleted_at = None;
-    current.metadata_json = request.metadata_json.unwrap_or(current.metadata_json);
-    current.kind = request.kind.unwrap_or(current.kind);
     Ok(current)
 }
 
