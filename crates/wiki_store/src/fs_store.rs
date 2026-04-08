@@ -482,12 +482,12 @@ impl FsStore {
                 Some(node) => {
                     if !request.include_deleted
                         && path_was_visible_in_scope_at_revision(
-                        &conn,
-                        &path,
-                        &prefix,
-                        false,
-                        known_snapshot.revision,
-                    )?
+                            &conn,
+                            &path,
+                            &prefix,
+                            false,
+                            known_snapshot.revision,
+                        )?
                     {
                         removed_paths.push(path);
                     }
