@@ -7,15 +7,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Source")]
     Source,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeEntryKind {
+    #[serde(alias = "Directory")]
     Directory,
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Source")]
     Source,
 }
 
@@ -117,8 +122,11 @@ pub struct MoveNodeResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum GlobNodeType {
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Directory")]
     Directory,
+    #[serde(alias = "Any")]
     Any,
 }
 
@@ -224,4 +232,37 @@ pub struct FetchUpdatesResponse {
     pub snapshot_revision: String,
     pub changed_nodes: Vec<Node>,
     pub removed_paths: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlobNodeType, NodeEntryKind, NodeKind};
+    use serde::{
+        Deserialize,
+        de::value::{Error, StrDeserializer},
+    };
+
+    #[test]
+    fn node_kind_deserializes_uppercase_aliases() {
+        let kind: NodeKind = NodeKind::deserialize(StrDeserializer::<Error>::new("File"))
+            .expect("uppercase alias should decode");
+        assert_eq!(kind, NodeKind::File);
+
+        let kind: NodeKind = NodeKind::deserialize(StrDeserializer::<Error>::new("source"))
+            .expect("snake_case should decode");
+        assert_eq!(kind, NodeKind::Source);
+    }
+
+    #[test]
+    fn entry_and_glob_kinds_deserialize_uppercase_aliases() {
+        let entry: NodeEntryKind =
+            NodeEntryKind::deserialize(StrDeserializer::<Error>::new("Directory"))
+                .expect("uppercase alias should decode");
+        assert_eq!(entry, NodeEntryKind::Directory);
+
+        let node_type: GlobNodeType =
+            GlobNodeType::deserialize(StrDeserializer::<Error>::new("Any"))
+                .expect("uppercase alias should decode");
+        assert_eq!(node_type, GlobNodeType::Any);
+    }
 }
