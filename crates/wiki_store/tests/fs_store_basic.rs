@@ -36,12 +36,7 @@ fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64
 fn fs_migrations_create_tables() {
     let (_dir, store) = new_store();
     let conn = Connection::open(store.database_path()).expect("db should open");
-    let tables = [
-        "fs_nodes",
-        "fs_nodes_fts",
-        "fs_snapshots",
-        "fs_snapshot_nodes",
-    ];
+    let tables = ["fs_nodes", "fs_nodes_fts", "fs_change_log"];
     for table in tables {
         let exists = conn
             .query_row(
@@ -380,5 +375,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             .iter()
             .any(|node| node.path == "/Wiki/nested/beta.md")
     );
-    assert_eq!(snapshot.snapshot_revision.len(), beta.len());
+    assert!(snapshot.snapshot_revision.starts_with("v3:"));
+    assert!(!snapshot.snapshot_revision.is_empty());
+    assert_eq!(beta.len(), 64);
 }

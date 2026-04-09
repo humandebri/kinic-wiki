@@ -8,6 +8,7 @@ import {
   serializeMirrorFile,
   stripManagedFrontmatter
 } from "./frontmatter";
+import { findDeletedTrackedNodes } from "./mirror_logic";
 import { MirrorFrontmatter, NodeSnapshot, TrackedNodeState } from "./types";
 
 export async function collectManagedNodes(app: App, mirrorRoot: string): Promise<Array<{ file: TFile; metadata: MirrorFrontmatter }>> {
@@ -119,8 +120,11 @@ export async function deletedTrackedNodes(
   mirrorRoot: string,
   trackedNodes: TrackedNodeState[]
 ): Promise<TrackedNodeState[]> {
-  const currentPaths = new Set((await collectManagedNodes(app, mirrorRoot)).map((node) => node.metadata.path));
-  return trackedNodes.filter((tracked) => !currentPaths.has(tracked.path));
+  return findDeletedTrackedNodes(
+    trackedNodes,
+    (remotePath) => remoteToLocalPath(mirrorRoot, remotePath),
+    (localPath) => app.vault.getAbstractFileByPath(localPath) instanceof TFile
+  );
 }
 
 export function currentManagedNodeFile(app: App, mirrorRoot: string): TFile | null {

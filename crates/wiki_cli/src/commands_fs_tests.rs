@@ -6,16 +6,26 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use wiki_types::{
-    DeleteNodeRequest, DeleteNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
-    FetchUpdatesRequest, FetchUpdatesResponse, ListNodesRequest, Node, NodeEntry, NodeKind,
-    SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
+    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
+    NodeKind, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
 #[derive(Default)]
-struct MockClient {
-    nodes: Vec<Node>,
-    writes: std::sync::Mutex<Vec<WriteNodeRequest>>,
-    deletes: std::sync::Mutex<Vec<DeleteNodeRequest>>,
+pub(crate) struct MockClient {
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) writes: std::sync::Mutex<Vec<WriteNodeRequest>>,
+    pub(crate) appends: std::sync::Mutex<Vec<AppendNodeRequest>>,
+    pub(crate) edits: std::sync::Mutex<Vec<EditNodeRequest>>,
+    pub(crate) deletes: std::sync::Mutex<Vec<DeleteNodeRequest>>,
+    pub(crate) mkdirs: std::sync::Mutex<Vec<MkdirNodeRequest>>,
+    pub(crate) moves: std::sync::Mutex<Vec<MoveNodeRequest>>,
+    pub(crate) globs: std::sync::Mutex<Vec<GlobNodesRequest>>,
+    pub(crate) recents: std::sync::Mutex<Vec<RecentNodesRequest>>,
+    pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
 }
 
 #[async_trait]
@@ -37,7 +47,10 @@ impl WikiApi for MockClient {
     }
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
-        self.writes.lock().expect("writes should lock").push(request.clone());
+        self.writes
+            .lock()
+            .expect("writes should lock")
+            .push(request.clone());
         Ok(WriteNodeResult {
             created: false,
             node: Node {
@@ -53,8 +66,51 @@ impl WikiApi for MockClient {
         })
     }
 
+    async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult> {
+        self.appends
+            .lock()
+            .expect("appends should lock")
+            .push(request.clone());
+        Ok(WriteNodeResult {
+            created: false,
+            node: Node {
+                path: request.path,
+                kind: request.kind.unwrap_or(NodeKind::File),
+                content: request.content,
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-appended".to_string(),
+                deleted_at: None,
+                metadata_json: request.metadata_json.unwrap_or_else(|| "{}".to_string()),
+            },
+        })
+    }
+
+    async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult> {
+        self.edits
+            .lock()
+            .expect("edits should lock")
+            .push(request.clone());
+        Ok(EditNodeResult {
+            node: Node {
+                path: request.path,
+                kind: NodeKind::File,
+                content: request.new_text,
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-edited".to_string(),
+                deleted_at: None,
+                metadata_json: "{}".to_string(),
+            },
+            replacement_count: 1,
+        })
+    }
+
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
-        self.deletes.lock().expect("deletes should lock").push(request.clone());
+        self.deletes
+            .lock()
+            .expect("deletes should lock")
+            .push(request.clone());
         Ok(DeleteNodeResult {
             path: request.path,
             etag: "etag-deleted".to_string(),
@@ -62,11 +118,79 @@ impl WikiApi for MockClient {
         })
     }
 
+    async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+        self.mkdirs
+            .lock()
+            .expect("mkdirs should lock")
+            .push(request.clone());
+        Ok(MkdirNodeResult {
+            path: request.path,
+            created: true,
+        })
+    }
+
+    async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
+        self.moves
+            .lock()
+            .expect("moves should lock")
+            .push(request.clone());
+        Ok(MoveNodeResult {
+            from_path: request.from_path,
+            overwrote: request.overwrite,
+            node: Node {
+                path: request.to_path,
+                kind: NodeKind::File,
+                content: "moved".to_string(),
+                created_at: 1,
+                updated_at: 5,
+                etag: "etag-moved".to_string(),
+                deleted_at: None,
+                metadata_json: "{}".to_string(),
+            },
+        })
+    }
+
+    async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+        self.globs.lock().expect("globs should lock").push(request);
+        Ok(Vec::new())
+    }
+
+    async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+        self.recents
+            .lock()
+            .expect("recents should lock")
+            .push(request);
+        Ok(Vec::new())
+    }
+
+    async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult> {
+        self.multi_edits
+            .lock()
+            .expect("multi edits should lock")
+            .push(request.clone());
+        Ok(MultiEditNodeResult {
+            node: Node {
+                path: request.path,
+                kind: NodeKind::File,
+                content: "multi-edited".to_string(),
+                created_at: 1,
+                updated_at: 6,
+                etag: "etag-multi-edit".to_string(),
+                deleted_at: None,
+                metadata_json: "{}".to_string(),
+            },
+            replacement_count: 2,
+        })
+    }
+
     async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
         Ok(Vec::new())
     }
 
-    async fn export_snapshot(&self, _request: ExportSnapshotRequest) -> Result<ExportSnapshotResponse> {
+    async fn export_snapshot(
+        &self,
+        _request: ExportSnapshotRequest,
+    ) -> Result<ExportSnapshotResponse> {
         Ok(ExportSnapshotResponse {
             snapshot_revision: "snap_1".to_string(),
             nodes: self.nodes.clone(),
@@ -102,10 +226,17 @@ async fn pull_writes_nodes_under_mirror_root() {
 
     pull(&client, &root).await.expect("pull should succeed");
 
-    let content = std::fs::read_to_string(root.join("nested/bar.md")).expect("mirror file should exist");
+    let content =
+        std::fs::read_to_string(root.join("nested/bar.md")).expect("mirror file should exist");
     let metadata = parse_managed_metadata(&content).expect("frontmatter should parse");
     assert_eq!(metadata.path, "/Wiki/nested/bar.md");
-    assert_eq!(load_state(&root).expect("state should load").tracked_nodes.len(), 1);
+    assert_eq!(
+        load_state(&root)
+            .expect("state should load")
+            .tracked_nodes
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -129,7 +260,9 @@ async fn push_uses_expected_etag_from_frontmatter() {
         &crate::mirror::MirrorState {
             snapshot_revision: "snap-1".to_string(),
             last_synced_at: 0,
-            tracked_nodes: crate::mirror::tracked_nodes_from_snapshot(std::slice::from_ref(&initial)),
+            tracked_nodes: crate::mirror::tracked_nodes_from_snapshot(std::slice::from_ref(
+                &initial,
+            )),
         },
     )
     .expect("state should save");

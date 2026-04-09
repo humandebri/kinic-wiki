@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  rust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run tests
+        run: cargo test --workspace --locked
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  plugin-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/kinic-wiki
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: plugins/kinic-wiki/package-lock.json
+      - name: Install plugin dependencies
+        run: npm ci
+      - name: Run plugin checks
+        run: npm run check
+
+  canister-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Add wasm target
+        run: rustup target add wasm32-wasip1
+      - name: Install WASI sysroot
+        run: sudo apt-get update && sudo apt-get install -y wasi-libc
+      - name: Install wasm tooling
+        run: cargo install wasi2ic ic-wasm --locked
+      - name: Build canister artifact
+        env:
+          ICP_WASM_OUTPUT_PATH: /tmp/wiki_canister.wasm
+        run: bash scripts/build-wiki-canister.sh

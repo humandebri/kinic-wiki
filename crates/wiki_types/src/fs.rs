@@ -64,6 +64,114 @@ pub struct WriteNodeResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct AppendNodeRequest {
+    pub path: String,
+    pub content: String,
+    pub expected_etag: Option<String>,
+    pub separator: Option<String>,
+    pub metadata_json: Option<String>,
+    pub kind: Option<NodeKind>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct EditNodeRequest {
+    pub path: String,
+    pub old_text: String,
+    pub new_text: String,
+    pub expected_etag: Option<String>,
+    pub replace_all: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct EditNodeResult {
+    pub node: Node,
+    pub replacement_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MkdirNodeRequest {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MkdirNodeResult {
+    pub path: String,
+    pub created: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MoveNodeRequest {
+    pub from_path: String,
+    pub to_path: String,
+    pub expected_etag: Option<String>,
+    pub overwrite: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MoveNodeResult {
+    pub node: Node,
+    pub from_path: String,
+    pub overwrote: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobNodeType {
+    File,
+    Directory,
+    Any,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GlobNodesRequest {
+    pub pattern: String,
+    pub path: Option<String>,
+    pub node_type: Option<GlobNodeType>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GlobNodeHit {
+    pub path: String,
+    pub kind: NodeEntryKind,
+    pub has_children: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct RecentNodesRequest {
+    pub limit: u32,
+    pub path: Option<String>,
+    pub include_deleted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct RecentNodeHit {
+    pub path: String,
+    pub kind: NodeKind,
+    pub updated_at: i64,
+    pub etag: String,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MultiEdit {
+    pub old_text: String,
+    pub new_text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MultiEditNodeRequest {
+    pub path: String,
+    pub edits: Vec<MultiEdit>,
+    pub expected_etag: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MultiEditNodeResult {
+    pub node: Node,
+    pub replacement_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct DeleteNodeRequest {
     pub path: String,
     pub expected_etag: Option<String>,

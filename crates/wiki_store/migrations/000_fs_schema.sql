@@ -19,3 +19,22 @@ INSERT INTO fs_nodes_fts (path, kind, content)
 SELECT path, kind, content
 FROM fs_nodes
 WHERE deleted_at IS NULL;
+
+CREATE TABLE fs_change_log (
+    revision INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    deleted_at INTEGER,
+    change_kind TEXT NOT NULL
+        CHECK (change_kind IN ('upsert', 'tombstone', 'path_removal'))
+);
+
+INSERT INTO fs_change_log (path, deleted_at, change_kind)
+SELECT
+    path,
+    deleted_at,
+    CASE
+        WHEN deleted_at IS NULL THEN 'upsert'
+        ELSE 'tombstone'
+    END
+FROM fs_nodes
+ORDER BY path ASC;

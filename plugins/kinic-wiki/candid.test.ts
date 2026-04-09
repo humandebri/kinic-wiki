@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   localReplicaHost,
+  normalizeGlobNodeHits,
   normalizeNodeKind,
   normalizeStatus,
   normalizeWriteNodeResult
@@ -46,6 +47,30 @@ test("normalizeWriteNodeResult converts node timestamps and opt values", () => {
   assert.equal(result.node.kind, "file");
   assert.equal(result.node.updated_at, 2);
   assert.equal(result.node.deleted_at, null);
+});
+
+test("normalizeGlobNodeHits accepts the compact glob wire shape", () => {
+  const hits = normalizeGlobNodeHits({
+    Ok: [{
+      path: "/Wiki/nested",
+      kind: { Directory: null },
+      has_children: true
+    }, {
+      path: "/Wiki/nested/file.md",
+      kind: { File: null },
+      has_children: false
+    }]
+  });
+
+  assert.deepEqual(hits, [{
+    path: "/Wiki/nested",
+    kind: "directory",
+    has_children: true
+  }, {
+    path: "/Wiki/nested/file.md",
+    kind: "file",
+    has_children: false
+  }]);
 });
 
 test("localReplicaHost detects localhost style hosts", () => {

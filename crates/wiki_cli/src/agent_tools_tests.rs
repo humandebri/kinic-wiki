@@ -1,0 +1,408 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::Value;
+use wiki_types::{
+    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
+    MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
+    MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
+    RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
+};
+
+use crate::agent_tools::{
+    create_anthropic_tools, create_openai_tools, handle_anthropic_tool_call,
+    handle_openai_tool_call,
+};
+use crate::client::WikiApi;
+
+#[derive(Default)]
+struct ToolMockClient {
+    append_requests: std::sync::Mutex<Vec<AppendNodeRequest>>,
+    edit_requests: std::sync::Mutex<Vec<EditNodeRequest>>,
+    mkdir_requests: std::sync::Mutex<Vec<MkdirNodeRequest>>,
+    move_requests: std::sync::Mutex<Vec<MoveNodeRequest>>,
+    glob_requests: std::sync::Mutex<Vec<GlobNodesRequest>>,
+    recent_requests: std::sync::Mutex<Vec<RecentNodesRequest>>,
+    multi_edit_requests: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+}
+
+#[async_trait]
+impl WikiApi for ToolMockClient {
+    async fn status(&self) -> Result<Status> {
+        Ok(Status {
+            file_count: 0,
+            source_count: 0,
+            deleted_count: 0,
+        })
+    }
+
+    async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        Ok(Some(sample_node(path, "body", "etag-1")))
+    }
+
+    async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        Ok(Vec::new())
+    }
+
+    async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
+        Ok(WriteNodeResult {
+            created: false,
+            node: sample_node(&request.path, &request.content, "etag-write"),
+        })
+    }
+
+    async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult> {
+        self.append_requests
+            .lock()
+            .expect("append lock should succeed")
+            .push(request.clone());
+        Ok(WriteNodeResult {
+            created: false,
+            node: sample_node(&request.path, &request.content, "etag-append"),
+        })
+    }
+
+    async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult> {
+        self.edit_requests
+            .lock()
+            .expect("edit lock should succeed")
+            .push(request.clone());
+        if request.old_text == "missing" {
+            return Err(anyhow::anyhow!("old_text not found"));
+        }
+        Ok(EditNodeResult {
+            node: sample_node(&request.path, &request.new_text, "etag-edit"),
+            replacement_count: 1,
+        })
+    }
+
+    async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+        Ok(DeleteNodeResult {
+            path: request.path,
+            etag: "etag-delete".to_string(),
+            deleted_at: 1,
+        })
+    }
+
+    async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
+        self.move_requests
+            .lock()
+            .expect("move lock should succeed")
+            .push(request.clone());
+        Ok(MoveNodeResult {
+            node: sample_node(&request.to_path, "moved", "etag-move"),
+            from_path: request.from_path,
+            overwrote: request.overwrite,
+        })
+    }
+
+    async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+        self.mkdir_requests
+            .lock()
+            .expect("mkdir lock should succeed")
+            .push(request.clone());
+        Ok(MkdirNodeResult {
+            path: request.path,
+            created: true,
+        })
+    }
+
+    async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+        self.glob_requests
+            .lock()
+            .expect("glob lock should succeed")
+            .push(request);
+        Ok(vec![GlobNodeHit {
+            path: "/Wiki/nested".to_string(),
+            kind: NodeEntryKind::Directory,
+            has_children: true,
+        }])
+    }
+
+    async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+        self.recent_requests
+            .lock()
+            .expect("recent lock should succeed")
+            .push(request);
+        Ok(vec![RecentNodeHit {
+            path: "/Wiki/a.md".to_string(),
+            kind: NodeKind::File,
+            updated_at: 2,
+            etag: "etag-recent".to_string(),
+            deleted_at: None,
+        }])
+    }
+
+    async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult> {
+        self.multi_edit_requests
+            .lock()
+            .expect("multi edit lock should succeed")
+            .push(request.clone());
+        if request.edits.iter().any(|edit| edit.old_text == "missing") {
+            return Err(anyhow::anyhow!("multi_edit rollback"));
+        }
+        Ok(MultiEditNodeResult {
+            node: sample_node(&request.path, "after", "etag-multi-edit"),
+            replacement_count: 2,
+        })
+    }
+
+    async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        Ok(Vec::new())
+    }
+
+    async fn export_snapshot(
+        &self,
+        _request: ExportSnapshotRequest,
+    ) -> Result<ExportSnapshotResponse> {
+        Ok(ExportSnapshotResponse {
+            snapshot_revision: "snap".to_string(),
+            nodes: Vec::new(),
+        })
+    }
+
+    async fn fetch_updates(&self, _request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
+        Ok(FetchUpdatesResponse {
+            snapshot_revision: "snap".to_string(),
+            changed_nodes: Vec::new(),
+            removed_paths: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn tool_schemas_include_minimal_vfs_tools() {
+    let openai = create_openai_tools();
+    let anthropic = create_anthropic_tools();
+
+    let openai_names = tool_names(&openai, "function");
+    let anthropic_names = tool_names(&anthropic, "name");
+
+    for name in [
+        "read",
+        "write",
+        "append",
+        "edit",
+        "ls",
+        "mkdir",
+        "mv",
+        "glob",
+        "recent",
+        "multi_edit",
+        "rm",
+        "search",
+    ] {
+        assert!(openai_names.contains(&name.to_string()));
+        assert!(anthropic_names.contains(&name.to_string()));
+    }
+}
+
+#[tokio::test]
+async fn openai_dispatch_routes_append_and_edit() {
+    let client = ToolMockClient::default();
+
+    let append = handle_openai_tool_call(
+        &client,
+        "append",
+        r#"{"path":"/Wiki/a.md","content":"tail","expected_etag":"etag-1","separator":"\n"}"#,
+    )
+    .await
+    .expect("append dispatch should succeed");
+    assert!(!append.is_error);
+
+    let edit = handle_openai_tool_call(
+        &client,
+        "edit",
+        r#"{"path":"/Wiki/a.md","old_text":"before","new_text":"after","replace_all":false}"#,
+    )
+    .await
+    .expect("edit dispatch should succeed");
+    assert!(!edit.is_error);
+
+    let append_requests = client
+        .append_requests
+        .lock()
+        .expect("append lock should succeed");
+    assert_eq!(append_requests.len(), 1);
+    assert_eq!(append_requests[0].path, "/Wiki/a.md");
+    drop(append_requests);
+
+    let edit_requests = client
+        .edit_requests
+        .lock()
+        .expect("edit lock should succeed");
+    assert_eq!(edit_requests.len(), 1);
+    assert_eq!(edit_requests[0].old_text, "before");
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_returns_tool_error_for_edit_failures() {
+    let client = ToolMockClient::default();
+    let result = handle_anthropic_tool_call(
+        &client,
+        "edit",
+        serde_json::json!({
+            "path": "/Wiki/a.md",
+            "old_text": "missing",
+            "new_text": "after",
+            "replace_all": false
+        }),
+    )
+    .await
+    .expect("tool dispatch should return tool result");
+
+    assert!(result.is_error);
+    assert!(result.text.contains("old_text not found"));
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_routes_mkdir() {
+    let client = ToolMockClient::default();
+    let result = handle_anthropic_tool_call(
+        &client,
+        "mkdir",
+        serde_json::json!({ "path": "/Wiki/new-dir" }),
+    )
+    .await
+    .expect("mkdir tool should succeed");
+    assert!(!result.is_error);
+    let mkdirs = client
+        .mkdir_requests
+        .lock()
+        .expect("mkdir lock should succeed");
+    assert_eq!(mkdirs.len(), 1);
+    assert_eq!(mkdirs[0].path, "/Wiki/new-dir");
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
+    let client = ToolMockClient::default();
+
+    let moved = handle_anthropic_tool_call(
+        &client,
+        "mv",
+        serde_json::json!({
+            "from_path": "/Wiki/a.md",
+            "to_path": "/Wiki/b.md",
+            "expected_etag": "etag-1",
+            "overwrite": true
+        }),
+    )
+    .await
+    .expect("move tool should succeed");
+    assert!(!moved.is_error);
+
+    let globbed = handle_anthropic_tool_call(
+        &client,
+        "glob",
+        serde_json::json!({
+            "pattern": "**/*.md",
+            "path": "/Wiki",
+            "node_type": "directory"
+        }),
+    )
+    .await
+    .expect("glob tool should succeed");
+    assert!(!globbed.is_error);
+
+    let recent = handle_anthropic_tool_call(
+        &client,
+        "recent",
+        serde_json::json!({
+            "limit": 5,
+            "path": "/Wiki",
+            "include_deleted": false
+        }),
+    )
+    .await
+    .expect("recent tool should succeed");
+    assert!(!recent.is_error);
+
+    let multi_edit = handle_anthropic_tool_call(
+        &client,
+        "multi_edit",
+        serde_json::json!({
+            "path": "/Wiki/a.md",
+            "expected_etag": "etag-1",
+            "edits": [
+                { "old_text": "before", "new_text": "after" },
+                { "old_text": "alpha", "new_text": "beta" }
+            ]
+        }),
+    )
+    .await
+    .expect("multi edit tool should succeed");
+    assert!(!multi_edit.is_error);
+
+    assert_eq!(
+        client
+            .move_requests
+            .lock()
+            .expect("move lock should succeed")
+            .len(),
+        1
+    );
+    assert_eq!(
+        client
+            .glob_requests
+            .lock()
+            .expect("glob lock should succeed")[0]
+            .node_type,
+        Some(GlobNodeType::Directory)
+    );
+    assert_eq!(
+        client
+            .recent_requests
+            .lock()
+            .expect("recent lock should succeed")[0]
+            .limit,
+        5
+    );
+    assert_eq!(
+        client
+            .multi_edit_requests
+            .lock()
+            .expect("multi edit lock should succeed")[0]
+            .edits,
+        vec![
+            MultiEdit {
+                old_text: "before".to_string(),
+                new_text: "after".to_string(),
+            },
+            MultiEdit {
+                old_text: "alpha".to_string(),
+                new_text: "beta".to_string(),
+            },
+        ]
+    );
+}
+
+fn sample_node(path: &str, content: &str, etag: &str) -> Node {
+    Node {
+        path: path.to_string(),
+        kind: NodeKind::File,
+        content: content.to_string(),
+        created_at: 1,
+        updated_at: 2,
+        etag: etag.to_string(),
+        deleted_at: None,
+        metadata_json: "{}".to_string(),
+    }
+}
+
+fn tool_names(values: &[Value], key: &str) -> Vec<String> {
+    values
+        .iter()
+        .filter_map(|value| match key {
+            "function" => value
+                .get("function")
+                .and_then(|entry| entry.get("name"))
+                .and_then(Value::as_str),
+            "name" => value.get("name").and_then(Value::as_str),
+            _ => None,
+        })
+        .map(str::to_string)
+        .collect()
+}

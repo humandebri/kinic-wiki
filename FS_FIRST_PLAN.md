@@ -12,6 +12,7 @@ canister の正本モデルを wiki 固有の `page/revision/section/system page
 - 互換 shim は入れない。
 - 旧 wiki schema の自動吸収はしない。
 - 破壊的変更として明示的に切り替える。
+- 現状は single-tenant とし、tenant-aware wire shape は導入しない。
 - `index.md` / `log.md` のような system page の自動生成はやめる。
 - 競合解決は section 単位ではなく file 単位にする。
 - 検索は current content に対してのみ行い、履歴検索は初期版では扱わない。
@@ -54,7 +55,14 @@ canister API は wiki API ではなく FS API に寄せる。
 - `read_node(path) -> opt Node`
 - `list_nodes(prefix, recursive, include_deleted) -> vec NodeEntry`
 - `write_node(path, content, kind, expected_etag) -> WriteResult`
+- `append_node(path, content, expected_etag, separator) -> WriteResult`
+- `edit_node(path, old_text, new_text, expected_etag, replace_all) -> EditResult`
+- `mkdir_node(path) -> MkdirResult`
+- `move_node(from_path, to_path, expected_etag, overwrite) -> MoveResult`
 - `delete_node(path, expected_etag) -> DeleteResult`
+- `glob_nodes(pattern, path, node_type) -> vec GlobHit`
+- `recent_nodes(limit, path, include_deleted) -> vec RecentHit`
+- `multi_edit_node(path, edits, expected_etag) -> MultiEditResult`
 - `search_nodes(query, prefix, top_k) -> vec SearchHit`
 - `export_snapshot(prefix) -> Snapshot`
 - `fetch_updates(known_snapshot_revision, prefix) -> Delta`
@@ -108,6 +116,26 @@ Obsidian 側の `Wiki/` は remote nodes の working copy として扱う。
 
 mirror 管理 metadata は hidden sidecar file ではなく frontmatter で保持しています。
 この点は初期案からの変更で、理由は managed file 単位で `path/kind/etag/updated_at` を閉じ込めた方が実装と運用が単純だったためです。
+
+### 最小 VFS ツール層
+
+Rust CLI crate には ready-made tool 定義を追加済みです。
+
+- `read`
+- `write`
+- `append`
+- `edit`
+- `ls`
+- `mkdir`
+- `rm`
+- `search`
+- `mv`
+- `glob`
+- `recent`
+- `multi_edit`
+
+OpenAI / Anthropic 向けの schema と dispatcher を提供し、内部では canister API の薄い wrapper として動作します。
+現時点では `tag` は追加していません。
 
 ## 段階的移行の結果
 

@@ -6,7 +6,11 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+canbench-rs = ["dep:canbench-rs"]
+
 [dependencies]
+canbench-rs = { version = "0.4.1", optional = true }
 candid = "0.10.26"
 ic-cdk = "0.20.0"
 ic-stable-structures = "0.7.2"

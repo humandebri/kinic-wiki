@@ -28,6 +28,8 @@
 
 # icp-cli ephemeral cache
 /.icp/cache/
+/.canbench/
+/.canbench-tools/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

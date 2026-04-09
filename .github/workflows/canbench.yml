@@ -1,0 +1,44 @@
+name: Canbench
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  canbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Add wasm target
+        run: rustup target add wasm32-wasip1
+      - name: Install WASI sysroot
+        run: sudo apt-get update && sudo apt-get install -y wasi-libc
+      - name: Install wasm tooling
+        run: cargo install wasi2ic ic-wasm --locked
+      - name: Provision fixed canbench toolchain
+        run: bash scripts/setup_canbench_ci.sh
+      - name: Run canbench
+        run: bash scripts/run_canbench_guard.sh
+      - name: Upload canbench results
+        uses: actions/upload-artifact@v4
+        with:
+          name: canbench-results
+          path: |
+            canbench_results.yml
+            canbench_results.csv
+          if-no-files-found: warn

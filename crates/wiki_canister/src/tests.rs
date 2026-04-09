@@ -1,25 +1,28 @@
 // Where: crates/wiki_canister/src/tests.rs
 // What: Entry-point level tests for the FS-first canister surface.
 // Why: Phase 3 replaces the public canister contract, so tests must assert the wrapper behavior directly.
-use std::path::PathBuf;
-
 use tempfile::tempdir;
 use wiki_runtime::WikiService;
 use wiki_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListNodesRequest,
-    NodeEntryKind, NodeKind, SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
+    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
+    MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
 
 use super::{
-    SERVICE, delete_node, export_snapshot, fetch_updates, list_nodes, read_node, search_nodes,
+    SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
+    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_nodes,
     status, write_node,
 };
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
-    let db_path = PathBuf::from(dir.keep()).join("wiki.sqlite3");
+    let db_path = dir.keep().join("wiki.sqlite3");
     let service = WikiService::new(db_path);
-    service.run_fs_migrations().expect("fs migrations should run");
+    service
+        .run_fs_migrations()
+        .expect("fs migrations should run");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
 }
 
@@ -77,9 +80,11 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         include_deleted: false,
     })
     .expect("list should succeed");
-    assert!(entries.iter().any(|entry| {
-        entry.path == "/Wiki/nested" && entry.kind == NodeEntryKind::Directory
-    }));
+    assert!(
+        entries.iter().any(|entry| {
+            entry.path == "/Wiki/nested" && entry.kind == NodeEntryKind::Directory
+        })
+    );
 
     let hits = search_nodes(SearchNodesRequest {
         query_text: "alpha".to_string(),
@@ -136,6 +141,113 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         expected_etag: Some("stale".to_string()),
     });
     assert!(stale_delete.is_err());
+}
+
+#[test]
+fn fs_entrypoints_cover_append_edit_and_mkdir() {
+    install_test_service();
+
+    let mkdir = mkdir_node(MkdirNodeRequest {
+        path: "/Wiki/work".to_string(),
+    })
+    .expect("mkdir should succeed");
+    assert!(mkdir.created);
+    assert_eq!(mkdir.path, "/Wiki/work");
+
+    let appended = append_node(AppendNodeRequest {
+        path: "/Wiki/work/log.md".to_string(),
+        content: "alpha".to_string(),
+        expected_etag: None,
+        separator: None,
+        metadata_json: None,
+        kind: None,
+    })
+    .expect("append create should succeed");
+    assert!(appended.created);
+
+    let appended_again = append_node(AppendNodeRequest {
+        path: "/Wiki/work/log.md".to_string(),
+        content: "beta".to_string(),
+        expected_etag: Some(appended.node.etag.clone()),
+        separator: Some("\n".to_string()),
+        metadata_json: None,
+        kind: None,
+    })
+    .expect("append update should succeed");
+    assert_eq!(appended_again.node.content, "alpha\nbeta");
+
+    let edited = edit_node(EditNodeRequest {
+        path: "/Wiki/work/log.md".to_string(),
+        old_text: "beta".to_string(),
+        new_text: "gamma".to_string(),
+        expected_etag: Some(appended_again.node.etag.clone()),
+        replace_all: false,
+    })
+    .expect("edit should succeed");
+    assert_eq!(edited.replacement_count, 1);
+    assert_eq!(edited.node.content, "alpha\ngamma");
+}
+
+#[test]
+fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
+    install_test_service();
+
+    let created = write_node(WriteNodeRequest {
+        path: "/Wiki/work/item.md".to_string(),
+        kind: NodeKind::File,
+        content: "alpha beta".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("write should succeed");
+
+    let moved = move_node(MoveNodeRequest {
+        from_path: "/Wiki/work/item.md".to_string(),
+        to_path: "/Wiki/archive/item.md".to_string(),
+        expected_etag: Some(created.node.etag.clone()),
+        overwrite: false,
+    })
+    .expect("move should succeed");
+    assert_eq!(moved.from_path, "/Wiki/work/item.md");
+    assert_eq!(moved.node.path, "/Wiki/archive/item.md");
+
+    let globbed = glob_nodes(GlobNodesRequest {
+        pattern: "**".to_string(),
+        path: Some("/Wiki".to_string()),
+        node_type: Some(GlobNodeType::Directory),
+    })
+    .expect("glob should succeed");
+    assert!(
+        globbed
+            .iter()
+            .any(|hit| hit.path == "/Wiki/archive" && hit.kind == NodeEntryKind::Directory)
+    );
+
+    let recent = recent_nodes(RecentNodesRequest {
+        limit: 5,
+        path: Some("/Wiki".to_string()),
+        include_deleted: false,
+    })
+    .expect("recent should succeed");
+    assert_eq!(recent[0].path, "/Wiki/archive/item.md");
+
+    let edited = multi_edit_node(MultiEditNodeRequest {
+        path: "/Wiki/archive/item.md".to_string(),
+        edits: vec![
+            MultiEdit {
+                old_text: "alpha".to_string(),
+                new_text: "one".to_string(),
+            },
+            MultiEdit {
+                old_text: "beta".to_string(),
+                new_text: "two".to_string(),
+            },
+        ],
+        expected_etag: Some(moved.node.etag),
+    })
+    .expect("multi edit should succeed");
+    assert_eq!(edited.replacement_count, 2);
+    assert_eq!(edited.node.content, "one two");
 }
 
 #[test]

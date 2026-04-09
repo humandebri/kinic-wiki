@@ -12,9 +12,12 @@ use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use wiki_runtime::WikiService;
 use wiki_types::{
-    DeleteNodeRequest, DeleteNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
-    FetchUpdatesRequest, FetchUpdatesResponse, ListNodesRequest, Node, NodeEntry,
-    SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
+    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
 };
 
 const DB_PATH: &str = "./DB/wiki.sqlite3";
@@ -58,8 +61,43 @@ fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
 }
 
 #[update]
+fn append_node(request: AppendNodeRequest) -> Result<WriteNodeResult, String> {
+    with_service(|service| service.append_node(request, now_millis()))
+}
+
+#[update]
+fn edit_node(request: EditNodeRequest) -> Result<EditNodeResult, String> {
+    with_service(|service| service.edit_node(request, now_millis()))
+}
+
+#[update]
 fn delete_node(request: DeleteNodeRequest) -> Result<DeleteNodeResult, String> {
     with_service(|service| service.delete_node(request, now_millis()))
+}
+
+#[update]
+fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
+    with_service(|service| service.move_node(request, now_millis()))
+}
+
+#[query]
+fn mkdir_node(request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
+    with_service(|service| service.mkdir_node(request))
+}
+
+#[query]
+fn glob_nodes(request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>, String> {
+    with_service(|service| service.glob_nodes(request))
+}
+
+#[query]
+fn recent_nodes(request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
+    with_service(|service| service.recent_nodes(request))
+}
+
+#[update]
+fn multi_edit_node(request: MultiEditNodeRequest) -> Result<MultiEditNodeResult, String> {
+    with_service(|service| service.multi_edit_node(request, now_millis()))
 }
 
 #[query]
@@ -148,6 +186,9 @@ export_service!();
 pub fn candid_interface() -> String {
     __export_service()
 }
+
+#[cfg(feature = "canbench-rs")]
+mod benches;
 
 #[cfg(test)]
 mod tests;

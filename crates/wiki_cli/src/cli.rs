@@ -57,9 +57,86 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    AppendNode {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, value_enum)]
+        kind: Option<NodeKindArg>,
+        #[arg(long)]
+        metadata_json: Option<String>,
+        #[arg(long)]
+        expected_etag: Option<String>,
+        #[arg(long)]
+        separator: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    EditNode {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        old_text: String,
+        #[arg(long)]
+        new_text: String,
+        #[arg(long)]
+        expected_etag: Option<String>,
+        #[arg(long)]
+        replace_all: bool,
+        #[arg(long)]
+        json: bool,
+    },
     DeleteNode {
         #[arg(long)]
         path: String,
+        #[arg(long)]
+        expected_etag: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    MkdirNode {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
+    MoveNode {
+        #[arg(long)]
+        from_path: String,
+        #[arg(long)]
+        to_path: String,
+        #[arg(long)]
+        expected_etag: Option<String>,
+        #[arg(long)]
+        overwrite: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    GlobNodes {
+        pattern: String,
+        #[arg(long, default_value = "/Wiki")]
+        path: String,
+        #[arg(long, value_enum)]
+        node_type: Option<GlobNodeTypeArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    RecentNodes {
+        #[arg(long)]
+        limit: u32,
+        #[arg(long, default_value = "/Wiki")]
+        path: String,
+        #[arg(long)]
+        include_deleted: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    MultiEditNode {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        edits_file: PathBuf,
         #[arg(long)]
         expected_etag: Option<String>,
         #[arg(long)]
@@ -110,11 +187,28 @@ pub enum NodeKindArg {
     Source,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobNodeTypeArg {
+    File,
+    Directory,
+    Any,
+}
+
 impl NodeKindArg {
     pub fn to_node_kind(self) -> NodeKind {
         match self {
             Self::File => NodeKind::File,
             Self::Source => NodeKind::Source,
+        }
+    }
+}
+
+impl GlobNodeTypeArg {
+    pub fn to_glob_node_type(self) -> wiki_types::GlobNodeType {
+        match self {
+            Self::File => wiki_types::GlobNodeType::File,
+            Self::Directory => wiki_types::GlobNodeType::Directory,
+            Self::Any => wiki_types::GlobNodeType::Any,
         }
     }
 }

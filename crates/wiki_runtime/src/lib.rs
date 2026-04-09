@@ -5,9 +5,12 @@ use std::path::PathBuf;
 
 use wiki_store::FsStore;
 use wiki_types::{
-    DeleteNodeRequest, DeleteNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
-    FetchUpdatesRequest, FetchUpdatesResponse, ListNodesRequest, Node, NodeEntry,
-    SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
+    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
 };
 
 pub struct WikiService {
@@ -51,6 +54,42 @@ impl WikiService {
         now: i64,
     ) -> Result<DeleteNodeResult, String> {
         self.fs_store.delete_node(request, now)
+    }
+
+    pub fn append_node(
+        &self,
+        request: AppendNodeRequest,
+        now: i64,
+    ) -> Result<WriteNodeResult, String> {
+        self.fs_store.append_node(request, now)
+    }
+
+    pub fn edit_node(&self, request: EditNodeRequest, now: i64) -> Result<EditNodeResult, String> {
+        self.fs_store.edit_node(request, now)
+    }
+
+    pub fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
+        self.fs_store.mkdir_node(request)
+    }
+
+    pub fn move_node(&self, request: MoveNodeRequest, now: i64) -> Result<MoveNodeResult, String> {
+        self.fs_store.move_node(request, now)
+    }
+
+    pub fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>, String> {
+        self.fs_store.glob_nodes(request)
+    }
+
+    pub fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
+        self.fs_store.recent_nodes(request)
+    }
+
+    pub fn multi_edit_node(
+        &self,
+        request: MultiEditNodeRequest,
+        now: i64,
+    ) -> Result<MultiEditNodeResult, String> {
+        self.fs_store.multi_edit_node(request, now)
     }
 
     pub fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {

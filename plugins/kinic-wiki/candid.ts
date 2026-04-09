@@ -4,21 +4,33 @@
 import { Actor } from "@dfinity/agent";
 
 import {
+  EditNodeResult,
   DeleteNodeResult,
   ExportSnapshotResponse,
   FetchUpdatesResponse,
+  GlobNodeHit,
+  MoveNodeResult,
+  MkdirNodeResult,
+  MultiEditNodeResult,
   NodeEntry,
   NodeEntryKind,
   NodeKind,
   NodeSnapshot,
+  RecentNodeHit,
   SearchNodeHit,
   StatusResponse,
   WriteNodeResult,
   isDeleteNodeResult,
+  isEditNodeResult,
   isExportSnapshotResponse,
   isFetchUpdatesResponse,
+  isGlobNodeHit,
+  isMkdirNodeResult,
+  isMoveNodeResult,
+  isMultiEditNodeResult,
   isNodeEntry,
   isNodeSnapshot,
+  isRecentNodeHit,
   isSearchNodeHit,
   isStatusResponse,
   isWriteNodeResult
@@ -27,6 +39,7 @@ import {
 type RawResult<T> = { Ok: T } | { Err: string };
 type RawNodeKind = { File: null } | { Source: null };
 type RawNodeEntryKind = { Directory: null } | RawNodeKind;
+type RawGlobNodeType = { File: null } | { Directory: null } | { Any: null };
 type RawNode = {
   path: string;
   kind: RawNodeKind;
@@ -43,6 +56,11 @@ type RawNodeEntry = {
   updated_at: bigint;
   etag: string;
   deleted_at: [] | [bigint];
+  has_children: boolean;
+};
+type RawGlobNodeHit = {
+  path: string;
+  kind: RawNodeEntryKind;
   has_children: boolean;
 };
 type RawSearchNodeHit = {
@@ -69,10 +87,55 @@ export interface KinicCanisterApi {
     metadata_json: string;
     expected_etag: [] | [string];
   }) => Promise<RawResult<{ node: RawNode; created: boolean }>>;
+  append_node: (request: {
+    path: string;
+    content: string;
+    expected_etag: [] | [string];
+    separator: [] | [string];
+    metadata_json: [] | [string];
+    kind: [] | [RawNodeKind];
+  }) => Promise<RawResult<{ node: RawNode; created: boolean }>>;
+  edit_node: (request: {
+    path: string;
+    old_text: string;
+    new_text: string;
+    expected_etag: [] | [string];
+    replace_all: boolean;
+  }) => Promise<RawResult<{ node: RawNode; replacement_count: number }>>;
   delete_node: (request: {
     path: string;
     expected_etag: [] | [string];
   }) => Promise<RawResult<{ path: string; etag: string; deleted_at: bigint }>>;
+  mkdir_node: (request: {
+    path: string;
+  }) => Promise<RawResult<{ path: string; created: boolean }>>;
+  move_node: (request: {
+    from_path: string;
+    to_path: string;
+    expected_etag: [] | [string];
+    overwrite: boolean;
+  }) => Promise<RawResult<{ node: RawNode; from_path: string; overwrote: boolean }>>;
+  glob_nodes: (request: {
+    pattern: string;
+    path: [] | [string];
+    node_type: [] | [RawGlobNodeType];
+  }) => Promise<RawResult<RawGlobNodeHit[]>>;
+  recent_nodes: (request: {
+    limit: number;
+    path: [] | [string];
+    include_deleted: boolean;
+  }) => Promise<RawResult<Array<{
+    path: string;
+    kind: RawNodeKind;
+    updated_at: bigint;
+    etag: string;
+    deleted_at: [] | [bigint];
+  }>>>;
+  multi_edit_node: (request: {
+    path: string;
+    edits: Array<{ old_text: string; new_text: string }>;
+    expected_etag: [] | [string];
+  }) => Promise<RawResult<{ node: RawNode; replacement_count: number }>>;
   search_nodes: (request: {
     query_text: string;
     prefix: [] | [string];
@@ -98,6 +161,11 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     File: candid.Null,
     Source: candid.Null
   });
+  const GlobNodeType = candid.Variant({
+    File: candid.Null,
+    Directory: candid.Null,
+    Any: candid.Null
+  });
   const Node = candid.Record({
     path: candid.Text,
     kind: NodeKind,
@@ -114,6 +182,11 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     updated_at: candid.Int64,
     etag: candid.Text,
     deleted_at: candid.Opt(candid.Int64),
+    has_children: candid.Bool
+  });
+  const GlobNodeHit = candid.Record({
+    path: candid.Text,
+    kind: NodeEntryKind,
     has_children: candid.Bool
   });
   const SearchNodeHit = candid.Record({
@@ -142,10 +215,58 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
       metadata_json: candid.Text,
       expected_etag: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Record({ node: Node, created: candid.Bool }), Err: candid.Text })], []),
+    append_node: candid.Func([candid.Record({
+      path: candid.Text,
+      content: candid.Text,
+      expected_etag: candid.Opt(candid.Text),
+      separator: candid.Opt(candid.Text),
+      metadata_json: candid.Opt(candid.Text),
+      kind: candid.Opt(NodeKind)
+    })], [candid.Variant({ Ok: candid.Record({ node: Node, created: candid.Bool }), Err: candid.Text })], []),
+    edit_node: candid.Func([candid.Record({
+      path: candid.Text,
+      old_text: candid.Text,
+      new_text: candid.Text,
+      expected_etag: candid.Opt(candid.Text),
+      replace_all: candid.Bool
+    })], [candid.Variant({ Ok: candid.Record({ node: Node, replacement_count: candid.Nat32 }), Err: candid.Text })], []),
     delete_node: candid.Func([candid.Record({
       path: candid.Text,
       expected_etag: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Record({ path: candid.Text, etag: candid.Text, deleted_at: candid.Int64 }), Err: candid.Text })], []),
+    mkdir_node: candid.Func([candid.Record({
+      path: candid.Text
+    })], [candid.Variant({ Ok: candid.Record({ path: candid.Text, created: candid.Bool }), Err: candid.Text })], ["query"]),
+    move_node: candid.Func([candid.Record({
+      from_path: candid.Text,
+      to_path: candid.Text,
+      expected_etag: candid.Opt(candid.Text),
+      overwrite: candid.Bool
+    })], [candid.Variant({ Ok: candid.Record({ node: Node, from_path: candid.Text, overwrote: candid.Bool }), Err: candid.Text })], []),
+    glob_nodes: candid.Func([candid.Record({
+      pattern: candid.Text,
+      path: candid.Opt(candid.Text),
+      node_type: candid.Opt(GlobNodeType)
+    })], [candid.Variant({ Ok: candid.Vec(GlobNodeHit), Err: candid.Text })], ["query"]),
+    recent_nodes: candid.Func([candid.Record({
+      limit: candid.Nat32,
+      path: candid.Opt(candid.Text),
+      include_deleted: candid.Bool
+    })], [candid.Variant({ Ok: candid.Vec(candid.Record({
+      path: candid.Text,
+      kind: NodeKind,
+      updated_at: candid.Int64,
+      etag: candid.Text,
+      deleted_at: candid.Opt(candid.Int64)
+    })), Err: candid.Text })], ["query"]),
+    multi_edit_node: candid.Func([candid.Record({
+      path: candid.Text,
+      edits: candid.Vec(candid.Record({
+        old_text: candid.Text,
+        new_text: candid.Text
+      })),
+      expected_etag: candid.Opt(candid.Text)
+    })], [candid.Variant({ Ok: candid.Record({ node: Node, replacement_count: candid.Nat32 }), Err: candid.Text })], []),
     search_nodes: candid.Func([candid.Record({
       query_text: candid.Text,
       prefix: candid.Opt(candid.Text),
@@ -181,10 +302,19 @@ export function normalizeListNodes(raw: RawResult<RawNodeEntry[]>): NodeEntry[] 
 }
 
 export function normalizeWriteNodeResult(raw: RawResult<{ node: RawNode; created: boolean }>): WriteNodeResult {
+  const ok = unwrapResult(raw);
   return validate("write_node", {
-    node: normalizeNode(unwrapResult(raw).node),
-    created: unwrapResult(raw).created
+    node: normalizeNode(ok.node),
+    created: ok.created
   }, isWriteNodeResult);
+}
+
+export function normalizeEditNodeResult(raw: RawResult<{ node: RawNode; replacement_count: number }>): EditNodeResult {
+  const ok = unwrapResult(raw);
+  return validate("edit_node", {
+    node: normalizeNode(ok.node),
+    replacement_count: ok.replacement_count
+  }, isEditNodeResult);
 }
 
 export function normalizeDeleteNodeResult(raw: RawResult<{ path: string; etag: string; deleted_at: bigint }>): DeleteNodeResult {
@@ -194,6 +324,59 @@ export function normalizeDeleteNodeResult(raw: RawResult<{ path: string; etag: s
     etag: ok.etag,
     deleted_at: toNumber(ok.deleted_at)
   }, isDeleteNodeResult);
+}
+
+export function normalizeMkdirNodeResult(raw: RawResult<{ path: string; created: boolean }>): MkdirNodeResult {
+  const ok = unwrapResult(raw);
+  return validate("mkdir_node", {
+    path: ok.path,
+    created: ok.created
+  }, isMkdirNodeResult);
+}
+
+export function normalizeMoveNodeResult(raw: RawResult<{ node: RawNode; from_path: string; overwrote: boolean }>): MoveNodeResult {
+  const ok = unwrapResult(raw);
+  return validate("move_node", {
+    node: normalizeNode(ok.node),
+    from_path: ok.from_path,
+    overwrote: ok.overwrote
+  }, isMoveNodeResult);
+}
+
+export function normalizeGlobNodeHits(raw: RawResult<RawGlobNodeHit[]>): GlobNodeHit[] {
+  return unwrapResult(raw).map((entry) =>
+    validate("glob_nodes", {
+      path: entry.path,
+      kind: normalizeNodeEntryKind(entry.kind),
+      has_children: entry.has_children
+    }, isGlobNodeHit)
+  );
+}
+
+export function normalizeRecentNodeHits(raw: RawResult<Array<{
+  path: string;
+  kind: RawNodeKind;
+  updated_at: bigint;
+  etag: string;
+  deleted_at: [] | [bigint];
+}>>): RecentNodeHit[] {
+  return unwrapResult(raw).map((entry) =>
+    validate("recent_nodes", {
+      path: entry.path,
+      kind: normalizeNodeKind(entry.kind),
+      updated_at: toNumber(entry.updated_at),
+      etag: entry.etag,
+      deleted_at: entry.deleted_at.length === 0 ? null : toNumber(entry.deleted_at[0])
+    }, isRecentNodeHit)
+  );
+}
+
+export function normalizeMultiEditNodeResult(raw: RawResult<{ node: RawNode; replacement_count: number }>): MultiEditNodeResult {
+  const ok = unwrapResult(raw);
+  return validate("multi_edit_node", {
+    node: normalizeNode(ok.node),
+    replacement_count: ok.replacement_count
+  }, isMultiEditNodeResult);
 }
 
 export function normalizeSearchNodeHits(raw: RawResult<RawSearchNodeHit[]>): SearchNodeHit[] {
