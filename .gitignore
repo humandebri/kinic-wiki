@@ -30,6 +30,8 @@
 /.icp/cache/
 /.canbench/
 /.canbench-tools/
+/.benchmarks/
+/artifacts/canbench/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

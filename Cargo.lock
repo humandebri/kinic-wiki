@@ -2925,6 +2925,7 @@ dependencies = [
  "ic-cdk 0.20.0",
  "ic-stable-structures",
  "ic-wasi-polyfill",
+ "serde_json",
  "tempfile",
  "wiki-runtime",
  "wiki-types",

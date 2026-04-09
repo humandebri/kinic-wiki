@@ -192,3 +192,5 @@ mod benches;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_sync_contract;

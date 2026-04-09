@@ -55,14 +55,104 @@ There is also a dedicated canister build path and an optional `canbench` workflo
 - benchmark build config: `canbench.yml`
 - benchmark build script: `bash scripts/build-wiki-canister-canbench.sh`
 - benchmark runner: `bash scripts/run_canbench_guard.sh`
+- scale benchmark runner: `bash scripts/run_canbench_scale.sh`
 
 `canbench` uses a fixed PocketIC runtime requirement:
 
 - `canbench 0.4.1` expects `pocket-ic-server 10.0.0`
 - `pocket-ic-server 11.x` and `12.x` are not accepted
-- prefer `POCKET_IC_BIN=/abs/path/to/pocket-ic` or `./.canbench/pocket-ic`
+- the runner prefers `./.canbench/pocket-ic` when present, then falls back to `POCKET_IC_BIN`
 - CI provisions `./.canbench-tools/bin/canbench` and `./.canbench/pocket-ic` via `bash scripts/setup_canbench_ci.sh`
 - the repo ignores `./.canbench/` and `./.canbench-tools/`, so local runtime and local canbench binaries stay untracked
+
+## VFS Validation
+
+The repo keeps VFS validation inside the workspace first.
+
+- correctness checklist: [`VFS_CORRECTNESS_CHECKLIST.md`](VFS_CORRECTNESS_CHECKLIST.md)
+- staged validation plan: [`VFS_VALIDATION_PLAN.md`](VFS_VALIDATION_PLAN.md)
+- external benchmark guide: [`VFS_EXTERNAL_BENCHMARKS.md`](VFS_EXTERNAL_BENCHMARKS.md)
+- deployed canister benchmark guide: [`VFS_DEPLOYED_CANISTER_BENCHMARKS.md`](VFS_DEPLOYED_CANISTER_BENCHMARKS.md)
+
+Minimum validation commands:
+
+- `cargo test --workspace`
+- `cd plugins/kinic-wiki && npm run check`
+- `bash scripts/build-wiki-canister-canbench.sh`
+
+If your environment has the fixed canbench runtime, also run:
+
+- `bash scripts/run_canbench_guard.sh`
+
+`bash scripts/bench/run_all_vfs_benchmarks.sh` also tries the guard, but skips it when the runtime is missing or the PocketIC version does not match `pocket-ic-server 10.0.0`.
+
+The canbench coverage is centered on these VFS operations:
+
+- `write_node`
+- `append_node`
+- `move_node`
+- `search_nodes`
+- `export_snapshot`
+- `fetch_updates`
+
+The scale runner writes review artifacts to `artifacts/canbench/`:
+
+- `scale_results.json`
+- `scale_results.csv`
+- `scale_report.md`
+
+Use `CANBENCH_REPEATS=1 bash scripts/run_canbench_scale.sh` for a single smoke run; the default is 3 repeats for min/max/stddev. Compare two generated JSON files with `python3 -m scripts.canbench.compare --baseline <old>/scale_results.json --candidate <new>/scale_results.json --output-dir artifacts/canbench/compare`.
+
+It executes `N = 1000, 10000, 50000` for:
+
+- `write`
+- `append`
+- `move`
+- `search`
+- `export_snapshot`
+- `fetch_updates`
+
+The validation split is:
+
+- external filesystem-style benchmarks: `fio`, `smallfile`, `SQLite`
+- deployed canister benchmarks: `run_canister_vfs_workload.sh`, `run_canister_vfs_latency.sh`
+- VFS-native scaling benchmarks: `canbench` for `write`, `append`, `move`, `search`, `export_snapshot`, `fetch_updates`
+
+Optional external VFS benchmarks:
+
+- `bash scripts/bench/run_fio_vfs.sh`
+- `bash scripts/bench/run_smallfile_vfs.sh`
+- `bash scripts/bench/run_sqlite_speedtest1.sh`
+- `bash scripts/bench/run_sqlite_commit_latency_vfs.sh`
+- `bash scripts/bench/run_all_vfs_benchmarks.sh`
+
+The external benchmark artifacts are written to `.benchmarks/results/<tool>/<timestamp>/` and always include:
+
+- `summary.txt` for the human-facing summary
+- `config.json` for the true benchmark settings
+- `environment.json` for the execution environment
+- `raw/*.json` or tool-native raw output for the source data
+
+Within SQLite benchmarks, `speedtest1` is a broad reference workload and `commit latency` is the primary durability-sensitive benchmark. Snapshot/export/update scaling remains a `canbench` concern rather than an external filesystem benchmark concern.
+
+Optional deployed canister benchmarks:
+
+- `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_workload.sh`
+- `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_latency.sh`
+
+These runs target an already deployed canister through `ic-agent`. They are not host filesystem benchmarks and they are not `canbench`.
+
+The deployed benchmark artifacts are written to `.benchmarks/results/<tool>/<timestamp>/` and always include:
+
+- `summary.txt` for the human-facing summary
+- `config.json` for the true benchmark settings
+- `environment.json` for the execution environment plus `replica_host`, `canister_id`, `bench_transport`
+- `raw/*.json` for scenario-level aggregated source data
+
+The deployed canister benchmark split is:
+
+- `run_canister_vfs_workload.sh`: smallfile-like workload inputs over `write_node`, `move_node`, `delete_node`, `read_node`, `list_nodes`
+- `run_canister_vfs_latency.sh`: single-update mutation latency over `write_node` and `append_node`
 
 ## Core operations
 
@@ -268,7 +358,7 @@ Mirror mapping:
 
 - remote `/Wiki/foo.md` -> local `Wiki/foo.md`
 - remote `/Wiki/nested/bar.md` -> local `Wiki/nested/bar.md`
-- conflict file -> `Wiki/conflicts/<basename>.conflict.md`
+- conflict file -> `Wiki/conflicts/<short-name>--<hash>.conflict.md` (`/Wiki/a/foo.md` -> `Wiki/conflicts/a__foo--<hash>.conflict.md`)
 
 Managed mirror frontmatter:
 

@@ -1,0 +1,26 @@
+benches:
+  write_node_scale_n1000:
+    total:
+      calls: 1
+      instructions: 11802792
+      heap_increase: 0
+      stable_memory_increase: 0
+    scopes:
+      write_call:
+        calls: 1
+        instructions: 11801574
+        heap_increase: 0
+        stable_memory_increase: 0
+  write_node_scale_n10000:
+    total:
+      calls: 1
+      instructions: 62811169
+      heap_increase: 0
+      stable_memory_increase: 0
+    scopes:
+      write_call:
+        calls: 1
+        instructions: 62810031
+        heap_increase: 0
+        stable_memory_increase: 0
+version: 0.4.1
