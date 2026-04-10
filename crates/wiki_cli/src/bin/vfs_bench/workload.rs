@@ -996,7 +996,7 @@ where
     let node_count = node_count(args)?;
     let payload = make_payload(args.payload_size_bytes);
     seed_nodes(client, args, &payload, node_count).await?;
-    let limit = (node_count as u32).min(10).max(1);
+    let limit = (node_count as u32).clamp(1, 10);
     let request = RecentNodesRequest {
         limit,
         path: Some(args.prefix.clone()),
@@ -1023,7 +1023,7 @@ where
     C: WikiApi + Send + Sync + 'static,
 {
     let node_count = node_count(args)?;
-    let limit = (node_count as u32).min(10).max(1);
+    let limit = (node_count as u32).clamp(1, 10);
     let request = RecentNodesRequest {
         limit,
         path: Some(args.prefix.clone()),
