@@ -4,6 +4,7 @@
 pub mod agent_tools;
 #[cfg(test)]
 mod agent_tools_tests;
+pub mod beam_bench;
 pub mod cli;
 pub mod client;
 pub mod commands;

@@ -14,8 +14,8 @@ use wiki_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    NodeKind, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
+    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 struct SyncMockClient {
@@ -72,15 +72,12 @@ impl WikiApi for SyncMockClient {
         }
         Ok(WriteNodeResult {
             created: false,
-            node: Node {
+            node: NodeMutationAck {
                 path: request.path,
                 kind: request.kind,
-                content: request.content,
-                created_at: 1,
                 updated_at: 2,
                 etag: "etag-updated".to_string(),
                 deleted_at: None,
-                metadata_json: request.metadata_json,
             },
         })
     }

@@ -6,7 +6,7 @@ use wiki_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
+    MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck, RecentNodeHit,
     RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
     WriteNodeResult,
 };
@@ -49,7 +49,7 @@ impl WikiApi for ToolMockClient {
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
         Ok(WriteNodeResult {
             created: false,
-            node: sample_node(&request.path, &request.content, "etag-write"),
+            node: sample_ack(&request.path, NodeKind::File, "etag-write"),
         })
     }
 
@@ -60,7 +60,11 @@ impl WikiApi for ToolMockClient {
             .push(request.clone());
         Ok(WriteNodeResult {
             created: false,
-            node: sample_node(&request.path, &request.content, "etag-append"),
+            node: sample_ack(
+                &request.path,
+                request.kind.unwrap_or(NodeKind::File),
+                "etag-append",
+            ),
         })
     }
 
@@ -73,7 +77,7 @@ impl WikiApi for ToolMockClient {
             return Err(anyhow::anyhow!("old_text not found"));
         }
         Ok(EditNodeResult {
-            node: sample_node(&request.path, &request.new_text, "etag-edit"),
+            node: sample_ack(&request.path, NodeKind::File, "etag-edit"),
             replacement_count: 1,
         })
     }
@@ -92,7 +96,7 @@ impl WikiApi for ToolMockClient {
             .expect("move lock should succeed")
             .push(request.clone());
         Ok(MoveNodeResult {
-            node: sample_node(&request.to_path, "moved", "etag-move"),
+            node: sample_ack(&request.to_path, NodeKind::File, "etag-move"),
             from_path: request.from_path,
             overwrote: request.overwrite,
         })
@@ -144,7 +148,7 @@ impl WikiApi for ToolMockClient {
             return Err(anyhow::anyhow!("multi_edit rollback"));
         }
         Ok(MultiEditNodeResult {
-            node: sample_node(&request.path, "after", "etag-multi-edit"),
+            node: sample_ack(&request.path, NodeKind::File, "etag-multi-edit"),
             replacement_count: 2,
         })
     }
@@ -389,6 +393,16 @@ fn sample_node(path: &str, content: &str, etag: &str) -> Node {
         etag: etag.to_string(),
         deleted_at: None,
         metadata_json: "{}".to_string(),
+    }
+}
+
+fn sample_ack(path: &str, kind: NodeKind, etag: &str) -> NodeMutationAck {
+    NodeMutationAck {
+        path: path.to_string(),
+        kind,
+        updated_at: 2,
+        etag: etag.to_string(),
+        deleted_at: None,
     }
 }
 

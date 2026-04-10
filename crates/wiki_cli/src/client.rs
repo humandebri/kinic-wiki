@@ -36,6 +36,7 @@ pub trait WikiApi {
     async fn fetch_updates(&self, request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse>;
 }
 
+#[derive(Clone)]
 pub struct CanisterWikiClient {
     agent: Agent,
     canister_id: Principal,

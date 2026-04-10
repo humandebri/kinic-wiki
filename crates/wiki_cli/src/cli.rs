@@ -179,6 +179,36 @@ pub enum Command {
         #[arg(long, default_value = "Wiki")]
         mirror_root: String,
     },
+    BeamBench {
+        #[arg(long)]
+        dataset_path: PathBuf,
+        #[arg(long, default_value = "100K")]
+        split: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = BeamBenchProviderArg::Codex)]
+        provider: BeamBenchProviderArg,
+        #[arg(long, default_value_t = 1)]
+        limit: usize,
+        #[arg(long, default_value_t = 1)]
+        parallelism: usize,
+        #[arg(long, default_value = "https://api.openai.com/v1")]
+        openai_base_url: String,
+        #[arg(long, default_value = "OPENAI_API_KEY")]
+        openai_api_key_env: String,
+        #[arg(long, default_value_t = 8)]
+        max_tool_roundtrips: usize,
+        #[arg(long)]
+        questions_per_conversation: Option<usize>,
+        #[arg(long)]
+        namespace: Option<String>,
+        #[arg(long, default_value = "codex")]
+        codex_bin: PathBuf,
+        #[arg(long, default_value = "danger-full-access")]
+        codex_sandbox: String,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +222,12 @@ pub enum GlobNodeTypeArg {
     File,
     Directory,
     Any,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeamBenchProviderArg {
+    Codex,
+    Openai,
 }
 
 impl NodeKindArg {

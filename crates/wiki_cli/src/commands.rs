@@ -1,7 +1,8 @@
 // Where: crates/wiki_cli/src/commands.rs
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
-use crate::cli::{Cli, Command};
+use crate::beam_bench::{BeamBenchArgs, BeamBenchProvider, run_beam_bench};
+use crate::cli::{BeamBenchProviderArg, Cli, Command};
 use crate::client::WikiApi;
 use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::mirror::{
@@ -22,7 +23,11 @@ use wiki_types::{
 const REMOTE_PREFIX: &str = "/Wiki";
 
 pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
-    match cli.command {
+    let Cli {
+        connection,
+        command,
+    } = cli;
+    match command {
         Command::ReadNode { path, json } => {
             let node = client
                 .read_node(&path)
@@ -302,6 +307,46 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         } => {
             push(client, &vault_path.join(mirror_root)).await?;
         }
+        Command::BeamBench {
+            dataset_path,
+            split,
+            model,
+            output_dir,
+            provider,
+            limit,
+            parallelism,
+            openai_base_url,
+            openai_api_key_env,
+            max_tool_roundtrips,
+            questions_per_conversation,
+            namespace,
+            codex_bin,
+            codex_sandbox,
+        } => {
+            run_beam_bench(
+                connection,
+                BeamBenchArgs {
+                    dataset_path,
+                    split,
+                    model,
+                    output_dir,
+                    provider: match provider {
+                        BeamBenchProviderArg::Codex => BeamBenchProvider::Codex,
+                        BeamBenchProviderArg::Openai => BeamBenchProvider::OpenAi,
+                    },
+                    limit,
+                    parallelism,
+                    openai_base_url,
+                    openai_api_key_env,
+                    max_tool_roundtrips,
+                    questions_per_conversation,
+                    namespace,
+                    codex_bin,
+                    codex_sandbox,
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -390,7 +435,11 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
             .await;
         match result {
             Ok(updated) => {
-                update_local_node_metadata(mirror_root, &updated.node)?;
+                let refreshed = client
+                    .read_node(&updated.node.path)
+                    .await?
+                    .ok_or_else(|| anyhow!("node not found after write: {}", updated.node.path))?;
+                update_local_node_metadata(mirror_root, &refreshed)?;
                 writes += 1;
             }
             Err(error) => {
