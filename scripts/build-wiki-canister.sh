@@ -15,12 +15,33 @@ OUTPUT_WASM="${TARGET_DIR}/wiki_canister_nowasi.wasm"
 source "${SCRIPT_DIR}/wasi-env.sh"
 configure_wasi_cc_env
 
-cargo build \
-  --manifest-path "${REPO_ROOT}/Cargo.toml" \
-  --package wiki-canister \
-  --release \
-  --locked \
+EXTRA_FEATURES=""
+case "${WIKI_CANISTER_DIAGNOSTIC_PROFILE:-baseline}" in
+  baseline)
+    ;;
+  fts_disabled_for_bench)
+    EXTRA_FEATURES="bench-disable-fts"
+    ;;
+  *)
+    echo "unknown WIKI_CANISTER_DIAGNOSTIC_PROFILE: ${WIKI_CANISTER_DIAGNOSTIC_PROFILE}" >&2
+    exit 1
+    ;;
+esac
+
+build_cmd=(
+  cargo build
+  --manifest-path "${REPO_ROOT}/Cargo.toml"
+  --package wiki-canister
+  --release
+  --locked
   --target wasm32-wasip1
+)
+
+if [[ -n "${EXTRA_FEATURES}" ]]; then
+  build_cmd+=(--features "${EXTRA_FEATURES}")
+fi
+
+"${build_cmd[@]}"
 
 wasi2ic "${INPUT_WASM}" "${OUTPUT_WASM}"
 cp "${OUTPUT_WASM}" "${ICP_WASM_OUTPUT_PATH}"

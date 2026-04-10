@@ -22,11 +22,15 @@ pub enum Temperature {
 #[serde(rename_all = "snake_case")]
 pub enum WorkloadOperation {
     Create,
-    RenameSameDir,
-    RenameCrossDir,
+    Update,
+    Append,
+    Edit,
+    MoveSameDir,
+    MoveCrossDir,
     Delete,
-    ReadSingle,
-    ListPrefix,
+    Read,
+    List,
+    Search,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -34,6 +38,13 @@ pub enum WorkloadOperation {
 pub enum LatencyOperation {
     WriteNode,
     AppendNode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementMode {
+    ScenarioTotal,
+    IsolatedSingleOp,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -46,8 +57,50 @@ pub struct LatencyStats {
     pub p99_latency_us: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct IoStats {
+    pub total_request_payload_bytes: u64,
+    pub total_response_payload_bytes: u64,
+    pub avg_request_payload_bytes: u64,
+    pub avg_response_payload_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CallMetric {
+    pub latency_us: u64,
+    pub request_payload_bytes: u64,
+    pub response_payload_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct SetupStats {
+    pub request_count: usize,
+}
+
 pub fn make_payload(payload_size_bytes: usize) -> String {
     "x".repeat(payload_size_bytes)
+}
+
+pub fn make_editable_payload(payload_size_bytes: usize) -> String {
+    let marker = "BENCH_TOKEN_OLD";
+    if payload_size_bytes <= marker.len() {
+        return marker[..payload_size_bytes].to_string();
+    }
+    let mut content = String::with_capacity(payload_size_bytes);
+    content.push_str(marker);
+    content.push_str(&"x".repeat(payload_size_bytes - marker.len()));
+    content
+}
+
+pub fn make_searchable_payload(payload_size_bytes: usize, index: usize) -> String {
+    let prefix = format!("shared-bench-search term-{:06} ", index);
+    if payload_size_bytes <= prefix.len() {
+        return prefix[..payload_size_bytes].to_string();
+    }
+    let mut content = String::with_capacity(payload_size_bytes);
+    content.push_str(&prefix);
+    content.push_str(&"x".repeat(payload_size_bytes - prefix.len()));
+    content
 }
 
 pub fn file_path(prefix: &str, shape: DirectoryShape, index: usize) -> String {
@@ -112,6 +165,28 @@ pub fn latency_stats(latencies_us: &[u64], total_seconds: f64) -> LatencyStats {
     }
 }
 
+pub fn io_stats(metrics: &[CallMetric]) -> IoStats {
+    let request_total = metrics
+        .iter()
+        .map(|metric| metric.request_payload_bytes)
+        .sum::<u64>();
+    let response_total = metrics
+        .iter()
+        .map(|metric| metric.response_payload_bytes)
+        .sum::<u64>();
+    let count = metrics.len() as u64;
+    IoStats {
+        total_request_payload_bytes: request_total,
+        total_response_payload_bytes: response_total,
+        avg_request_payload_bytes: if count == 0 { 0 } else { request_total / count },
+        avg_response_payload_bytes: if count == 0 {
+            0
+        } else {
+            response_total / count
+        },
+    }
+}
+
 fn percentile(sorted: &[u64], pct: usize) -> u64 {
     if sorted.is_empty() {
         return 0;
@@ -120,17 +195,11 @@ fn percentile(sorted: &[u64], pct: usize) -> u64 {
     sorted[index]
 }
 
-pub fn shard_bounds(total: usize, shard_count: usize, shard_index: usize) -> (usize, usize) {
-    let start = (total * shard_index) / shard_count;
-    let end = (total * (shard_index + 1)) / shard_count;
-    (start, end)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        DirectoryShape, cross_dir_renamed_path, file_path, latency_stats, list_prefix,
-        same_dir_renamed_path,
+        CallMetric, DirectoryShape, cross_dir_renamed_path, file_path, io_stats, latency_stats,
+        list_prefix, make_editable_payload, make_searchable_payload, same_dir_renamed_path,
     };
 
     #[test]
@@ -176,5 +245,31 @@ mod tests {
         assert_eq!(stats.p50_latency_us, 30);
         assert_eq!(stats.p95_latency_us, 40);
         assert_eq!(stats.p99_latency_us, 40);
+    }
+
+    #[test]
+    fn io_stats_aggregate_bytes() {
+        let stats = io_stats(&[
+            CallMetric {
+                latency_us: 1,
+                request_payload_bytes: 10,
+                response_payload_bytes: 20,
+            },
+            CallMetric {
+                latency_us: 2,
+                request_payload_bytes: 30,
+                response_payload_bytes: 40,
+            },
+        ]);
+        assert_eq!(stats.total_request_payload_bytes, 40);
+        assert_eq!(stats.total_response_payload_bytes, 60);
+        assert_eq!(stats.avg_request_payload_bytes, 20);
+        assert_eq!(stats.avg_response_payload_bytes, 30);
+    }
+
+    #[test]
+    fn payload_builders_embed_expected_tokens() {
+        assert!(make_editable_payload(64).starts_with("BENCH_TOKEN_OLD"));
+        assert!(make_searchable_payload(64, 12).contains("shared-bench-search"));
     }
 }

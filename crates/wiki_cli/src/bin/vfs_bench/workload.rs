@@ -1,20 +1,25 @@
 // Where: crates/wiki_cli/src/bin/vfs_bench/workload.rs
-// What: Run deployed-canister workload scenarios that mirror smallfile-style operations.
-// Why: We want FS-shaped inputs against a real canister without relying on canbench.
-use std::sync::{Arc, Mutex};
+// What: Run API-centric deployed-canister benchmark scenarios over the real wiki methods.
+// Why: The benchmark must honor the configured file set, concurrency, and warmup requests.
+use std::future::Future;
+use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, ensure};
+use candid::Encode;
 use serde::Serialize;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use wiki_cli::client::{CanisterWikiClient, WikiApi};
 use wiki_types::{
-    DeleteNodeRequest, ListNodesRequest, MoveNodeRequest, NodeKind, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ListNodesRequest, MoveNodeRequest,
+    NodeKind, SearchNodesRequest, WriteNodeRequest,
 };
 
 use crate::vfs_bench::common::{
-    DirectoryShape, Temperature, WorkloadOperation, cross_dir_renamed_path, file_path,
-    latency_stats, list_prefix, make_payload, same_dir_renamed_path, shard_bounds,
+    CallMetric, DirectoryShape, MeasurementMode, SetupStats, WorkloadOperation,
+    cross_dir_renamed_path, file_path, io_stats, latency_stats, list_prefix, make_editable_payload,
+    make_payload, make_searchable_payload, same_dir_renamed_path,
 };
 
 #[derive(Clone, Debug)]
@@ -29,8 +34,8 @@ pub struct WorkloadBenchArgs {
     pub concurrent_clients: usize,
     pub iterations: usize,
     pub warmup_iterations: usize,
-    pub temperature: Temperature,
     pub operation: WorkloadOperation,
+    pub measurement_mode: MeasurementMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,7 +45,7 @@ pub struct WorkloadBenchResult {
     pub canister_id: String,
     pub prefix: String,
     pub operation: WorkloadOperation,
-    pub temperature: Temperature,
+    pub measurement_mode: MeasurementMode,
     pub directory_shape: DirectoryShape,
     pub payload_size_bytes: usize,
     pub file_count: usize,
@@ -48,19 +53,30 @@ pub struct WorkloadBenchResult {
     pub iterations: usize,
     pub warmup_iterations: usize,
     pub request_count: usize,
-    pub seed_seconds: f64,
-    pub wall_seconds: f64,
     pub total_seconds: f64,
-    pub ops_per_sec: f64,
     pub avg_latency_us: f64,
     pub p50_latency_us: u64,
     pub p95_latency_us: u64,
     pub p99_latency_us: u64,
+    pub total_request_payload_bytes: u64,
+    pub total_response_payload_bytes: u64,
+    pub avg_request_payload_bytes: u64,
+    pub avg_response_payload_bytes: u64,
 }
 
 pub async fn run_workload_bench(args: WorkloadBenchArgs) -> Result<WorkloadBenchResult> {
     let client = Arc::new(CanisterWikiClient::new(&args.replica_host, &args.canister_id).await?);
     run_workload_bench_with_client(client, args).await
+}
+
+pub async fn setup_workload_bench(args: WorkloadBenchArgs) -> Result<SetupStats> {
+    let client = Arc::new(CanisterWikiClient::new(&args.replica_host, &args.canister_id).await?);
+    setup_workload_with_client(client, &args).await
+}
+
+pub async fn measure_workload_bench(args: WorkloadBenchArgs) -> Result<WorkloadBenchResult> {
+    let client = Arc::new(CanisterWikiClient::new(&args.replica_host, &args.canister_id).await?);
+    measure_workload_with_client(client, args).await
 }
 
 async fn run_workload_bench_with_client<C>(
@@ -70,567 +86,1013 @@ async fn run_workload_bench_with_client<C>(
 where
     C: WikiApi + Send + Sync + 'static,
 {
-    let payload = make_payload(args.payload_size_bytes);
-    let measure_prefix = format!("{}/measure", args.prefix);
-
-    if args.temperature == Temperature::WarmRepeat && args.warmup_iterations > 0 {
-        warm_prefix(&client, &args, &measure_prefix, &payload).await?;
+    if args.warmup_iterations > 0 {
+        let warmup_args = phase_args(
+            &args,
+            format!("{}/__warmup", args.prefix),
+            args.warmup_iterations,
+        );
+        let _ = run_operation(&client, &warmup_args).await?;
     }
-
-    let wall_started_at = Instant::now();
-    let execution = execute_operation(
-        &client,
-        &args,
-        &measure_prefix,
-        &payload,
-        should_reuse_seeded_prefix(&args),
-    )
-    .await?;
-    let wall_seconds = wall_started_at.elapsed().as_secs_f64();
-    let stats = latency_stats(&execution.latencies, execution.measured_seconds);
+    let started_at = Instant::now();
+    let metrics = run_operation(&client, &args).await?;
+    let total_seconds = started_at.elapsed().as_secs_f64();
+    let latency = latency_stats(
+        &metrics
+            .iter()
+            .map(|metric| metric.latency_us)
+            .collect::<Vec<_>>(),
+        total_seconds,
+    );
+    let io = io_stats(&metrics);
     Ok(WorkloadBenchResult {
         benchmark_name: args.benchmark_name,
         replica_host: args.replica_host,
         canister_id: args.canister_id,
-        prefix: measure_prefix,
+        prefix: args.prefix,
         operation: args.operation,
-        temperature: args.temperature,
+        measurement_mode: args.measurement_mode,
         directory_shape: args.directory_shape,
         payload_size_bytes: args.payload_size_bytes,
         file_count: args.file_count,
         concurrent_clients: args.concurrent_clients,
         iterations: args.iterations,
         warmup_iterations: args.warmup_iterations,
-        request_count: stats.request_count,
-        seed_seconds: execution.seed_seconds,
-        wall_seconds,
-        total_seconds: stats.total_seconds,
-        ops_per_sec: if stats.total_seconds == 0.0 {
-            0.0
-        } else {
-            stats.request_count as f64 / stats.total_seconds
-        },
-        avg_latency_us: stats.avg_latency_us,
-        p50_latency_us: stats.p50_latency_us,
-        p95_latency_us: stats.p95_latency_us,
-        p99_latency_us: stats.p99_latency_us,
+        request_count: latency.request_count,
+        total_seconds: latency.total_seconds,
+        avg_latency_us: latency.avg_latency_us,
+        p50_latency_us: latency.p50_latency_us,
+        p95_latency_us: latency.p95_latency_us,
+        p99_latency_us: latency.p99_latency_us,
+        total_request_payload_bytes: io.total_request_payload_bytes,
+        total_response_payload_bytes: io.total_response_payload_bytes,
+        avg_request_payload_bytes: io.avg_request_payload_bytes,
+        avg_response_payload_bytes: io.avg_response_payload_bytes,
     })
 }
 
-struct OperationExecution {
-    latencies: Vec<u64>,
-    seed_seconds: f64,
-    measured_seconds: f64,
-}
-
-async fn warm_prefix<C>(
-    client: &Arc<C>,
+async fn setup_workload_with_client<C>(
+    client: Arc<C>,
     args: &WorkloadBenchArgs,
-    prefix: &str,
-    payload: &str,
-) -> Result<()>
+) -> Result<SetupStats>
 where
     C: WikiApi + Send + Sync + 'static,
 {
-    match args.operation {
-        WorkloadOperation::Create => {
-            for _ in 0..args.warmup_iterations {
-                clear_operation_paths(client, prefix, args, false).await?;
-                let _ = create_nodes(client, prefix, args, payload).await?;
-                clear_operation_paths(client, prefix, args, false).await?;
-            }
-        }
-        WorkloadOperation::RenameSameDir => {
-            for _ in 0..args.warmup_iterations {
-                clear_operation_paths(client, prefix, args, true).await?;
-                let etags = seed_nodes(client, prefix, args, payload).await?;
-                let _ = rename_nodes(client, prefix, args, false, etags).await?;
-                clear_operation_paths(client, prefix, args, true).await?;
-            }
-        }
-        WorkloadOperation::RenameCrossDir => {
-            for _ in 0..args.warmup_iterations {
-                clear_operation_paths(client, prefix, args, true).await?;
-                let etags = seed_nodes(client, prefix, args, payload).await?;
-                let _ = rename_nodes(client, prefix, args, true, etags).await?;
-                clear_operation_paths(client, prefix, args, true).await?;
-            }
-        }
-        WorkloadOperation::Delete => {
-            for _ in 0..args.warmup_iterations {
-                clear_operation_paths(client, prefix, args, false).await?;
-                let etags = seed_nodes(client, prefix, args, payload).await?;
-                let _ = delete_nodes(client, prefix, args, etags).await?;
-                clear_operation_paths(client, prefix, args, false).await?;
-            }
-        }
-        WorkloadOperation::ReadSingle => {
-            clear_operation_paths(client, prefix, args, false).await?;
-            let _ = seed_nodes(client, prefix, args, payload).await?;
-            for _ in 0..args.warmup_iterations {
-                let _ = read_nodes(client, prefix, args).await?;
-            }
-        }
-        WorkloadOperation::ListPrefix => {
-            clear_operation_paths(client, prefix, args, false).await?;
-            let _ = seed_nodes(client, prefix, args, payload).await?;
-            for _ in 0..args.warmup_iterations {
-                let _ = list_nodes(client, prefix, args).await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn should_reuse_seeded_prefix(args: &WorkloadBenchArgs) -> bool {
-    args.temperature == Temperature::WarmRepeat
-        && args.warmup_iterations > 0
-        && matches!(
-            args.operation,
-            WorkloadOperation::ReadSingle | WorkloadOperation::ListPrefix
+    let request_count = match args.operation {
+        WorkloadOperation::Create => 0,
+        WorkloadOperation::Update => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
         )
+        .await?
+        .len(),
+        WorkloadOperation::Append => seed_nodes(&client, args, "seed", node_count(args)?)
+            .await?
+            .len(),
+        WorkloadOperation::Edit => seed_nodes(
+            &client,
+            args,
+            &make_editable_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::MoveSameDir | WorkloadOperation::MoveCrossDir => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::Delete => {
+            let count = delete_seed_count(args)?;
+            seed_nodes(&client, args, &make_payload(args.payload_size_bytes), count)
+                .await?
+                .len()
+        }
+        WorkloadOperation::Read => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::List => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::Search => {
+            seed_search_nodes(&client, args, node_count(args)?).await?;
+            node_count(args)?
+        }
+    };
+    Ok(SetupStats { request_count })
 }
 
-async fn execute_operation<C>(
-    client: &Arc<C>,
-    args: &WorkloadBenchArgs,
-    prefix: &str,
-    payload: &str,
-    reuse_seeded_prefix: bool,
-) -> Result<OperationExecution>
+async fn measure_workload_with_client<C>(
+    client: Arc<C>,
+    args: WorkloadBenchArgs,
+) -> Result<WorkloadBenchResult>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let started_at = Instant::now();
+    let metrics = run_isolated_operation(&client, &args).await?;
+    let total_seconds = started_at.elapsed().as_secs_f64();
+    let latency = latency_stats(
+        &metrics
+            .iter()
+            .map(|metric| metric.latency_us)
+            .collect::<Vec<_>>(),
+        total_seconds,
+    );
+    let io = io_stats(&metrics);
+    Ok(WorkloadBenchResult {
+        benchmark_name: args.benchmark_name,
+        replica_host: args.replica_host,
+        canister_id: args.canister_id,
+        prefix: args.prefix,
+        operation: args.operation,
+        measurement_mode: args.measurement_mode,
+        directory_shape: args.directory_shape,
+        payload_size_bytes: args.payload_size_bytes,
+        file_count: args.file_count,
+        concurrent_clients: args.concurrent_clients,
+        iterations: args.iterations,
+        warmup_iterations: args.warmup_iterations,
+        request_count: latency.request_count,
+        total_seconds: latency.total_seconds,
+        avg_latency_us: latency.avg_latency_us,
+        p50_latency_us: latency.p50_latency_us,
+        p95_latency_us: latency.p95_latency_us,
+        p99_latency_us: latency.p99_latency_us,
+        total_request_payload_bytes: io.total_request_payload_bytes,
+        total_response_payload_bytes: io.total_response_payload_bytes,
+        avg_request_payload_bytes: io.avg_request_payload_bytes,
+        avg_response_payload_bytes: io.avg_response_payload_bytes,
+    })
+}
+
+fn phase_args(args: &WorkloadBenchArgs, prefix: String, iterations: usize) -> WorkloadBenchArgs {
+    let mut clone = args.clone();
+    clone.prefix = prefix;
+    clone.iterations = iterations;
+    clone.warmup_iterations = 0;
+    clone
+}
+
+async fn run_operation<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
 where
     C: WikiApi + Send + Sync + 'static,
 {
     match args.operation {
-        WorkloadOperation::Create => {
-            let measured_started_at = Instant::now();
-            let latencies = create_nodes(client, prefix, args, payload).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds: 0.0,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
-        WorkloadOperation::RenameSameDir => {
-            let seed_started_at = Instant::now();
-            let etags = seed_nodes(client, prefix, args, payload).await?;
-            let seed_seconds = seed_started_at.elapsed().as_secs_f64();
-            let measured_started_at = Instant::now();
-            let latencies = rename_nodes(client, prefix, args, false, etags).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
-        WorkloadOperation::RenameCrossDir => {
-            let seed_started_at = Instant::now();
-            let etags = seed_nodes(client, prefix, args, payload).await?;
-            let seed_seconds = seed_started_at.elapsed().as_secs_f64();
-            let measured_started_at = Instant::now();
-            let latencies = rename_nodes(client, prefix, args, true, etags).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
-        WorkloadOperation::Delete => {
-            let seed_started_at = Instant::now();
-            let etags = seed_nodes(client, prefix, args, payload).await?;
-            let seed_seconds = seed_started_at.elapsed().as_secs_f64();
-            let measured_started_at = Instant::now();
-            let latencies = delete_nodes(client, prefix, args, etags).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
-        WorkloadOperation::ReadSingle => {
-            let seed_seconds = if reuse_seeded_prefix {
-                0.0
-            } else {
-                let seed_started_at = Instant::now();
-                seed_nodes(client, prefix, args, payload).await?;
-                seed_started_at.elapsed().as_secs_f64()
-            };
-            let measured_started_at = Instant::now();
-            let latencies = read_nodes(client, prefix, args).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
-        WorkloadOperation::ListPrefix => {
-            let seed_seconds = if reuse_seeded_prefix {
-                0.0
-            } else {
-                let seed_started_at = Instant::now();
-                seed_nodes(client, prefix, args, payload).await?;
-                seed_started_at.elapsed().as_secs_f64()
-            };
-            let measured_started_at = Instant::now();
-            let latencies = list_nodes(client, prefix, args).await?;
-            Ok(OperationExecution {
-                latencies,
-                seed_seconds,
-                measured_seconds: measured_started_at.elapsed().as_secs_f64(),
-            })
-        }
+        WorkloadOperation::Create => run_create(client, args).await,
+        WorkloadOperation::Update => run_update(client, args).await,
+        WorkloadOperation::Append => run_append(client, args).await,
+        WorkloadOperation::Edit => run_edit(client, args).await,
+        WorkloadOperation::MoveSameDir => run_move(client, args, false).await,
+        WorkloadOperation::MoveCrossDir => run_move(client, args, true).await,
+        WorkloadOperation::Delete => run_delete(client, args).await,
+        WorkloadOperation::Read => run_read(client, args).await,
+        WorkloadOperation::List => run_list(client, args).await,
+        WorkloadOperation::Search => run_search(client, args).await,
     }
 }
 
-async fn clear_operation_paths<C>(
+async fn run_isolated_operation<C>(
     client: &Arc<C>,
-    prefix: &str,
     args: &WorkloadBenchArgs,
-    include_move_targets: bool,
-) -> Result<()>
+) -> Result<Vec<CallMetric>>
 where
     C: WikiApi + Send + Sync + 'static,
 {
+    match args.operation {
+        WorkloadOperation::Create => run_create(client, args).await,
+        WorkloadOperation::Update => run_update_from_seed(client, args).await,
+        WorkloadOperation::Append => run_append_from_seed(client, args).await,
+        WorkloadOperation::Edit => run_edit_from_seed(client, args).await,
+        WorkloadOperation::MoveSameDir => run_move_from_seed(client, args, false).await,
+        WorkloadOperation::MoveCrossDir => run_move_from_seed(client, args, true).await,
+        WorkloadOperation::Delete => run_delete_from_seed(client, args).await,
+        WorkloadOperation::Read => run_read_from_seed(client, args).await,
+        WorkloadOperation::List => run_list_from_seed(client, args).await,
+        WorkloadOperation::Search => run_search_from_seed(client, args).await,
+    }
+}
+
+async fn run_create<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let payload = make_payload(args.payload_size_bytes);
     let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    let operation = args.operation;
-    let file_count = args.file_count;
-    let concurrent_clients = args.concurrent_clients;
-    let total = if include_move_targets {
-        file_count * 2
-    } else {
-        file_count
-    };
-    run_parallel_actions(concurrent_clients, total, move |index| {
+    let prefix = args.prefix.clone();
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
-        let path = if include_move_targets && index >= file_count {
-            let target_index = index - file_count;
-            match operation {
-                WorkloadOperation::RenameCrossDir => {
-                    cross_dir_renamed_path(&prefix, shape, target_index)
-                }
-                WorkloadOperation::RenameSameDir => {
-                    same_dir_renamed_path(&prefix, shape, target_index)
-                }
-                _ => file_path(&prefix, shape, target_index),
-            }
-        } else {
-            file_path(&prefix, shape, index)
-        };
+        let prefix = prefix.clone();
+        let payload = payload.clone();
         async move {
-            if let Some(node) = client.read_node(&path).await? {
-                client
-                    .delete_node(DeleteNodeRequest {
-                        path,
-                        expected_etag: Some(node.etag),
-                    })
-                    .await?;
-            }
-            Ok::<(), anyhow::Error>(())
+            let request = WriteNodeRequest {
+                path: format!("{prefix}/create-{index:06}.md"),
+                kind: NodeKind::File,
+                content: payload,
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            };
+            let started_at = Instant::now();
+            let result = client.write_node(request.clone()).await?;
+            metric(started_at, &request, &result)
         }
     })
     .await
+}
+
+async fn run_update<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let base = make_payload(args.payload_size_bytes);
+    let updated = updated_payload(&base);
+    let states = Arc::new(seed_states(client, args, &base, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let base = base.clone();
+        let updated = updated.clone();
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let content = if state.toggle {
+                updated.clone()
+            } else {
+                base.clone()
+            };
+            let request = WriteNodeRequest {
+                path,
+                kind: NodeKind::File,
+                content,
+                metadata_json: "{}".to_string(),
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let result = client.write_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_append<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let base = "seed".to_string();
+    let append = make_payload(args.payload_size_bytes);
+    let states = Arc::new(seed_states(client, args, &base, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let append = append.clone();
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let request = AppendNodeRequest {
+                path,
+                content: append,
+                expected_etag: Some(state.etag.clone()),
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            };
+            let started_at = Instant::now();
+            let result = client.append_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_edit<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let base = make_editable_payload(args.payload_size_bytes);
+    let states = Arc::new(seed_states(client, args, &base, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let (old_text, new_text) = if state.toggle {
+                ("BENCH_TOKEN_NEW".to_string(), "BENCH_TOKEN_OLD".to_string())
+            } else {
+                ("BENCH_TOKEN_OLD".to_string(), "BENCH_TOKEN_NEW".to_string())
+            };
+            let request = EditNodeRequest {
+                path,
+                old_text,
+                new_text,
+                expected_etag: Some(state.etag.clone()),
+                replace_all: true,
+            };
+            let started_at = Instant::now();
+            let result = client.edit_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_move<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    cross_dir: bool,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    let etags = seed_nodes(client, args, &payload, node_count).await?;
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    let states = Arc::new(
+        etags
+            .into_iter()
+            .enumerate()
+            .map(|(index, etag)| {
+                let primary_path = file_path(&prefix, shape, index);
+                let alternate_path = if cross_dir {
+                    cross_dir_renamed_path(&prefix, shape, index)
+                } else {
+                    same_dir_renamed_path(&prefix, shape, index)
+                };
+                Mutex::new(MoveState {
+                    etag,
+                    current_path: primary_path.clone(),
+                    primary_path,
+                    alternate_path,
+                })
+            })
+            .collect::<Vec<_>>(),
+    );
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let to_path = if state.current_path == state.primary_path {
+                state.alternate_path.clone()
+            } else {
+                state.primary_path.clone()
+            };
+            let request = MoveNodeRequest {
+                from_path: state.current_path.clone(),
+                to_path,
+                expected_etag: Some(state.etag.clone()),
+                overwrite: false,
+            };
+            let started_at = Instant::now();
+            let result = client.move_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.current_path = result.node.path.clone();
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_delete<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    let states = Arc::new(seed_states(client, args, &payload, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let payload = payload.clone();
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let delete_request = DeleteNodeRequest {
+                path: path.clone(),
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let delete_result = client.delete_node(delete_request.clone()).await?;
+            let delete_metric = metric(started_at, &delete_request, &delete_result)?;
+            let seed_request = WriteNodeRequest {
+                path,
+                kind: NodeKind::File,
+                content: payload,
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            };
+            let seed_result = client.write_node(seed_request).await?;
+            state.etag = seed_result.node.etag;
+            Ok(delete_metric)
+        }
+    })
+    .await
+}
+
+async fn run_update_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let base = make_payload(args.payload_size_bytes);
+    let updated = updated_payload(&base);
+    let states = Arc::new(load_toggle_states(client, args, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let base = base.clone();
+        let updated = updated.clone();
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let content = if state.toggle {
+                updated.clone()
+            } else {
+                base.clone()
+            };
+            let request = WriteNodeRequest {
+                path,
+                kind: NodeKind::File,
+                content,
+                metadata_json: "{}".to_string(),
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let result = client.write_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_append_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let append = make_payload(args.payload_size_bytes);
+    let states = Arc::new(load_toggle_states(client, args, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let append = append.clone();
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let request = AppendNodeRequest {
+                path,
+                content: append,
+                expected_etag: Some(state.etag.clone()),
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            };
+            let started_at = Instant::now();
+            let result = client.append_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_edit_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let states = Arc::new(load_toggle_states(client, args, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let (old_text, new_text) = if state.toggle {
+                ("BENCH_TOKEN_NEW".to_string(), "BENCH_TOKEN_OLD".to_string())
+            } else {
+                ("BENCH_TOKEN_OLD".to_string(), "BENCH_TOKEN_NEW".to_string())
+            };
+            let request = EditNodeRequest {
+                path,
+                old_text,
+                new_text,
+                expected_etag: Some(state.etag.clone()),
+                replace_all: true,
+            };
+            let started_at = Instant::now();
+            let result = client.edit_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_move_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    cross_dir: bool,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let states = Arc::new(load_move_states(client, args, node_count, cross_dir).await?);
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let to_path = if state.current_path == state.primary_path {
+                state.alternate_path.clone()
+            } else {
+                state.primary_path.clone()
+            };
+            let request = MoveNodeRequest {
+                from_path: state.current_path.clone(),
+                to_path,
+                expected_etag: Some(state.etag.clone()),
+                overwrite: false,
+            };
+            let started_at = Instant::now();
+            let result = client.move_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.current_path = result.node.path.clone();
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_delete_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let seed_count = delete_seed_count(args)?;
+    let states = Arc::new(load_delete_etags(client, args, seed_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let path = file_path(&prefix, shape, index);
+        async move {
+            let state = states[index].lock().await;
+            let request = DeleteNodeRequest {
+                path,
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let result = client.delete_node(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_read<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    seed_nodes(client, args, &payload, node_count).await?;
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let started_at = Instant::now();
+            let result = client.read_node(&path).await?;
+            metric(started_at, &path, &result)
+        }
+    })
+    .await
+}
+
+async fn run_read_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let started_at = Instant::now();
+            let result = client.read_node(&path).await?;
+            metric(started_at, &path, &result)
+        }
+    })
+    .await
+}
+
+async fn run_list<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    seed_nodes(client, args, &payload, node_count).await?;
+    let request = ListNodesRequest {
+        prefix: list_prefix(&args.prefix, args.directory_shape),
+        recursive: false,
+        include_deleted: false,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.list_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_list_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let request = ListNodesRequest {
+        prefix: list_prefix(&args.prefix, args.directory_shape),
+        recursive: false,
+        include_deleted: false,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.list_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_search<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    for index in 0..node_count {
+        let request = WriteNodeRequest {
+            path: file_path(&args.prefix, args.directory_shape, index),
+            kind: NodeKind::File,
+            content: make_searchable_payload(args.payload_size_bytes, index),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        };
+        client.write_node(request).await?;
+    }
+    let request = SearchNodesRequest {
+        query_text: "shared-bench-search".to_string(),
+        prefix: Some(args.prefix.clone()),
+        top_k: 10,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.search_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_search_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let request = SearchNodesRequest {
+        query_text: "shared-bench-search".to_string(),
+        prefix: Some(args.prefix.clone()),
+        top_k: 10,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.search_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+fn node_count(args: &WorkloadBenchArgs) -> Result<usize> {
+    ensure!(
+        args.file_count > 0 || args.iterations == 0,
+        "file_count must be greater than zero when iterations are requested"
+    );
+    Ok(args.file_count)
+}
+
+fn delete_seed_count(args: &WorkloadBenchArgs) -> Result<usize> {
+    Ok(node_count(args)?.max(args.iterations))
+}
+
+fn updated_payload(base: &str) -> String {
+    if base.is_empty() {
+        "u".to_string()
+    } else {
+        format!("u{}", &base[1..])
+    }
+}
+
+async fn seed_states<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    payload: &str,
+    count: usize,
+) -> Result<Vec<Mutex<ToggleState>>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    Ok(seed_nodes(client, args, payload, count)
+        .await?
+        .into_iter()
+        .map(|etag| {
+            Mutex::new(ToggleState {
+                etag,
+                toggle: false,
+            })
+        })
+        .collect())
+}
+
+async fn load_toggle_states<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    count: usize,
+) -> Result<Vec<Mutex<ToggleState>>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let mut states = Vec::with_capacity(count);
+    for index in 0..count {
+        let node = client
+            .read_node(&file_path(&args.prefix, args.directory_shape, index))
+            .await?
+            .ok_or_else(|| anyhow!("missing seeded node {}", args.benchmark_name))?;
+        states.push(Mutex::new(ToggleState {
+            etag: node.etag,
+            toggle: false,
+        }));
+    }
+    Ok(states)
+}
+
+async fn load_move_states<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    count: usize,
+    cross_dir: bool,
+) -> Result<Vec<Mutex<MoveState>>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let mut states = Vec::with_capacity(count);
+    for index in 0..count {
+        let primary_path = file_path(&args.prefix, args.directory_shape, index);
+        let node = client
+            .read_node(&primary_path)
+            .await?
+            .ok_or_else(|| anyhow!("missing seeded move node {}", args.benchmark_name))?;
+        let alternate_path = if cross_dir {
+            cross_dir_renamed_path(&args.prefix, args.directory_shape, index)
+        } else {
+            same_dir_renamed_path(&args.prefix, args.directory_shape, index)
+        };
+        states.push(Mutex::new(MoveState {
+            etag: node.etag,
+            current_path: primary_path.clone(),
+            primary_path,
+            alternate_path,
+        }));
+    }
+    Ok(states)
+}
+
+async fn load_delete_etags<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+    count: usize,
+) -> Result<Vec<Mutex<ToggleState>>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    load_toggle_states(client, args, count).await
 }
 
 async fn seed_nodes<C>(
     client: &Arc<C>,
-    prefix: &str,
     args: &WorkloadBenchArgs,
     payload: &str,
+    count: usize,
 ) -> Result<Vec<String>>
 where
     C: WikiApi + Send + Sync + 'static,
 {
-    let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    let payload = payload.to_string();
-    let etags = Arc::new(Mutex::new(vec![None; args.file_count]));
-    let shared_etags = Arc::clone(&etags);
-    run_parallel_actions(args.concurrent_clients, args.file_count, move |index| {
-        let client = Arc::clone(&client);
-        let path = file_path(&prefix, shape, index);
-        let content = payload.clone();
-        let etags = Arc::clone(&shared_etags);
-        async move {
-            let result = client
-                .write_node(WriteNodeRequest {
-                    path,
-                    kind: NodeKind::File,
-                    content,
-                    metadata_json: "{}".to_string(),
-                    expected_etag: None,
-                })
-                .await?;
-            etags.lock().expect("etag mutex poisoned")[index] = Some(result.node.etag);
-            Ok::<(), anyhow::Error>(())
-        }
-    })
-    .await?;
-    let etags = etags.lock().expect("etag mutex poisoned");
-    Ok(etags
-        .iter()
-        .map(|etag| etag.clone().expect("seed should record etag"))
-        .collect())
-}
-
-async fn create_nodes<C>(
-    client: &Arc<C>,
-    prefix: &str,
-    args: &WorkloadBenchArgs,
-    payload: &str,
-) -> Result<Vec<u64>>
-where
-    C: WikiApi + Send + Sync + 'static,
-{
-    let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    let payload = payload.to_string();
-    run_parallel(args.concurrent_clients, args.file_count, move |index| {
-        let client = Arc::clone(&client);
-        let path = file_path(&prefix, shape, index);
-        let content = payload.clone();
-        async move {
-            timed_update(async move {
-                client
-                    .write_node(WriteNodeRequest {
-                        path,
-                        kind: NodeKind::File,
-                        content,
-                        metadata_json: "{}".to_string(),
-                        expected_etag: None,
-                    })
-                    .await
-                    .map(|_| ())
-            })
-            .await
-        }
-    })
-    .await
-}
-
-async fn rename_nodes<C>(
-    client: &Arc<C>,
-    prefix: &str,
-    args: &WorkloadBenchArgs,
-    cross_dir: bool,
-    etags: Vec<String>,
-) -> Result<Vec<u64>>
-where
-    C: WikiApi + Send + Sync + 'static,
-{
-    let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    let etags = Arc::new(etags);
-    run_parallel(args.concurrent_clients, args.file_count, move |index| {
-        let client = Arc::clone(&client);
-        let from_path = file_path(&prefix, shape, index);
-        let to_path = if cross_dir {
-            cross_dir_renamed_path(&prefix, shape, index)
-        } else {
-            same_dir_renamed_path(&prefix, shape, index)
+    let mut etags = Vec::with_capacity(count);
+    for index in 0..count {
+        let request = WriteNodeRequest {
+            path: file_path(&args.prefix, args.directory_shape, index),
+            kind: NodeKind::File,
+            content: payload.to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
         };
-        let etag = etags[index].clone();
-        async move {
-            timed_update(async move {
-                client
-                    .move_node(MoveNodeRequest {
-                        from_path,
-                        to_path,
-                        expected_etag: Some(etag),
-                        overwrite: false,
-                    })
-                    .await
-                    .map(|_| ())
-            })
-            .await
-        }
-    })
-    .await
+        let result = client.write_node(request).await?;
+        etags.push(result.node.etag);
+    }
+    Ok(etags)
 }
 
-async fn delete_nodes<C>(
-    client: &Arc<C>,
-    prefix: &str,
-    args: &WorkloadBenchArgs,
-    etags: Vec<String>,
-) -> Result<Vec<u64>>
+async fn seed_search_nodes<C>(client: &Arc<C>, args: &WorkloadBenchArgs, count: usize) -> Result<()>
 where
     C: WikiApi + Send + Sync + 'static,
 {
-    let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    let etags = Arc::new(etags);
-    run_parallel(args.concurrent_clients, args.file_count, move |index| {
-        let client = Arc::clone(&client);
-        let path = file_path(&prefix, shape, index);
-        let etag = etags[index].clone();
-        async move {
-            timed_update(async move {
-                client
-                    .delete_node(DeleteNodeRequest {
-                        path,
-                        expected_etag: Some(etag),
-                    })
-                    .await
-                    .map(|_| ())
+    for index in 0..count {
+        client
+            .write_node(WriteNodeRequest {
+                path: file_path(&args.prefix, args.directory_shape, index),
+                kind: NodeKind::File,
+                content: make_searchable_payload(args.payload_size_bytes, index),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
             })
-            .await
-        }
-    })
-    .await
-}
-
-async fn read_nodes<C>(client: &Arc<C>, prefix: &str, args: &WorkloadBenchArgs) -> Result<Vec<u64>>
-where
-    C: WikiApi + Send + Sync + 'static,
-{
-    let client = Arc::clone(client);
-    let prefix = prefix.to_string();
-    let shape = args.directory_shape;
-    run_parallel(args.concurrent_clients, args.file_count, move |index| {
-        let client = Arc::clone(&client);
-        let path = file_path(&prefix, shape, index);
-        async move { timed_update(async move { client.read_node(&path).await.map(|_| ()) }).await }
-    })
-    .await
-}
-
-async fn list_nodes<C>(client: &Arc<C>, prefix: &str, args: &WorkloadBenchArgs) -> Result<Vec<u64>>
-where
-    C: WikiApi + Send + Sync + 'static,
-{
-    let client = Arc::clone(client);
-    let list_prefix = list_prefix(prefix, args.directory_shape);
-    run_parallel(args.concurrent_clients, args.iterations, move |_| {
-        let client = Arc::clone(&client);
-        let list_prefix = list_prefix.clone();
-        async move {
-            timed_update(async move {
-                client
-                    .list_nodes(ListNodesRequest {
-                        prefix: list_prefix,
-                        recursive: false,
-                        include_deleted: false,
-                    })
-                    .await
-                    .map(|_| ())
-            })
-            .await
-        }
-    })
-    .await
-}
-
-async fn run_parallel<F, Fut>(concurrent_clients: usize, total: usize, build: F) -> Result<Vec<u64>>
-where
-    F: Fn(usize) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = Result<u64>> + Send + 'static,
-{
-    let build = Arc::new(build);
-    let mut join_set: JoinSet<Result<Vec<u64>>> = JoinSet::new();
-    for shard_index in 0..concurrent_clients {
-        let (start, end) = shard_bounds(total, concurrent_clients, shard_index);
-        let build = Arc::clone(&build);
-        join_set.spawn(async move {
-            let mut latencies = Vec::with_capacity(end.saturating_sub(start));
-            for index in start..end {
-                latencies.push(build(index).await?);
-            }
-            Ok::<Vec<u64>, anyhow::Error>(latencies)
-        });
-    }
-
-    let mut latencies = Vec::with_capacity(total);
-    while let Some(result) = join_set.join_next().await {
-        latencies.extend(result??);
-    }
-    Ok(latencies)
-}
-
-async fn run_parallel_actions<F, Fut>(
-    concurrent_clients: usize,
-    total: usize,
-    build: F,
-) -> Result<()>
-where
-    F: Fn(usize) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
-{
-    let build = Arc::new(build);
-    let mut join_set: JoinSet<Result<()>> = JoinSet::new();
-    for shard_index in 0..concurrent_clients {
-        let (start, end) = shard_bounds(total, concurrent_clients, shard_index);
-        let build = Arc::clone(&build);
-        join_set.spawn(async move {
-            for index in start..end {
-                build(index).await?;
-            }
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    while let Some(result) = join_set.join_next().await {
-        result??;
+            .await?;
     }
     Ok(())
 }
 
-async fn timed_update<F>(future: F) -> Result<u64>
+async fn run_parallel<F, Fut>(
+    total: usize,
+    concurrent_clients: usize,
+    build: F,
+) -> Result<Vec<CallMetric>>
 where
-    F: std::future::Future<Output = Result<()>>,
+    F: Fn(usize) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<CallMetric>> + Send + 'static,
 {
-    let started_at = Instant::now();
-    future.await?;
-    Ok(started_at.elapsed().as_micros() as u64)
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    let shard_count = concurrent_clients.max(1).min(total);
+    let build = Arc::new(build);
+    let mut tasks = JoinSet::new();
+    for shard_index in 0..shard_count {
+        let build = Arc::clone(&build);
+        tasks.spawn(async move {
+            let mut metrics = Vec::new();
+            let mut index = shard_index;
+            while index < total {
+                metrics.push(build(index).await?);
+                index += shard_count;
+            }
+            Ok::<Vec<CallMetric>, anyhow::Error>(metrics)
+        });
+    }
+    let mut metrics = Vec::with_capacity(total);
+    while let Some(task) = tasks.join_next().await {
+        metrics.extend(task.map_err(|error| anyhow!("workload task failed: {error}"))??);
+    }
+    Ok(metrics)
+}
+
+fn metric<Arg, Out>(started_at: Instant, argument: &Arg, output: &Out) -> Result<CallMetric>
+where
+    Arg: candid::CandidType,
+    Out: candid::CandidType,
+{
+    Ok(CallMetric {
+        latency_us: started_at.elapsed().as_micros() as u64,
+        request_payload_bytes: Encode!(argument)?.len() as u64,
+        response_payload_bytes: Encode!(output)?.len() as u64,
+    })
+}
+
+struct ToggleState {
+    etag: String,
+    toggle: bool,
+}
+
+struct MoveState {
+    etag: String,
+    current_path: String,
+    primary_path: String,
+    alternate_path: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkloadBenchArgs, run_workload_bench_with_client};
-    use crate::vfs_bench::common::{DirectoryShape, Temperature, WorkloadOperation};
-    use anyhow::Result;
+    use super::*;
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    use wiki_cli::client::WikiApi;
+    use std::sync::Mutex;
     use wiki_types::{
-        AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-        ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-        GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
-        MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node,
-        NodeEntry, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status,
-        WriteNodeRequest, WriteNodeResult,
+        DeleteNodeResult, EditNodeResult, GlobNodeHit, GlobNodesRequest, MkdirNodeRequest,
+        MkdirNodeResult, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node,
+        NodeEntry, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit, Status,
+        WriteNodeResult,
     };
 
     #[derive(Default)]
-    struct MockBenchClient {
+    struct MockClient {
         next_etag: Mutex<u64>,
         nodes: Mutex<HashMap<String, Node>>,
-        operations: Mutex<Vec<String>>,
+        ops: Mutex<Vec<String>>,
     }
 
-    impl MockBenchClient {
-        fn record(&self, operation: String) {
-            self.operations
-                .lock()
-                .expect("operations should lock")
-                .push(operation);
-        }
-
-        fn next_etag(&self) -> String {
-            let mut next = self.next_etag.lock().expect("etag counter should lock");
-            *next += 1;
-            format!("etag-{}", *next)
+    impl MockClient {
+        fn take_ops(&self) -> Vec<String> {
+            std::mem::take(&mut *self.ops.lock().unwrap())
         }
     }
 
     #[async_trait]
-    impl WikiApi for MockBenchClient {
+    impl WikiApi for MockClient {
         async fn status(&self) -> Result<Status> {
             Ok(Status {
                 file_count: 0,
@@ -638,182 +1100,398 @@ mod tests {
                 deleted_count: 0,
             })
         }
-
         async fn read_node(&self, path: &str) -> Result<Option<Node>> {
-            self.record(format!("read:{path}"));
-            Ok(self
-                .nodes
-                .lock()
-                .expect("nodes should lock")
-                .get(path)
-                .cloned())
+            self.ops.lock().unwrap().push(format!("read:{path}"));
+            Ok(self.nodes.lock().unwrap().get(path).cloned())
         }
-
         async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
-            self.record(format!("list:{}", request.prefix));
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("list:{}", request.prefix));
             Ok(Vec::new())
         }
-
         async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
-            self.record(format!("write:{}", request.path));
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("write:{}", request.path));
+            let mut next = self.next_etag.lock().unwrap();
+            *next += 1;
             let node = Node {
                 path: request.path.clone(),
                 kind: request.kind,
                 content: request.content,
                 created_at: 1,
                 updated_at: 2,
-                etag: self.next_etag(),
+                etag: format!("etag-{next}"),
                 deleted_at: None,
                 metadata_json: request.metadata_json,
             };
             self.nodes
                 .lock()
-                .expect("nodes should lock")
+                .unwrap()
                 .insert(request.path, node.clone());
             Ok(WriteNodeResult {
+                node: NodeMutationAck {
+                    path: node.path,
+                    kind: node.kind,
+                    updated_at: node.updated_at,
+                    etag: node.etag,
+                    deleted_at: node.deleted_at,
+                },
                 created: true,
-                node,
             })
         }
-
-        async fn append_node(&self, _request: AppendNodeRequest) -> Result<WriteNodeResult> {
-            unreachable!()
-        }
-
-        async fn edit_node(&self, _request: EditNodeRequest) -> Result<EditNodeResult> {
-            unreachable!()
-        }
-
-        async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
-            self.record(format!("delete:{}", request.path));
-            let removed = self
+        async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult> {
+            let current = self
                 .nodes
                 .lock()
-                .expect("nodes should lock")
-                .remove(&request.path)
-                .expect("delete target should exist");
+                .unwrap()
+                .get(&request.path)
+                .cloned()
+                .unwrap();
+            self.write_node(WriteNodeRequest {
+                path: request.path,
+                kind: NodeKind::File,
+                content: format!("{}{}", current.content, request.content),
+                metadata_json: current.metadata_json,
+                expected_etag: request.expected_etag,
+            })
+            .await
+        }
+        async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult> {
+            let current = self
+                .nodes
+                .lock()
+                .unwrap()
+                .get(&request.path)
+                .cloned()
+                .unwrap();
+            let replaced = current
+                .content
+                .replace(&request.old_text, &request.new_text);
+            let result = self
+                .write_node(WriteNodeRequest {
+                    path: request.path,
+                    kind: NodeKind::File,
+                    content: replaced,
+                    metadata_json: current.metadata_json,
+                    expected_etag: request.expected_etag,
+                })
+                .await?;
+            Ok(EditNodeResult {
+                node: result.node,
+                replacement_count: 1,
+            })
+        }
+        async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("delete:{}", request.path));
+            let removed = self.nodes.lock().unwrap().remove(&request.path).unwrap();
             Ok(DeleteNodeResult {
                 path: request.path,
                 etag: removed.etag,
                 deleted_at: 3,
             })
         }
-
         async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
-            self.record(format!("move:{}->{}", request.from_path, request.to_path));
-            let mut nodes = self.nodes.lock().expect("nodes should lock");
-            let mut moved = nodes
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("move:{}->{}", request.from_path, request.to_path));
+            let mut node = self
+                .nodes
+                .lock()
+                .unwrap()
                 .remove(&request.from_path)
-                .expect("move source should exist");
-            moved.path = request.to_path.clone();
-            moved.etag = self.next_etag();
-            nodes.insert(request.to_path.clone(), moved.clone());
+                .unwrap();
+            node.path = request.to_path.clone();
+            self.nodes
+                .lock()
+                .unwrap()
+                .insert(request.to_path.clone(), node.clone());
             Ok(MoveNodeResult {
+                node: NodeMutationAck {
+                    path: node.path,
+                    kind: node.kind,
+                    updated_at: node.updated_at,
+                    etag: node.etag,
+                    deleted_at: node.deleted_at,
+                },
                 from_path: request.from_path,
-                node: moved,
                 overwrote: false,
             })
         }
-
         async fn mkdir_node(&self, _request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
             unreachable!()
         }
-
         async fn glob_nodes(&self, _request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
             Ok(Vec::new())
         }
-
         async fn recent_nodes(&self, _request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
             Ok(Vec::new())
         }
-
         async fn multi_edit_node(
             &self,
             _request: MultiEditNodeRequest,
         ) -> Result<MultiEditNodeResult> {
             unreachable!()
         }
-
-        async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
-            Ok(Vec::new())
+        async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("search:{}", request.query_text));
+            Ok(vec![SearchNodeHit {
+                path: "/Wiki/bench/node-000000.md".to_string(),
+                kind: NodeKind::File,
+                snippet: request.query_text,
+                score: 1.0,
+                match_reasons: vec!["text".to_string()],
+            }])
         }
-
         async fn export_snapshot(
             &self,
-            _request: ExportSnapshotRequest,
-        ) -> Result<ExportSnapshotResponse> {
-            Ok(ExportSnapshotResponse {
-                snapshot_revision: "snap".to_string(),
-                nodes: Vec::new(),
-            })
+            _request: wiki_types::ExportSnapshotRequest,
+        ) -> Result<wiki_types::ExportSnapshotResponse> {
+            unreachable!()
         }
-
         async fn fetch_updates(
             &self,
-            _request: FetchUpdatesRequest,
-        ) -> Result<FetchUpdatesResponse> {
-            Ok(FetchUpdatesResponse {
-                snapshot_revision: "snap".to_string(),
-                changed_nodes: Vec::new(),
-                removed_paths: Vec::new(),
-            })
+            _request: wiki_types::FetchUpdatesRequest,
+        ) -> Result<wiki_types::FetchUpdatesResponse> {
+            unreachable!()
+        }
+    }
+
+    fn args(operation: WorkloadOperation) -> WorkloadBenchArgs {
+        WorkloadBenchArgs {
+            benchmark_name: "bench".to_string(),
+            replica_host: "http://127.0.0.1:4943".to_string(),
+            canister_id: "aaaaa-aa".to_string(),
+            prefix: "/Wiki/bench".to_string(),
+            payload_size_bytes: 1024,
+            file_count: 4,
+            directory_shape: DirectoryShape::Flat,
+            concurrent_clients: 1,
+            iterations: 4,
+            warmup_iterations: 0,
+            operation,
+            measurement_mode: MeasurementMode::ScenarioTotal,
         }
     }
 
     #[tokio::test]
-    async fn warm_repeat_reads_reuse_the_measured_prefix() {
-        let client = Arc::new(MockBenchClient::default());
-        let result = run_workload_bench_with_client(
-            Arc::clone(&client),
-            WorkloadBenchArgs {
-                benchmark_name: "warm-read".to_string(),
-                replica_host: "http://127.0.0.1:4943".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-                prefix: "/Wiki/bench".to_string(),
-                payload_size_bytes: 32,
-                file_count: 2,
-                directory_shape: DirectoryShape::Flat,
-                concurrent_clients: 1,
-                iterations: 2,
-                warmup_iterations: 2,
-                temperature: Temperature::WarmRepeat,
-                operation: WorkloadOperation::ReadSingle,
-            },
-        )
-        .await
-        .expect("warm repeat should succeed");
+    async fn update_overwrite_records_request_bytes() {
+        let client = Arc::new(MockClient::default());
+        let result = super::run_create(&client, &args(WorkloadOperation::Create))
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 4);
+        let update = super::run_update(&client, &args(WorkloadOperation::Update))
+            .await
+            .unwrap();
+        assert!(update.iter().all(|item| item.request_payload_bytes > 0));
+    }
 
-        assert_eq!(result.prefix, "/Wiki/bench/measure");
-        assert_eq!(result.seed_seconds, 0.0);
+    #[tokio::test]
+    async fn move_variants_use_distinct_paths() {
+        let client = Arc::new(MockClient::default());
+        super::run_move(&client, &args(WorkloadOperation::MoveSameDir), false)
+            .await
+            .unwrap();
+        super::run_move(&client, &args(WorkloadOperation::MoveCrossDir), true)
+            .await
+            .unwrap();
+        let ops = client.ops.lock().unwrap().clone();
+        assert!(ops.iter().any(|entry| entry.contains(".renamed.md")));
+        assert!(ops.iter().any(|entry| entry.contains("/moved/")));
+    }
 
-        let operations = client
-            .operations
+    #[tokio::test]
+    async fn search_returns_hits_and_io_stats() {
+        let client = Arc::new(MockClient::default());
+        let result = run_workload_bench_with_client(client, args(WorkloadOperation::Search))
+            .await
+            .unwrap();
+        assert_eq!(result.request_count, 4);
+        assert!(result.avg_request_payload_bytes > 0);
+        assert!(result.avg_response_payload_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn mutating_workloads_reuse_seeded_file_set() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Update);
+        workload.file_count = 2;
+        workload.iterations = 5;
+        let result = run_workload_bench_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        assert_eq!(result.request_count, 5);
+        assert_eq!(client.nodes.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_clients_execute_all_measured_requests() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Read);
+        workload.concurrent_clients = 3;
+        workload.iterations = 7;
+        let result = run_workload_bench_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let reads = client
+            .ops
             .lock()
-            .expect("operations should lock")
-            .clone();
-        let write_paths = operations
-            .iter()
-            .filter(|entry| entry.starts_with("write:"))
-            .cloned()
-            .collect::<Vec<_>>();
-        let read_paths = operations
+            .unwrap()
             .iter()
             .filter(|entry| entry.starts_with("read:"))
-            .cloned()
-            .collect::<Vec<_>>();
+            .count();
+        assert_eq!(result.request_count, 7);
+        assert_eq!(reads, 7);
+    }
 
-        assert_eq!(write_paths.len(), 2);
-        assert!(
-            write_paths
-                .iter()
-                .all(|entry| entry.starts_with("write:/Wiki/bench/measure/"))
+    #[tokio::test]
+    async fn warmup_requests_do_not_change_measured_count() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Read);
+        workload.iterations = 4;
+        workload.warmup_iterations = 2;
+        let result = run_workload_bench_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.ops.lock().unwrap().clone();
+        let warmup_reads = ops
+            .iter()
+            .filter(|entry| entry.starts_with("read:/Wiki/bench/__warmup/"))
+            .count();
+        let measured_reads = ops
+            .iter()
+            .filter(|entry| entry.starts_with("read:/Wiki/bench/node-"))
+            .count();
+        assert_eq!(result.request_count, 4);
+        assert_eq!(warmup_reads, 2);
+        assert_eq!(measured_reads, 4);
+    }
+
+    #[tokio::test]
+    async fn zero_byte_update_does_not_panic() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Update);
+        workload.payload_size_bytes = 0;
+        let result = super::run_update(&client, &workload).await.unwrap();
+        assert_eq!(result.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn isolated_setup_and_measure_split_seed_from_update_requests() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Update);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        let setup = super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        assert_eq!(setup.request_count, 4);
+        assert_eq!(result.request_count, 4);
+        assert_eq!(client.nodes.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn isolated_delete_setup_seeds_per_iteration() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Delete);
+        workload.file_count = 2;
+        workload.iterations = 5;
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        let setup = super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        assert_eq!(setup.request_count, 5);
+        assert_eq!(result.request_count, 5);
+    }
+
+    #[tokio::test]
+    async fn isolated_read_measurement_does_not_reseed() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Read);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry.starts_with("read:/Wiki/bench/node-"))
+                .count(),
+            4
         );
-        assert!(read_paths.len() >= 6);
-        assert!(
-            read_paths
-                .iter()
-                .all(|entry| entry.starts_with("read:/Wiki/bench/measure/"))
+    }
+
+    #[tokio::test]
+    async fn isolated_list_measurement_does_not_reseed() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::List);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry == &&"list:/Wiki/bench".to_string())
+                .count(),
+            4
         );
-        assert!(!operations.iter().any(|entry| entry.contains("/warmup-")));
+    }
+
+    #[tokio::test]
+    async fn isolated_search_measurement_does_not_reseed() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Search);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry == &&"search:shared-bench-search".to_string())
+                .count(),
+            4
+        );
     }
 }
