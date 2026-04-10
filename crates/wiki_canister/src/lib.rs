@@ -16,8 +16,8 @@ use wiki_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    Status, WriteNodeRequest, WriteNodeResult,
 };
 
 const DB_PATH: &str = "./DB/wiki.sqlite3";
@@ -103,6 +103,11 @@ fn multi_edit_node(request: MultiEditNodeRequest) -> Result<MultiEditNodeResult,
 #[query]
 fn search_nodes(request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {
     with_service(|service| service.search_nodes(request))
+}
+
+#[query]
+fn search_node_paths(request: SearchNodePathsRequest) -> Result<Vec<SearchNodeHit>, String> {
+    with_service(|service| service.search_node_paths(request))
 }
 
 #[query]

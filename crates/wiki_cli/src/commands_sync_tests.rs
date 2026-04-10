@@ -15,7 +15,7 @@ use wiki_types::{
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
     NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 struct SyncMockClient {
@@ -61,6 +61,12 @@ impl WikiApi for SyncMockClient {
         unreachable!()
     }
     async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        Ok(Vec::new())
+    }
+    async fn search_node_paths(
+        &self,
+        _request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>> {
         Ok(Vec::new())
     }
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {

@@ -182,6 +182,15 @@ export class KinicCanisterClient {
     }));
   }
 
+  async searchNodePaths(queryText: string, prefix: string): Promise<SearchNodeHit[]> {
+    const actor = await this.actor();
+    return normalizeSearchNodeHits(await actor.search_node_paths({
+      query_text: queryText,
+      prefix: [prefix],
+      top_k: 10
+    }));
+  }
+
   async exportSnapshot(): Promise<ExportSnapshotResponse> {
     const actor = await this.actor();
     return normalizeExportResponse(await actor.export_snapshot({

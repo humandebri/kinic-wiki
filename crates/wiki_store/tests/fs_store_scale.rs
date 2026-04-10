@@ -1,9 +1,11 @@
+use std::time::Instant;
+
 use tempfile::tempdir;
 use wiki_store::FsStore;
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType,
-    GlobNodesRequest, ListNodesRequest, NodeEntryKind, NodeKind, SearchNodesRequest,
-    WriteNodeRequest,
+    GlobNodesRequest, ListNodesRequest, NodeEntryKind, NodeKind, SearchNodePathsRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -216,6 +218,57 @@ fn glob_and_search_scale_cases_respect_scope_and_tombstones() {
             .iter()
             .any(|hit| hit.path.ends_with("topic-000.md"))
     );
+
+    let path_hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "TOPIC-000".to_string(),
+            prefix: Some("/Wiki/projects/alpha".to_string()),
+            top_k: 100,
+        })
+        .expect("path search should succeed");
+    assert!(
+        path_hits
+            .iter()
+            .all(|hit| hit.path.starts_with("/Wiki/projects/alpha/"))
+    );
+}
+
+#[test]
+fn path_search_smoke_reports_latency_and_hits() {
+    let (_dir, store) = new_store();
+
+    for index in 0..300 {
+        let path = format!("/Wiki/bench/nested/Topic-{index:03}.md");
+        write_file(
+            &store,
+            &path,
+            &format!("body {index}"),
+            None,
+            1_000 + index as i64,
+        );
+    }
+
+    let cases = [
+        ("nested", "nested"),
+        ("basename", "Topic-042"),
+        ("mixed_case", "tOpIc-042"),
+    ];
+    for (label, query_text) in cases {
+        let started_at = Instant::now();
+        let hits = store
+            .search_node_paths(SearchNodePathsRequest {
+                query_text: query_text.to_string(),
+                prefix: Some("/Wiki/bench".to_string()),
+                top_k: 20,
+            })
+            .expect("path search smoke should succeed");
+        let elapsed_us = started_at.elapsed().as_micros();
+        println!(
+            "path_search_smoke case={label} query={query_text} hit_count={} latency_us={elapsed_us}",
+            hits.len()
+        );
+        assert!(!hits.is_empty());
+    }
 }
 
 #[test]

@@ -4,11 +4,14 @@
 use tempfile::tempdir;
 use wiki_runtime::WikiService;
 use wiki_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, NodeKind, SearchNodesRequest,
-    WriteNodeRequest,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, NodeKind,
+    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
-use super::{SERVICE, delete_node, export_snapshot, fetch_updates, search_nodes, write_node};
+use super::{
+    SERVICE, delete_node, export_snapshot, fetch_updates, search_node_paths, search_nodes,
+    write_node,
+};
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
@@ -63,6 +66,15 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     .expect("search should succeed");
     assert_eq!(beta_hits.len(), 1);
     assert_eq!(beta_hits[0].path, "/Wiki/project-beta/two.md");
+
+    let path_hits = search_node_paths(SearchNodePathsRequest {
+        query_text: "PROJECT-beta".to_string(),
+        prefix: Some("/Wiki".to_string()),
+        top_k: 10,
+    })
+    .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/project-beta/two.md");
 }
 
 #[test]

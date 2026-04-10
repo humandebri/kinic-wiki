@@ -7,8 +7,8 @@ use wiki_types::{
     GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
 use crate::agent_tools::{
@@ -157,6 +157,19 @@ impl WikiApi for ToolMockClient {
         Ok(Vec::new())
     }
 
+    async fn search_node_paths(
+        &self,
+        _request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>> {
+        Ok(vec![SearchNodeHit {
+            path: "/Wiki/nested/beta.md".to_string(),
+            kind: NodeKind::File,
+            snippet: "/Wiki/nested/beta.md".to_string(),
+            score: 15.0,
+            match_reasons: vec!["path_substring".to_string()],
+        }])
+    }
+
     async fn export_snapshot(
         &self,
         _request: ExportSnapshotRequest,
@@ -180,6 +193,8 @@ impl WikiApi for ToolMockClient {
 fn tool_schemas_include_minimal_vfs_tools() {
     let openai = create_openai_tools();
     let anthropic = create_anthropic_tools();
+    assert_eq!(openai.len(), 13);
+    assert_eq!(anthropic.len(), 13);
 
     let openai_names = tool_names(&openai, "function");
     let anthropic_names = tool_names(&anthropic, "name");
@@ -197,6 +212,7 @@ fn tool_schemas_include_minimal_vfs_tools() {
         "multi_edit",
         "rm",
         "search",
+        "search_paths",
     ] {
         assert!(openai_names.contains(&name.to_string()));
         assert!(anthropic_names.contains(&name.to_string()));
@@ -381,6 +397,25 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_routes_search_paths() {
+    let client = ToolMockClient::default();
+    let result = handle_anthropic_tool_call(
+        &client,
+        "search_paths",
+        serde_json::json!({
+            "query_text": "nested",
+            "prefix": "/Wiki",
+            "top_k": 5
+        }),
+    )
+    .await
+    .expect("search paths tool should succeed");
+    assert!(!result.is_error);
+    assert!(result.text.contains("/Wiki/nested/beta.md"));
+    assert!(result.text.contains("path_substring"));
 }
 
 fn sample_node(path: &str, content: &str, etag: &str) -> Node {

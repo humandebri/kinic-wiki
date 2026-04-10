@@ -4,7 +4,7 @@ use wiki_store::FsStore;
 use wiki_types::{
     AppendNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind,
-    RecentNodesRequest,
+    RecentNodesRequest, SearchNodePathsRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -301,6 +301,16 @@ fn move_node_renames_and_updates_search() {
     assert_eq!(hits.len(), 1);
     #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(hits[0].path, "/Wiki/to.md");
+
+    let path_hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "TO".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 5,
+        })
+        .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/to.md");
 }
 
 #[test]
@@ -487,6 +497,58 @@ fn glob_nodes_matches_files_and_virtual_directories() {
             .iter()
             .any(|hit| hit.path == "/Wiki/nested" && hit.kind == NodeEntryKind::Directory)
     );
+}
+
+#[test]
+fn list_and_glob_do_not_depend_on_large_content_loading() {
+    let (_dir, store) = new_store();
+    let large = "x".repeat(128 * 1024);
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/large.md".to_string(),
+                content: large,
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("large create should succeed");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/nested/child.md".to_string(),
+                content: "child".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("nested create should succeed");
+
+    let list = store
+        .list_nodes(ListNodesRequest {
+            prefix: "/Wiki".to_string(),
+            recursive: false,
+            include_deleted: false,
+        })
+        .expect("list should succeed");
+    assert!(list.iter().any(|entry| entry.path == "/Wiki/large.md"));
+    assert!(list.iter().any(|entry| entry.path == "/Wiki/nested"));
+
+    let glob = store
+        .glob_nodes(GlobNodesRequest {
+            pattern: "**/*.md".to_string(),
+            path: Some("/Wiki".to_string()),
+            node_type: Some(GlobNodeType::File),
+        })
+        .expect("glob should succeed");
+    assert!(glob.iter().any(|hit| hit.path == "/Wiki/large.md"));
+    assert!(glob.iter().any(|hit| hit.path == "/Wiki/nested/child.md"));
 }
 
 #[test]

@@ -18,7 +18,8 @@ use std::path::Path;
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     FetchUpdatesRequest, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest,
-    MultiEdit, MultiEditNodeRequest, RecentNodesRequest, SearchNodesRequest, WriteNodeRequest,
+    MultiEdit, MultiEditNodeRequest, RecentNodesRequest, SearchNodePathsRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
 const REMOTE_PREFIX: &str = "/Wiki";
 
@@ -249,6 +250,27 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         } => {
             let hits = client
                 .search_nodes(SearchNodesRequest {
+                    query_text,
+                    prefix: Some(prefix),
+                    top_k,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                for hit in hits {
+                    println!("{}\t{}", hit.path, hit.snippet);
+                }
+            }
+        }
+        Command::SearchPathRemote {
+            query_text,
+            prefix,
+            top_k,
+            json,
+        } => {
+            let hits = client
+                .search_node_paths(SearchNodePathsRequest {
                     query_text,
                     prefix: Some(prefix),
                     top_k,

@@ -7,13 +7,13 @@ use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest,
-    SearchNodesRequest, WriteNodeRequest,
+    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 use super::{
     SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_nodes,
-    status, write_node,
+    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_node_paths,
+    search_nodes, status, write_node,
 };
 
 fn install_test_service() {
@@ -94,6 +94,15 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     .expect("search should succeed");
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "/Wiki/foo.md");
+
+    let path_hits = search_node_paths(SearchNodePathsRequest {
+        query_text: "NeStEd".to_string(),
+        prefix: Some("/Wiki".to_string()),
+        top_k: 5,
+    })
+    .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/nested/bar.md");
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
         prefix: Some("/Wiki".to_string()),

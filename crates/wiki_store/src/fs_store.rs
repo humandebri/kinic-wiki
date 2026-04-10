@@ -10,16 +10,16 @@ use wiki_types::{
     GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
 use crate::{
     fs_helpers::{
-        StoredNode, build_entries, build_fts_query, build_glob_entries, compute_node_etag,
-        load_node, load_scoped_nodes, load_stored_node, node_ack, node_kind_from_db,
-        node_kind_to_db, normalize_node_path, prefix_filter_sql, prefix_filter_sql_for_column,
-        relative_to_prefix, snapshot_revision_token,
+        StoredNode, build_entries_from_rows, build_fts_query, build_glob_entries_from_rows,
+        compute_node_etag, load_node, load_scoped_entry_rows, load_scoped_nodes, load_stored_node,
+        node_ack, node_kind_from_db, node_kind_to_db, normalize_node_path, prefix_filter_sql,
+        prefix_filter_sql_for_column, relative_to_prefix, snapshot_revision_token,
     },
     glob_match::{matches_path, validate_pattern},
     schema,
@@ -90,8 +90,8 @@ impl FsStore {
     pub fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>, String> {
         let prefix = normalize_node_path(&request.prefix, true)?;
         let conn = self.open()?;
-        let nodes = load_scoped_nodes(&conn, &prefix, request.include_deleted)?;
-        Ok(build_entries(&nodes, &prefix, request.recursive))
+        let rows = load_scoped_entry_rows(&conn, &prefix, request.include_deleted)?;
+        Ok(build_entries_from_rows(&rows, &prefix, request.recursive))
     }
 
     pub fn write_node(
@@ -246,8 +246,8 @@ impl FsStore {
             .unwrap_or_else(|| "/Wiki".to_string());
         let node_type = request.node_type.unwrap_or(GlobNodeType::Any);
         let conn = self.open()?;
-        let nodes = load_scoped_nodes(&conn, &prefix, false)?;
-        let entries = build_glob_entries(&nodes, &prefix);
+        let rows = load_scoped_entry_rows(&conn, &prefix, false)?;
+        let entries = build_glob_entries_from_rows(&rows, &prefix);
         let mut hits = Vec::new();
         for entry in entries {
             if !glob_type_matches(&node_type, &entry.kind) {
@@ -407,6 +407,60 @@ impl FsStore {
                 snippet: row.get(2)?,
                 score: row.get(3)?,
                 match_reasons: vec!["fts5_bm25".to_string()],
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn search_node_paths(
+        &self,
+        request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>, String> {
+        let prefix = request
+            .prefix
+            .as_ref()
+            .map(|value| normalize_node_path(value, true))
+            .transpose()?;
+        let terms = split_path_search_terms(&request.query_text)
+            .ok_or_else(|| "query_text must not be empty".to_string())?;
+        let conn = self.open()?;
+        let top_k = i64::from(request.top_k.max(1));
+        let mut sql = String::from(
+            "SELECT path,
+                    kind,
+                    instr(lower(path), ?1) AS first_match_position,
+                    length(path) AS path_length
+             FROM fs_nodes
+             WHERE deleted_at IS NULL",
+        );
+        let mut values = vec![rusqlite::types::Value::from(terms[0].clone())];
+        for term in &terms {
+            let index = values.len() + 1;
+            sql.push_str(&format!(" AND instr(lower(path), ?{index}) > 0"));
+            values.push(rusqlite::types::Value::from(term.clone()));
+        }
+        if let Some(prefix) = prefix {
+            let (scope_sql, scope_values) =
+                prefix_filter_sql_for_column("fs_nodes.path", &prefix, values.len() + 1);
+            sql.push_str(&scope_sql);
+            values.extend(scope_values);
+        }
+        sql.push_str(&format!(
+            " ORDER BY first_match_position ASC, path_length ASC, path ASC LIMIT {top_k}"
+        ));
+        let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+        stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            let path = row.get::<_, String>(0)?;
+            let first_match_position = row.get::<_, i64>(2)?;
+            let path_length = row.get::<_, i64>(3)?;
+            Ok(SearchNodeHit {
+                path: path.clone(),
+                kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
+                snippet: path,
+                score: path_match_score(first_match_position, path_length),
+                match_reasons: vec!["path_substring".to_string()],
             })
         })
         .map_err(|error| error.to_string())?
@@ -992,6 +1046,25 @@ fn delete_node_row(tx: &Transaction<'_>, stored: &StoredNode) -> Result<(), Stri
     tx.execute("DELETE FROM fs_nodes WHERE id = ?1", params![stored.row_id])
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn split_search_terms(query_text: &str) -> Option<Vec<String>> {
+    let terms = query_text
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if terms.is_empty() { None } else { Some(terms) }
+}
+
+fn split_path_search_terms(query_text: &str) -> Option<Vec<String>> {
+    split_search_terms(query_text)
+        .map(|terms| terms.into_iter().map(|term| term.to_lowercase()).collect())
+}
+
+fn path_match_score(first_match_position: i64, path_length: i64) -> f32 {
+    ((first_match_position - 1) * 10_000 + path_length) as f32
 }
 
 fn glob_type_matches(node_type: &GlobNodeType, entry_kind: &NodeEntryKind) -> bool {

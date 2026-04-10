@@ -208,6 +208,13 @@ pub struct SearchNodesRequest {
     pub top_k: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SearchNodePathsRequest {
+    pub query_text: String,
+    pub prefix: Option<String>,
+    pub top_k: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
 pub struct SearchNodeHit {
     pub path: String,

@@ -11,7 +11,7 @@ use wiki_types::{
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
     NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[derive(Default)]
@@ -26,6 +26,7 @@ pub(crate) struct MockClient {
     pub(crate) globs: std::sync::Mutex<Vec<GlobNodesRequest>>,
     pub(crate) recents: std::sync::Mutex<Vec<RecentNodesRequest>>,
     pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+    pub(crate) path_searches: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
 }
 
 #[async_trait]
@@ -178,6 +179,17 @@ impl WikiApi for MockClient {
     }
 
     async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        Ok(Vec::new())
+    }
+
+    async fn search_node_paths(
+        &self,
+        request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>> {
+        self.path_searches
+            .lock()
+            .expect("path searches should lock")
+            .push(request);
         Ok(Vec::new())
     }
 

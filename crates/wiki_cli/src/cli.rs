@@ -151,6 +151,15 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    SearchPathRemote {
+        query_text: String,
+        #[arg(long, default_value = "/Wiki")]
+        prefix: String,
+        #[arg(long, default_value_t = 10)]
+        top_k: u32,
+        #[arg(long)]
+        json: bool,
+    },
     LintLocal {
         #[arg(long)]
         vault_path: PathBuf,

@@ -10,8 +10,8 @@ use wiki_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[async_trait]
@@ -29,6 +29,10 @@ pub trait WikiApi {
     async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>>;
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult>;
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>>;
+    async fn search_node_paths(
+        &self,
+        request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>>;
     async fn export_snapshot(
         &self,
         request: ExportSnapshotRequest,
@@ -161,6 +165,15 @@ impl WikiApi for CanisterWikiClient {
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
         let result: Result<Vec<SearchNodeHit>, String> =
             self.query("search_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn search_node_paths(
+        &self,
+        request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>> {
+        let result: Result<Vec<SearchNodeHit>, String> =
+            self.query("search_node_paths", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest,
     ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeKind,
-    RecentNodesRequest, SearchNodesRequest, WriteNodeRequest,
+    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 use crate::client::WikiApi;
@@ -17,7 +17,7 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-pub const READ_ONLY_TOOL_NAMES: [&str; 4] = ["read", "ls", "search", "recent"];
+pub const READ_ONLY_TOOL_NAMES: [&str; 5] = ["read", "ls", "search", "search_paths", "recent"];
 
 pub fn create_openai_tools() -> Vec<Value> {
     create_openai_tools_for_names(tool_names_slice())
@@ -92,6 +92,7 @@ fn tool_names_slice() -> &'static [&'static str] {
         "multi_edit",
         "rm",
         "search",
+        "search_paths",
     ]
 }
 
@@ -257,6 +258,17 @@ async fn dispatch_tool_call_impl(
                 .await?;
             tool_ok(json!({ "hits": result }))
         }
+        "search_paths" => {
+            let args: SearchArgs = serde_json::from_value(input)?;
+            let result = client
+                .search_node_paths(SearchNodePathsRequest {
+                    query_text: args.query_text,
+                    prefix: args.prefix,
+                    top_k: args.top_k.unwrap_or(10),
+                })
+                .await?;
+            tool_ok(json!({ "hits": result }))
+        }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),
     };
     Ok(result)
@@ -302,7 +314,12 @@ fn tool_specs() -> Vec<ToolSpec> {
             multi_edit_schema(),
         ),
         ToolSpec::new("rm", "Delete a node by path.", delete_schema()),
-        ToolSpec::new("search", "Search node contents.", search_schema()),
+        ToolSpec::new("search", "Search current node contents.", search_schema()),
+        ToolSpec::new(
+            "search_paths",
+            "Search node paths and filenames by case-insensitive substring.",
+            search_schema(),
+        ),
     ]
 }
 
