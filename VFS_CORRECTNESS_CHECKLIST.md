@@ -47,7 +47,6 @@
 
 - wall-clock ベースの store-level benchmark
 - Obsidian 実ランタイム込みの UI 操作テスト
-- `fio` / `smallfile` / `SQLite speedtest1` / `SQLite commit latency` の実測値取得
 - 長時間運用を前提にした大規模 DB 成長試験
 
 ## 実行コマンド
@@ -62,13 +61,4 @@ bash scripts/build-wiki-canister-canbench.sh
 
 ```bash
 bash scripts/run_canbench_guard.sh
-```
-
-外部ベンチは次を使う。
-
-```bash
-bash scripts/bench/run_fio_vfs.sh
-bash scripts/bench/run_smallfile_vfs.sh
-bash scripts/bench/run_sqlite_speedtest1.sh
-bash scripts/bench/run_sqlite_commit_latency_vfs.sh
 ```

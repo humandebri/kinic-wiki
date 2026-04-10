@@ -7,9 +7,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Always emit wasm under the repo `target/` tree. Cursor/agent shells may set
+# CARGO_TARGET_DIR to a sandbox cache, which would make cargo and wasi2ic disagree on paths.
+unset CARGO_TARGET_DIR
 TARGET_DIR="${REPO_ROOT}/target/wasm32-wasip1/release"
 INPUT_WASM="${TARGET_DIR}/wiki_canister.wasm"
 OUTPUT_WASM="${TARGET_DIR}/wiki_canister_nowasi.wasm"
+# `icp deploy` sets this; standalone runs default to the repo artifact path.
+ICP_WASM_OUTPUT_PATH="${ICP_WASM_OUTPUT_PATH:-${OUTPUT_WASM}}"
 
 # shellcheck source=./wasi-env.sh
 source "${SCRIPT_DIR}/wasi-env.sh"
@@ -44,7 +49,9 @@ fi
 "${build_cmd[@]}"
 
 wasi2ic "${INPUT_WASM}" "${OUTPUT_WASM}"
-cp "${OUTPUT_WASM}" "${ICP_WASM_OUTPUT_PATH}"
+if [[ "${OUTPUT_WASM}" != "${ICP_WASM_OUTPUT_PATH}" ]]; then
+  cp "${OUTPUT_WASM}" "${ICP_WASM_OUTPUT_PATH}"
+fi
 
 ic-wasm "${ICP_WASM_OUTPUT_PATH}" \
   -o "${ICP_WASM_OUTPUT_PATH}" \

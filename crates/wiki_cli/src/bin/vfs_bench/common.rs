@@ -2,7 +2,8 @@
 // What: Shared benchmark args, path helpers, and latency aggregation for deployed canister benches.
 // Why: The workload and latency runners should share one source of truth for scenario labels and metrics.
 use clap::ValueEnum;
-use serde::Serialize;
+use clap::builder::PossibleValue;
+use serde::{Serialize, Serializer};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -18,8 +19,7 @@ pub enum Temperature {
     WarmRepeat,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkloadOperation {
     Create,
     Update,
@@ -31,6 +31,91 @@ pub enum WorkloadOperation {
     Read,
     List,
     Search,
+    Mkdir,
+    Glob,
+    Recent,
+    MultiEdit,
+}
+
+impl ValueEnum for WorkloadOperation {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Self::Create,
+            Self::Update,
+            Self::Append,
+            Self::Edit,
+            Self::MoveSameDir,
+            Self::MoveCrossDir,
+            Self::Delete,
+            Self::Read,
+            Self::List,
+            Self::Search,
+            Self::Mkdir,
+            Self::Glob,
+            Self::Recent,
+            Self::MultiEdit,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(match self {
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Append => "append",
+            Self::Edit => "edit",
+            Self::MoveSameDir => "move-same-dir",
+            Self::MoveCrossDir => "move-cross-dir",
+            Self::Delete => "delete",
+            Self::Read => "read",
+            Self::List => "list",
+            Self::Search => "search",
+            Self::Mkdir => "mkdir",
+            Self::Glob => "glob",
+            Self::Recent => "recent",
+            Self::MultiEdit => "multi-edit",
+        }))
+    }
+}
+
+impl Serialize for WorkloadOperation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            WorkloadOperation::Create => "create",
+            WorkloadOperation::Update => "update",
+            WorkloadOperation::Append => "append",
+            WorkloadOperation::Edit => "edit",
+            WorkloadOperation::MoveSameDir => "move_same_dir",
+            WorkloadOperation::MoveCrossDir => "move_cross_dir",
+            WorkloadOperation::Delete => "delete",
+            WorkloadOperation::Read => "read",
+            WorkloadOperation::List => "list",
+            WorkloadOperation::Search => "search",
+            WorkloadOperation::Mkdir => "mkdir",
+            WorkloadOperation::Glob => "glob",
+            WorkloadOperation::Recent => "recent",
+            WorkloadOperation::MultiEdit => "multi_edit",
+        })
+    }
+}
+
+/// OpenAI-compatible tool name and optional variant for workload benchmark reporting.
+pub fn openai_tool_for_workload(op: WorkloadOperation) -> (&'static str, Option<&'static str>) {
+    match op {
+        WorkloadOperation::Create => ("write", Some("create")),
+        WorkloadOperation::Update => ("write", Some("overwrite")),
+        WorkloadOperation::Append => ("append", None),
+        WorkloadOperation::Edit => ("edit", None),
+        WorkloadOperation::MoveSameDir => ("mv", Some("same_dir")),
+        WorkloadOperation::MoveCrossDir => ("mv", Some("cross_dir")),
+        WorkloadOperation::Delete => ("rm", None),
+        WorkloadOperation::Read => ("read", None),
+        WorkloadOperation::List => ("ls", None),
+        WorkloadOperation::Search => ("search", None),
+        WorkloadOperation::Mkdir => ("mkdir", None),
+        WorkloadOperation::Glob => ("glob", None),
+        WorkloadOperation::Recent => ("recent", None),
+        WorkloadOperation::MultiEdit => ("multi_edit", None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -92,6 +177,20 @@ pub fn make_editable_payload(payload_size_bytes: usize) -> String {
     content
 }
 
+/// Two fixed tokens for `multi_edit_node` benchmarks (same length per slot for stable replace).
+pub fn make_multi_editable_payload(payload_size_bytes: usize) -> String {
+    let a = "BENCH_MULTI_A0";
+    let b = "BENCH_MULTI_B0";
+    let header = format!("{a}{b}");
+    if payload_size_bytes <= header.len() {
+        return header[..payload_size_bytes].to_string();
+    }
+    let mut content = String::with_capacity(payload_size_bytes);
+    content.push_str(&header);
+    content.push_str(&"x".repeat(payload_size_bytes - header.len()));
+    content
+}
+
 pub fn make_searchable_payload(payload_size_bytes: usize, index: usize) -> String {
     let prefix = format!("shared-bench-search term-{:06} ", index);
     if payload_size_bytes <= prefix.len() {
@@ -112,6 +211,14 @@ pub fn file_path(prefix: &str, shape: DirectoryShape, index: usize) -> String {
             l2 = (index / 100) % 100,
             leaf = index % 100
         ),
+    }
+}
+
+/// Glob benchmark patterns must follow the seeded file layout for each shape.
+pub fn glob_pattern(shape: DirectoryShape) -> &'static str {
+    match shape {
+        DirectoryShape::Flat => "node-*.md",
+        DirectoryShape::Fanout100x100 => "**/node-*.md",
     }
 }
 
@@ -198,8 +305,9 @@ fn percentile(sorted: &[u64], pct: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CallMetric, DirectoryShape, cross_dir_renamed_path, file_path, io_stats, latency_stats,
-        list_prefix, make_editable_payload, make_searchable_payload, same_dir_renamed_path,
+        CallMetric, DirectoryShape, cross_dir_renamed_path, file_path, glob_pattern, io_stats,
+        latency_stats, list_prefix, make_editable_payload, make_multi_editable_payload,
+        make_searchable_payload, same_dir_renamed_path,
     };
 
     #[test]
@@ -271,5 +379,44 @@ mod tests {
     fn payload_builders_embed_expected_tokens() {
         assert!(make_editable_payload(64).starts_with("BENCH_TOKEN_OLD"));
         assert!(make_searchable_payload(64, 12).contains("shared-bench-search"));
+        assert!(make_multi_editable_payload(64).starts_with("BENCH_MULTI_A0"));
+        assert!(make_multi_editable_payload(64).contains("BENCH_MULTI_B0"));
+    }
+
+    #[test]
+    fn glob_patterns_follow_directory_shape() {
+        assert_eq!(glob_pattern(DirectoryShape::Flat), "node-*.md");
+        assert_eq!(glob_pattern(DirectoryShape::Fanout100x100), "**/node-*.md");
+    }
+
+    #[test]
+    fn workload_operation_value_enum_lists_all_variants() {
+        use super::ValueEnum;
+        assert_eq!(super::WorkloadOperation::value_variants().len(), 14);
+    }
+
+    #[test]
+    fn openai_tool_mapping_matches_agent_tools() {
+        use super::WorkloadOperation;
+        assert_eq!(
+            super::openai_tool_for_workload(WorkloadOperation::Create),
+            ("write", Some("create"))
+        );
+        assert_eq!(
+            super::openai_tool_for_workload(WorkloadOperation::Update),
+            ("write", Some("overwrite"))
+        );
+        assert_eq!(
+            super::openai_tool_for_workload(WorkloadOperation::List),
+            ("ls", None)
+        );
+        assert_eq!(
+            super::openai_tool_for_workload(WorkloadOperation::Delete),
+            ("rm", None)
+        );
+        assert_eq!(
+            super::openai_tool_for_workload(WorkloadOperation::MultiEdit),
+            ("multi_edit", None)
+        );
     }
 }

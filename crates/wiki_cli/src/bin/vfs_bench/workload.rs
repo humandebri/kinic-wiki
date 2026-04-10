@@ -12,14 +12,16 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use wiki_cli::client::{CanisterWikiClient, WikiApi};
 use wiki_types::{
-    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ListNodesRequest, MoveNodeRequest,
-    NodeKind, SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest,
+    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeKind,
+    RecentNodesRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 use crate::vfs_bench::common::{
     CallMetric, DirectoryShape, MeasurementMode, SetupStats, WorkloadOperation,
-    cross_dir_renamed_path, file_path, io_stats, latency_stats, list_prefix, make_editable_payload,
-    make_payload, make_searchable_payload, same_dir_renamed_path,
+    cross_dir_renamed_path, file_path, glob_pattern, io_stats, latency_stats, list_prefix,
+    make_editable_payload, make_multi_editable_payload, make_payload, make_searchable_payload,
+    openai_tool_for_workload, same_dir_renamed_path,
 };
 
 #[derive(Clone, Debug)]
@@ -45,6 +47,11 @@ pub struct WorkloadBenchResult {
     pub canister_id: String,
     pub prefix: String,
     pub operation: WorkloadOperation,
+    /// OpenAI-compatible tool name (see `agent_tools::tool_names_slice`).
+    pub openai_tool: String,
+    /// Sub-variant when one tool maps to multiple workload operations (e.g. `write` + `create`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai_tool_variant: Option<String>,
     pub measurement_mode: MeasurementMode,
     pub directory_shape: DirectoryShape,
     pub payload_size_bytes: usize,
@@ -62,6 +69,11 @@ pub struct WorkloadBenchResult {
     pub total_response_payload_bytes: u64,
     pub avg_request_payload_bytes: u64,
     pub avg_response_payload_bytes: u64,
+}
+
+fn openai_tool_fields(op: WorkloadOperation) -> (String, Option<String>) {
+    let (tool, variant) = openai_tool_for_workload(op);
+    (tool.to_string(), variant.map(String::from))
 }
 
 pub async fn run_workload_bench(args: WorkloadBenchArgs) -> Result<WorkloadBenchResult> {
@@ -105,12 +117,15 @@ where
         total_seconds,
     );
     let io = io_stats(&metrics);
+    let (openai_tool, openai_tool_variant) = openai_tool_fields(args.operation);
     Ok(WorkloadBenchResult {
         benchmark_name: args.benchmark_name,
         replica_host: args.replica_host,
         canister_id: args.canister_id,
         prefix: args.prefix,
         operation: args.operation,
+        openai_tool,
+        openai_tool_variant,
         measurement_mode: args.measurement_mode,
         directory_shape: args.directory_shape,
         payload_size_bytes: args.payload_size_bytes,
@@ -193,6 +208,31 @@ where
             seed_search_nodes(&client, args, node_count(args)?).await?;
             node_count(args)?
         }
+        WorkloadOperation::Mkdir => 0,
+        WorkloadOperation::Glob => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::Recent => seed_nodes(
+            &client,
+            args,
+            &make_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
+        WorkloadOperation::MultiEdit => seed_nodes(
+            &client,
+            args,
+            &make_multi_editable_payload(args.payload_size_bytes),
+            node_count(args)?,
+        )
+        .await?
+        .len(),
     };
     Ok(SetupStats { request_count })
 }
@@ -215,12 +255,15 @@ where
         total_seconds,
     );
     let io = io_stats(&metrics);
+    let (openai_tool, openai_tool_variant) = openai_tool_fields(args.operation);
     Ok(WorkloadBenchResult {
         benchmark_name: args.benchmark_name,
         replica_host: args.replica_host,
         canister_id: args.canister_id,
         prefix: args.prefix,
         operation: args.operation,
+        openai_tool,
+        openai_tool_variant,
         measurement_mode: args.measurement_mode,
         directory_shape: args.directory_shape,
         payload_size_bytes: args.payload_size_bytes,
@@ -264,6 +307,10 @@ where
         WorkloadOperation::Read => run_read(client, args).await,
         WorkloadOperation::List => run_list(client, args).await,
         WorkloadOperation::Search => run_search(client, args).await,
+        WorkloadOperation::Mkdir => run_mkdir(client, args).await,
+        WorkloadOperation::Glob => run_glob(client, args).await,
+        WorkloadOperation::Recent => run_recent(client, args).await,
+        WorkloadOperation::MultiEdit => run_multi_edit(client, args).await,
     }
 }
 
@@ -285,6 +332,10 @@ where
         WorkloadOperation::Read => run_read_from_seed(client, args).await,
         WorkloadOperation::List => run_list_from_seed(client, args).await,
         WorkloadOperation::Search => run_search_from_seed(client, args).await,
+        WorkloadOperation::Mkdir => run_mkdir_from_seed(client, args).await,
+        WorkloadOperation::Glob => run_glob_from_seed(client, args).await,
+        WorkloadOperation::Recent => run_recent_from_seed(client, args).await,
+        WorkloadOperation::MultiEdit => run_multi_edit_from_seed(client, args).await,
     }
 }
 
@@ -860,6 +911,247 @@ where
     .await
 }
 
+async fn run_mkdir<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let prefix = prefix.clone();
+        async move {
+            let request = MkdirNodeRequest {
+                path: format!("{prefix}/mkdir-bench-{index:06}"),
+            };
+            let started_at = Instant::now();
+            let result = client.mkdir_node(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_mkdir_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    run_mkdir(client, args).await
+}
+
+async fn run_glob<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    seed_nodes(client, args, &payload, node_count).await?;
+    let request = GlobNodesRequest {
+        pattern: glob_pattern(args.directory_shape).to_string(),
+        path: Some(args.prefix.clone()),
+        node_type: Some(GlobNodeType::File),
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.glob_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_glob_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let request = GlobNodesRequest {
+        pattern: glob_pattern(args.directory_shape).to_string(),
+        path: Some(args.prefix.clone()),
+        node_type: Some(GlobNodeType::File),
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.glob_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_recent<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let payload = make_payload(args.payload_size_bytes);
+    seed_nodes(client, args, &payload, node_count).await?;
+    let limit = (node_count as u32).min(10).max(1);
+    let request = RecentNodesRequest {
+        limit,
+        path: Some(args.prefix.clone()),
+        include_deleted: false,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.recent_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_recent_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let limit = (node_count as u32).min(10).max(1);
+    let request = RecentNodesRequest {
+        limit,
+        path: Some(args.prefix.clone()),
+        include_deleted: false,
+    };
+    let client = Arc::clone(client);
+    run_parallel(args.iterations, args.concurrent_clients, move |_| {
+        let client = Arc::clone(&client);
+        let request = request.clone();
+        async move {
+            let started_at = Instant::now();
+            let result = client.recent_nodes(request.clone()).await?;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_multi_edit<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let base = make_multi_editable_payload(args.payload_size_bytes);
+    let states = Arc::new(seed_states(client, args, &base, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let edits = if state.toggle {
+                vec![
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_A1".to_string(),
+                        new_text: "BENCH_MULTI_A0".to_string(),
+                    },
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_B1".to_string(),
+                        new_text: "BENCH_MULTI_B0".to_string(),
+                    },
+                ]
+            } else {
+                vec![
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_A0".to_string(),
+                        new_text: "BENCH_MULTI_A1".to_string(),
+                    },
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_B0".to_string(),
+                        new_text: "BENCH_MULTI_B1".to_string(),
+                    },
+                ]
+            };
+            let request = MultiEditNodeRequest {
+                path,
+                edits,
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let result = client.multi_edit_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
+async fn run_multi_edit_from_seed<C>(
+    client: &Arc<C>,
+    args: &WorkloadBenchArgs,
+) -> Result<Vec<CallMetric>>
+where
+    C: WikiApi + Send + Sync + 'static,
+{
+    let node_count = node_count(args)?;
+    let states = Arc::new(load_toggle_states(client, args, node_count).await?);
+    let client = Arc::clone(client);
+    let prefix = args.prefix.clone();
+    let shape = args.directory_shape;
+    run_parallel(args.iterations, args.concurrent_clients, move |index| {
+        let client = Arc::clone(&client);
+        let states = Arc::clone(&states);
+        let path = file_path(&prefix, shape, index % node_count);
+        async move {
+            let mut state = states[index % node_count].lock().await;
+            let edits = if state.toggle {
+                vec![
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_A1".to_string(),
+                        new_text: "BENCH_MULTI_A0".to_string(),
+                    },
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_B1".to_string(),
+                        new_text: "BENCH_MULTI_B0".to_string(),
+                    },
+                ]
+            } else {
+                vec![
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_A0".to_string(),
+                        new_text: "BENCH_MULTI_A1".to_string(),
+                    },
+                    MultiEdit {
+                        old_text: "BENCH_MULTI_B0".to_string(),
+                        new_text: "BENCH_MULTI_B1".to_string(),
+                    },
+                ]
+            };
+            let request = MultiEditNodeRequest {
+                path,
+                edits,
+                expected_etag: Some(state.etag.clone()),
+            };
+            let started_at = Instant::now();
+            let result = client.multi_edit_node(request.clone()).await?;
+            state.etag = result.node.etag.clone();
+            state.toggle = !state.toggle;
+            metric(started_at, &request, &result)
+        }
+    })
+    .await
+}
+
 fn node_count(args: &WorkloadBenchArgs) -> Result<usize> {
     ensure!(
         args.file_count > 0 || args.iterations == 0,
@@ -1074,8 +1366,8 @@ mod tests {
     use wiki_types::{
         DeleteNodeResult, EditNodeResult, GlobNodeHit, GlobNodesRequest, MkdirNodeRequest,
         MkdirNodeResult, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node,
-        NodeEntry, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit, Status,
-        WriteNodeResult,
+        NodeEntry, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
+        SearchNodePathsRequest, Status, WriteNodeResult,
     };
 
     #[derive(Default)]
@@ -1225,20 +1517,62 @@ mod tests {
                 overwrote: false,
             })
         }
-        async fn mkdir_node(&self, _request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
-            unreachable!()
+        async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("mkdir:{}", request.path));
+            Ok(MkdirNodeResult {
+                path: request.path,
+                created: true,
+            })
         }
-        async fn glob_nodes(&self, _request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+        async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("glob:{}", request.pattern));
             Ok(Vec::new())
         }
-        async fn recent_nodes(&self, _request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+        async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("recent:{}", request.limit));
             Ok(Vec::new())
         }
         async fn multi_edit_node(
             &self,
-            _request: MultiEditNodeRequest,
+            request: MultiEditNodeRequest,
         ) -> Result<MultiEditNodeResult> {
-            unreachable!()
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("multi_edit:{}", request.path));
+            let current = self
+                .nodes
+                .lock()
+                .unwrap()
+                .get(&request.path)
+                .cloned()
+                .unwrap();
+            let mut content = current.content;
+            for edit in &request.edits {
+                content = content.replace(&edit.old_text, &edit.new_text);
+            }
+            let result = self
+                .write_node(WriteNodeRequest {
+                    path: request.path.clone(),
+                    kind: NodeKind::File,
+                    content,
+                    metadata_json: current.metadata_json,
+                    expected_etag: request.expected_etag,
+                })
+                .await?;
+            Ok(MultiEditNodeResult {
+                node: result.node,
+                replacement_count: request.edits.len() as u32,
+            })
         }
         async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
             self.ops
@@ -1251,6 +1585,22 @@ mod tests {
                 snippet: request.query_text,
                 score: 1.0,
                 match_reasons: vec!["text".to_string()],
+            }])
+        }
+        async fn search_node_paths(
+            &self,
+            request: SearchNodePathsRequest,
+        ) -> Result<Vec<SearchNodeHit>> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push(format!("search_paths:{}", request.query_text));
+            Ok(vec![SearchNodeHit {
+                path: "/Wiki/bench/node-000000.md".to_string(),
+                kind: NodeKind::File,
+                snippet: "/Wiki/bench/node-000000.md".to_string(),
+                score: 1.0,
+                match_reasons: vec!["path_substring".to_string()],
             }])
         }
         async fn export_snapshot(
@@ -1490,6 +1840,84 @@ mod tests {
         assert_eq!(
             ops.iter()
                 .filter(|entry| entry == &&"search:shared-bench-search".to_string())
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn isolated_glob_measurement_does_not_reseed() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Glob);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        let expected_pattern =
+            crate::vfs_bench::common::glob_pattern(workload.directory_shape).to_string();
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry == &&format!("glob:{expected_pattern}"))
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn fanout_glob_measurement_uses_recursive_pattern() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Glob);
+        workload.directory_shape = DirectoryShape::Fanout100x100;
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry == &&"glob:**/node-*.md".to_string())
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn isolated_recent_measurement_does_not_reseed() {
+        let client = Arc::new(MockClient::default());
+        let mut workload = args(WorkloadOperation::Recent);
+        workload.measurement_mode = MeasurementMode::IsolatedSingleOp;
+        super::setup_workload_with_client(Arc::clone(&client), &workload)
+            .await
+            .unwrap();
+        client.take_ops();
+
+        let result = super::measure_workload_with_client(Arc::clone(&client), workload)
+            .await
+            .unwrap();
+        let ops = client.take_ops();
+
+        assert_eq!(result.request_count, 4);
+        assert!(ops.iter().all(|entry| !entry.starts_with("write:")));
+        assert_eq!(
+            ops.iter()
+                .filter(|entry| entry == &&"recent:4".to_string())
                 .count(),
             4
         );

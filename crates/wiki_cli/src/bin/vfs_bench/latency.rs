@@ -228,7 +228,7 @@ mod tests {
         GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
         MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node,
         NodeEntry, NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-        SearchNodesRequest, Status,
+        SearchNodePathsRequest, SearchNodesRequest, Status,
     };
 
     #[derive(Default)]
@@ -324,6 +324,12 @@ mod tests {
             unreachable!()
         }
         async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+            unreachable!()
+        }
+        async fn search_node_paths(
+            &self,
+            _request: SearchNodePathsRequest,
+        ) -> Result<Vec<SearchNodeHit>> {
             unreachable!()
         }
         async fn export_snapshot(

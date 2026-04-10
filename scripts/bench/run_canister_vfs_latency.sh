@@ -32,18 +32,21 @@ RAW_DIR="$(bench_raw_dir "${RESULT_DIR}")"
 SUMMARY_FILE="${RESULT_DIR}/summary.txt"
 CONFIG_FILE="${RESULT_DIR}/config.txt"
 ENVIRONMENT_FILE="${RESULT_DIR}/environment.txt"
-BENCH_BIN="$(bench_repo_root)/target/debug/vfs_bench"
 write_summary_header "${SUMMARY_FILE}" "canister_vfs_latency"
 write_environment_json "${ENVIRONMENT_FILE}"
 augment_environment_json "${ENVIRONMENT_FILE}" "${REPLICA_HOST}" "${CANISTER_ID}" "ic-agent" "icp" "true"
 
 bench_log "building vfs_bench binary"
+cd "$(bench_repo_root)"
 cargo build -p wiki-cli --bin vfs_bench >/dev/null
+BENCH_BIN="$(bench_vfs_bench_bin)"
 
 node -e '
   const fs = require("fs");
   const [configFile, replicaHost, canisterId] = process.argv.slice(1);
   const parseIterations = (value, fallback) => value ? Number(value) : fallback;
+  const diagnosticProfile = process.env.WIKI_CANISTER_DIAGNOSTIC_PROFILE || "baseline";
+  const replicaResetMode = process.env.BENCH_REPLICA_RESET_MODE || null;
   const sizes = [
     { label: "1k", bytes: 1024, iterations: parseIterations(process.env.LATENCY_ITERATIONS_1K, 200) },
     { label: "10k", bytes: 10240, iterations: parseIterations(process.env.LATENCY_ITERATIONS_10K, 100) },
@@ -62,6 +65,8 @@ node -e '
     replica_host: replicaHost,
     canister_id: canisterId,
     benchmark_transport: "ic-agent",
+    diagnostic_profile: diagnosticProfile,
+    replica_reset_mode: replicaResetMode,
     payload_sizes: sizes,
     scenarios
   }, null, 2) + "\n");
@@ -95,10 +100,8 @@ append_summary() {
       `error=${data.error ?? null}`,
       `cycles_before=${data.cycles_before}`,
       `cycles_after=${data.cycles_after}`,
-      `cycles_delta=${data.cycles_delta}`,
       `setup_cycles_delta=${data.setup_cycles_delta}`,
       `measured_cycles_delta=${data.measured_cycles_delta}`,
-      `cycles_per_request=${data.cycles_per_request}`,
       `cycles_per_measured_request=${data.cycles_per_measured_request}`,
       `cycles_error=${data.cycles_error}`,
       `cycles_source=${data.cycles_source ?? null}`,

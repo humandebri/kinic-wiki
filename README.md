@@ -71,7 +71,6 @@ The repo keeps VFS validation inside the workspace first.
 
 - correctness checklist: [`VFS_CORRECTNESS_CHECKLIST.md`](VFS_CORRECTNESS_CHECKLIST.md)
 - staged validation plan: [`VFS_VALIDATION_PLAN.md`](VFS_VALIDATION_PLAN.md)
-- external benchmark guide: [`VFS_EXTERNAL_BENCHMARKS.md`](VFS_EXTERNAL_BENCHMARKS.md)
 - deployed canister benchmark guide: [`VFS_DEPLOYED_CANISTER_BENCHMARKS.md`](VFS_DEPLOYED_CANISTER_BENCHMARKS.md)
 
 Minimum validation commands:
@@ -83,8 +82,6 @@ Minimum validation commands:
 If your environment has the fixed canbench runtime, also run:
 
 - `bash scripts/run_canbench_guard.sh`
-
-`bash scripts/bench/run_all_vfs_benchmarks.sh` also tries the guard, but skips it when the runtime is missing or the PocketIC version does not match `pocket-ic-server 10.0.0`.
 
 The canbench coverage is centered on these VFS operations:
 
@@ -114,7 +111,6 @@ It executes `N = 1000, 10000, 50000` for:
 
 The validation split is:
 
-- external filesystem-style benchmarks: `fio`, `smallfile`, `SQLite`
 - deployed canister benchmarks: `run_canister_vfs_workload.sh`, `run_canister_vfs_latency.sh`
 - VFS-native scaling benchmarks: `canbench` for `write`, `append`, `move`, `search`, `export_snapshot`, `fetch_updates`
 - memory-quality benchmark harness: `wiki-cli beam-bench` for BEAM-style retrieval evaluation over imported wiki notes
@@ -153,58 +149,25 @@ cargo run -p wiki-cli -- \
 
 The harness imports each conversation under a namespaced prefix such as `/Wiki/beam/beam-run-<timestamp>/<conversation_id>/` and keeps probing answers out of the wiki notes. The `codex` provider defaults to `danger-full-access` so the child Codex process can reach the local PocketIC gateway. This command is intended for manual or dedicated benchmark runs rather than normal CI.
 
-Optional external VFS benchmarks:
-
-- `bash scripts/bench/run_fio_vfs.sh`
-- `bash scripts/bench/run_smallfile_vfs.sh`
-- `bash scripts/bench/run_sqlite_speedtest1.sh`
-- `bash scripts/bench/run_sqlite_commit_latency_vfs.sh`
-- `bash scripts/bench/run_all_vfs_benchmarks.sh`
-
-The external benchmark artifacts are written to `.benchmarks/results/<tool>/<timestamp>/` and always include:
-
-- `summary.txt` for the human-facing summary
-- `config.json` for the true benchmark settings
-- `environment.json` for the execution environment
-- `raw/*.json` or tool-native raw output for the source data
-
-Within SQLite benchmarks, `speedtest1` is a broad reference workload and `commit latency` is the primary durability-sensitive benchmark. Snapshot/export/update scaling remains a `canbench` concern rather than an external filesystem benchmark concern.
-
-Optional deployed canister benchmarks:
+Manual deployed canister benchmarks:
 
 - `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_workload.sh`
 - `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_latency.sh`
+- `bash scripts/bench/run_canister_vfs_fresh_compare.sh`
 
-These runs target an already deployed canister through `ic-agent`. They are not host filesystem benchmarks and they are not `canbench`.
+These runs target an already deployed canister through `ic-agent`. They complement `canbench`: `canbench` is for canister-side scaling and instruction trends, while deployed canister bench is for API-level `cycles + latency + wire IO`.
 
 The deployed benchmark artifacts are written to `.benchmarks/results/<tool>/<timestamp>/` and always include:
 
 - `summary.txt` for the human-facing summary
+  includes both compact `timestamp` and human-readable `generated_at_utc`
 - `config.txt` for the true benchmark settings as JSON text
 - `environment.txt` for the execution environment plus `replica_host`, `canister_id`, `bench_transport`, `canister_status_source`
 - `raw/*.txt` for scenario-level aggregated source data as JSON text
 
-The deployed canister benchmark split is:
+`run_canister_vfs_workload.sh` covers repeated request workloads, `run_canister_vfs_latency.sh` covers single-update latency, and `run_canister_vfs_fresh_compare.sh` is the clean-room entrypoint for FTS diagnosis.
 
-- `run_canister_vfs_workload.sh`: API-centric repeated request benchmarks over `create`, `update`, `append`, `edit`, `move`, `delete`, `read`, `list`, `search`
-- `run_canister_vfs_latency.sh`: single-update mutation latency over `write_node` and `append_node`
-
-The deployed canister benchmark focus is:
-
-- primary metrics: `cycles + latency + wire IO`
-- payload sizes: `1k`, `10k`, `100k`, `1MB`
-- cycles source: `icp canister status --json`
-- update-heavy scenarios default to `isolated_single_op`
-- query and fallback scenarios keep `scenario_total`
-- update response contract: `write / append / edit / move / delete / multi_edit` return a lightweight ACK, not full node content
-
-Interpretation notes:
-
-- `isolated_single_op` writes seed data only in setup and measures only the pure API calls in the measure phase
-- `isolated_single_op` saves `setup_cycles_delta` plus `measured_cycles_delta`
-- `cycles_per_measured_request` is the primary cost field for isolated update scenarios
-- `scenario_total` remains as a compatibility metric for query-style scenarios and legacy comparisons
-- `WIKI_CANISTER_DIAGNOSTIC_PROFILE=fts_disabled_for_bench` excludes `search` from the default workload matrix because FTS maintenance is intentionally disabled and the resulting search behavior is not comparable to baseline
+The contract for measurement mode, operation matrix, artifact format, and interpretation is maintained in [`VFS_DEPLOYED_CANISTER_BENCHMARKS.md`](VFS_DEPLOYED_CANISTER_BENCHMARKS.md). README keeps only the entrypoints and the high-level role split.
 
 Validation boundary for the current benchmark changes:
 
@@ -230,6 +193,7 @@ The public API is VFS-first.
 | `glob_nodes` | Shell-style path matching |
 | `recent_nodes` | Recently updated nodes |
 | `search_nodes` | Full-text search across current content |
+| `search_node_paths` | Case-insensitive substring search across current node paths and filenames |
 | `export_snapshot` | Export the current snapshot |
 | `fetch_updates` | Fetch changes since a known snapshot revision |
 
@@ -463,6 +427,9 @@ Main tables:
 - `fs_nodes`
 - `fs_nodes_fts`
 - `fs_change_log`
+
+Fresh bootstrap creates the current rowid-backed schema directly.
+Legacy `fs_nodes(path PRIMARY KEY, ...)` databases are not auto-migrated anymore and must be rebuilt before using the current canister bootstrap.
 
 ## Conflict model
 

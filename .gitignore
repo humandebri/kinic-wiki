@@ -32,6 +32,8 @@ __pycache__/
 /.icp/cache/
 /.canbench/
 /.canbench-tools/
+/canbench_results.yml
+/canbench_results.csv
 /.benchmarks/
 /artifacts/canbench/
 /artifacts/.DS_Store
