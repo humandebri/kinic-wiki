@@ -3,8 +3,8 @@ use wiki_runtime::WikiService;
 use wiki_types::{
     AppendNodeRequest, EditNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType,
     GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
-    MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodesRequest,
-    WriteNodeRequest,
+    MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodePathsRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
 
 fn new_service() -> WikiService {
@@ -51,7 +51,7 @@ fn fs_service_delegates_to_fs_store() {
             WriteNodeRequest {
                 path: "/Wiki/nested/beta.md".to_string(),
                 kind: NodeKind::File,
-                content: "nested body".to_string(),
+                content: "beta body".to_string(),
                 metadata_json: "{}".to_string(),
                 expected_etag: None,
             },
@@ -80,8 +80,17 @@ fn fs_service_delegates_to_fs_store() {
             top_k: 5,
         })
         .expect("search should succeed");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].path, "/Wiki/nested/beta.md");
+    assert!(hits.is_empty());
+
+    let path_hits = service
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "NeStEd".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 5,
+        })
+        .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/nested/beta.md");
 
     let snapshot = service
         .export_fs_snapshot(ExportSnapshotRequest {
@@ -142,7 +151,14 @@ fn fs_service_exposes_minimal_vfs_methods() {
         )
         .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    assert_eq!(edited.node.content, "beta");
+    assert_eq!(
+        service
+            .read_node("/Wiki/work/log.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "beta"
+    );
 }
 
 #[test]
@@ -212,5 +228,12 @@ fn fs_service_exposes_extended_vfs_methods() {
         )
         .expect("multi edit should succeed");
     assert_eq!(multi_edited.replacement_count, 2);
-    assert_eq!(multi_edited.node.content, "after beta");
+    assert_eq!(
+        service
+            .read_node("/Wiki/nested/b.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "after beta"
+    );
 }

@@ -10,8 +10,8 @@ use wiki_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    NodeKind, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodesRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
+    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[derive(Default)]
@@ -26,6 +26,7 @@ pub(crate) struct MockClient {
     pub(crate) globs: std::sync::Mutex<Vec<GlobNodesRequest>>,
     pub(crate) recents: std::sync::Mutex<Vec<RecentNodesRequest>>,
     pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+    pub(crate) path_searches: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
 }
 
 #[async_trait]
@@ -39,7 +40,16 @@ impl WikiApi for MockClient {
     }
 
     async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
-        Ok(None)
+        Ok(Some(Node {
+            path: _path.to_string(),
+            kind: NodeKind::File,
+            content: "# Remote".to_string(),
+            created_at: 1,
+            updated_at: 3,
+            etag: "etag-2".to_string(),
+            deleted_at: None,
+            metadata_json: "{}".to_string(),
+        }))
     }
 
     async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -53,15 +63,12 @@ impl WikiApi for MockClient {
             .push(request.clone());
         Ok(WriteNodeResult {
             created: false,
-            node: Node {
+            node: NodeMutationAck {
                 path: request.path,
                 kind: request.kind,
-                content: request.content,
-                created_at: 1,
                 updated_at: 3,
                 etag: "etag-2".to_string(),
                 deleted_at: None,
-                metadata_json: request.metadata_json,
             },
         })
     }
@@ -73,15 +80,12 @@ impl WikiApi for MockClient {
             .push(request.clone());
         Ok(WriteNodeResult {
             created: false,
-            node: Node {
+            node: NodeMutationAck {
                 path: request.path,
                 kind: request.kind.unwrap_or(NodeKind::File),
-                content: request.content,
-                created_at: 1,
                 updated_at: 3,
                 etag: "etag-appended".to_string(),
                 deleted_at: None,
-                metadata_json: request.metadata_json.unwrap_or_else(|| "{}".to_string()),
             },
         })
     }
@@ -92,15 +96,12 @@ impl WikiApi for MockClient {
             .expect("edits should lock")
             .push(request.clone());
         Ok(EditNodeResult {
-            node: Node {
+            node: NodeMutationAck {
                 path: request.path,
                 kind: NodeKind::File,
-                content: request.new_text,
-                created_at: 1,
                 updated_at: 3,
                 etag: "etag-edited".to_string(),
                 deleted_at: None,
-                metadata_json: "{}".to_string(),
             },
             replacement_count: 1,
         })
@@ -137,15 +138,12 @@ impl WikiApi for MockClient {
         Ok(MoveNodeResult {
             from_path: request.from_path,
             overwrote: request.overwrite,
-            node: Node {
+            node: NodeMutationAck {
                 path: request.to_path,
                 kind: NodeKind::File,
-                content: "moved".to_string(),
-                created_at: 1,
                 updated_at: 5,
                 etag: "etag-moved".to_string(),
                 deleted_at: None,
-                metadata_json: "{}".to_string(),
             },
         })
     }
@@ -169,21 +167,29 @@ impl WikiApi for MockClient {
             .expect("multi edits should lock")
             .push(request.clone());
         Ok(MultiEditNodeResult {
-            node: Node {
+            node: NodeMutationAck {
                 path: request.path,
                 kind: NodeKind::File,
-                content: "multi-edited".to_string(),
-                created_at: 1,
                 updated_at: 6,
                 etag: "etag-multi-edit".to_string(),
                 deleted_at: None,
-                metadata_json: "{}".to_string(),
             },
             replacement_count: 2,
         })
     }
 
     async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        Ok(Vec::new())
+    }
+
+    async fn search_node_paths(
+        &self,
+        request: SearchNodePathsRequest,
+    ) -> Result<Vec<SearchNodeHit>> {
+        self.path_searches
+            .lock()
+            .expect("path searches should lock")
+            .push(request);
         Ok(Vec::new())
     }
 

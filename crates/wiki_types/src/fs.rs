@@ -7,15 +7,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Source")]
     Source,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeEntryKind {
+    #[serde(alias = "Directory")]
     Directory,
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Source")]
     Source,
 }
 
@@ -58,8 +63,17 @@ pub struct WriteNodeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeMutationAck {
+    pub path: String,
+    pub kind: NodeKind,
+    pub updated_at: i64,
+    pub etag: String,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct WriteNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub created: bool,
 }
 
@@ -84,7 +98,7 @@ pub struct EditNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct EditNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub replacement_count: u32,
 }
 
@@ -109,7 +123,7 @@ pub struct MoveNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MoveNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub from_path: String,
     pub overwrote: bool,
 }
@@ -117,8 +131,11 @@ pub struct MoveNodeResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum GlobNodeType {
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Directory")]
     Directory,
+    #[serde(alias = "Any")]
     Any,
 }
 
@@ -167,7 +184,7 @@ pub struct MultiEditNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MultiEditNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub replacement_count: u32,
 }
 
@@ -186,6 +203,13 @@ pub struct DeleteNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct SearchNodesRequest {
+    pub query_text: String,
+    pub prefix: Option<String>,
+    pub top_k: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SearchNodePathsRequest {
     pub query_text: String,
     pub prefix: Option<String>,
     pub top_k: u32,
@@ -224,4 +248,37 @@ pub struct FetchUpdatesResponse {
     pub snapshot_revision: String,
     pub changed_nodes: Vec<Node>,
     pub removed_paths: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlobNodeType, NodeEntryKind, NodeKind};
+    use serde::{
+        Deserialize,
+        de::value::{Error, StrDeserializer},
+    };
+
+    #[test]
+    fn node_kind_deserializes_uppercase_aliases() {
+        let kind: NodeKind = NodeKind::deserialize(StrDeserializer::<Error>::new("File"))
+            .expect("uppercase alias should decode");
+        assert_eq!(kind, NodeKind::File);
+
+        let kind: NodeKind = NodeKind::deserialize(StrDeserializer::<Error>::new("source"))
+            .expect("snake_case should decode");
+        assert_eq!(kind, NodeKind::Source);
+    }
+
+    #[test]
+    fn entry_and_glob_kinds_deserialize_uppercase_aliases() {
+        let entry: NodeEntryKind =
+            NodeEntryKind::deserialize(StrDeserializer::<Error>::new("Directory"))
+                .expect("uppercase alias should decode");
+        assert_eq!(entry, NodeEntryKind::Directory);
+
+        let node_type: GlobNodeType =
+            GlobNodeType::deserialize(StrDeserializer::<Error>::new("Any"))
+                .expect("uppercase alias should decode");
+        assert_eq!(node_type, GlobNodeType::Any);
+    }
 }

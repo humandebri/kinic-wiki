@@ -7,13 +7,13 @@ use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest,
-    SearchNodesRequest, WriteNodeRequest,
+    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 use super::{
     SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_nodes,
-    status, write_node,
+    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_node_paths,
+    search_nodes, status, write_node,
 };
 
 fn install_test_service() {
@@ -95,6 +95,15 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "/Wiki/foo.md");
 
+    let path_hits = search_node_paths(SearchNodePathsRequest {
+        query_text: "NeStEd".to_string(),
+        prefix: Some("/Wiki".to_string()),
+        top_k: 5,
+    })
+    .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/nested/bar.md");
+
     let snapshot = export_snapshot(ExportSnapshotRequest {
         prefix: Some("/Wiki".to_string()),
         include_deleted: false,
@@ -174,7 +183,10 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
         kind: None,
     })
     .expect("append update should succeed");
-    assert_eq!(appended_again.node.content, "alpha\nbeta");
+    let appended_node = read_node("/Wiki/work/log.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(appended_node.content, "alpha\nbeta");
 
     let edited = edit_node(EditNodeRequest {
         path: "/Wiki/work/log.md".to_string(),
@@ -185,7 +197,10 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     })
     .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    assert_eq!(edited.node.content, "alpha\ngamma");
+    let edited_node = read_node("/Wiki/work/log.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(edited_node.content, "alpha\ngamma");
 }
 
 #[test]
@@ -247,7 +262,10 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     })
     .expect("multi edit should succeed");
     assert_eq!(edited.replacement_count, 2);
-    assert_eq!(edited.node.content, "one two");
+    let edited_node = read_node("/Wiki/archive/item.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(edited_node.content, "one two");
 }
 
 #[test]

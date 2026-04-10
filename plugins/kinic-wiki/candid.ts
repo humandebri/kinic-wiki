@@ -141,6 +141,11 @@ export interface KinicCanisterApi {
     prefix: [] | [string];
     top_k: number;
   }) => Promise<RawResult<RawSearchNodeHit[]>>;
+  search_node_paths: (request: {
+    query_text: string;
+    prefix: [] | [string];
+    top_k: number;
+  }) => Promise<RawResult<RawSearchNodeHit[]>>;
   export_snapshot: (request: {
     prefix: [] | [string];
     include_deleted: boolean;
@@ -268,6 +273,11 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
       expected_etag: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Record({ node: Node, replacement_count: candid.Nat32 }), Err: candid.Text })], []),
     search_nodes: candid.Func([candid.Record({
+      query_text: candid.Text,
+      prefix: candid.Opt(candid.Text),
+      top_k: candid.Nat32
+    })], [candid.Variant({ Ok: candid.Vec(SearchNodeHit), Err: candid.Text })], ["query"]),
+    search_node_paths: candid.Func([candid.Record({
       query_text: candid.Text,
       prefix: candid.Opt(candid.Text),
       top_k: candid.Nat32

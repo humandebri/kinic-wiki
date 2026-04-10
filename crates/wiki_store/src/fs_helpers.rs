@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use wiki_types::{Node, NodeEntry, NodeEntryKind, NodeKind};
+use wiki_types::{Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck};
 
 use crate::hashing::sha256_hex;
 
@@ -37,26 +37,64 @@ pub(crate) fn normalize_node_path(path: &str, allow_root: bool) -> Result<String
 }
 
 pub(crate) fn compute_node_etag(node: &Node) -> String {
-    let deleted_at = node
+    let deleted = node
         .deleted_at
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-    sha256_hex(&format!(
+        .map_or_else(|| "null".to_string(), |value| value.to_string());
+    let payload = format!(
         "{}\n{}\n{}\n{}\n{}",
         node.path,
-        node_kind_to_db(&node.kind),
+        node_kind_tag(&node.kind),
         node.content,
         node.metadata_json,
-        deleted_at
-    ))
+        deleted
+    );
+    format!("v4h:{}", sha256_hex(&payload))
+}
+
+pub(crate) fn node_ack(node: &Node) -> NodeMutationAck {
+    NodeMutationAck {
+        path: node.path.clone(),
+        kind: node.kind.clone(),
+        updated_at: node.updated_at,
+        etag: node.etag.clone(),
+        deleted_at: node.deleted_at,
+    }
+}
+
+pub(crate) struct StoredNode {
+    pub(crate) row_id: i64,
+    pub(crate) node: Node,
+}
+
+#[derive(Clone)]
+pub(crate) struct ScopedEntryRow {
+    pub(crate) path: String,
+    pub(crate) kind: NodeKind,
+    pub(crate) updated_at: i64,
+    pub(crate) etag: String,
+    pub(crate) deleted_at: Option<i64>,
+}
+
+fn node_kind_tag(kind: &NodeKind) -> &'static str {
+    match kind {
+        NodeKind::File => "file",
+        NodeKind::Source => "source",
+    }
 }
 
 pub(crate) fn load_node(conn: &Connection, path: &str) -> Result<Option<Node>, String> {
+    Ok(load_stored_node(conn, path)?.map(|stored| stored.node))
+}
+
+pub(crate) fn load_stored_node(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<StoredNode>, String> {
     conn.query_row(
-        "SELECT path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
+        "SELECT id, path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
          FROM fs_nodes WHERE path = ?1",
         params![path],
-        map_node,
+        map_stored_node,
     )
     .optional()
     .map_err(|error| error.to_string())
@@ -88,53 +126,86 @@ pub(crate) fn load_scoped_nodes(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn build_entries(nodes: &[Node], prefix: &str, recursive: bool) -> Vec<NodeEntry> {
+pub(crate) fn load_scoped_entry_rows(
+    conn: &Connection,
+    prefix: &str,
+    include_deleted: bool,
+) -> Result<Vec<ScopedEntryRow>, String> {
+    let mut sql = String::from(
+        "SELECT path, kind, updated_at, etag, deleted_at
+         FROM fs_nodes WHERE 1 = 1",
+    );
+    let mut values = Vec::new();
+    if !include_deleted {
+        sql.push_str(" AND deleted_at IS NULL");
+    }
+    if prefix != "/" {
+        let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
+        sql.push_str(&scope_sql);
+        values.extend(scope_values);
+    }
+    sql.push_str(" ORDER BY path ASC");
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    stmt.query_map(
+        rusqlite::params_from_iter(values.iter()),
+        map_scoped_entry_row,
+    )
+    .map_err(|error| error.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn build_entries_from_rows(
+    rows: &[ScopedEntryRow],
+    prefix: &str,
+    recursive: bool,
+) -> Vec<NodeEntry> {
     if recursive {
-        return nodes
+        return rows
             .iter()
-            .map(|node| NodeEntry {
-                path: node.path.clone(),
-                kind: entry_kind_from_node_kind(&node.kind),
-                updated_at: node.updated_at,
-                etag: node.etag.clone(),
-                deleted_at: node.deleted_at,
-                has_children: has_visible_descendants(nodes, &node.path),
+            .map(|row| NodeEntry {
+                path: row.path.clone(),
+                kind: entry_kind_from_node_kind(&row.kind),
+                updated_at: row.updated_at,
+                etag: row.etag.clone(),
+                deleted_at: row.deleted_at,
+                has_children: has_visible_descendants(rows, &row.path),
             })
             .collect();
     }
 
     let mut entries = BTreeMap::new();
-    for node in nodes {
-        if let Some(child_path) = direct_child_path(prefix, &node.path) {
-            if child_path != node.path && node.deleted_at.is_some() {
+    for row in rows {
+        if let Some(child_path) = direct_child_path(prefix, &row.path) {
+            if child_path != row.path && row.deleted_at.is_some() {
                 continue;
             }
             entries
                 .entry(child_path.clone())
                 .and_modify(|entry: &mut NodeEntry| {
-                    if child_path == node.path {
-                        entry.kind = entry_kind_from_node_kind(&node.kind);
-                        entry.updated_at = node.updated_at;
-                        entry.etag = node.etag.clone();
-                        entry.deleted_at = node.deleted_at;
+                    if child_path == row.path {
+                        entry.kind = entry_kind_from_node_kind(&row.kind);
+                        entry.updated_at = row.updated_at;
+                        entry.etag = row.etag.clone();
+                        entry.deleted_at = row.deleted_at;
                     } else if entry.kind == NodeEntryKind::Directory {
-                        entry.updated_at = entry.updated_at.max(node.updated_at);
+                        entry.updated_at = entry.updated_at.max(row.updated_at);
                     }
-                    entry.has_children = has_visible_descendants(nodes, &child_path);
+                    entry.has_children = has_visible_descendants(rows, &child_path);
                 })
-                .or_insert_with(|| match child_path == node.path {
+                .or_insert_with(|| match child_path == row.path {
                     true => NodeEntry {
-                        path: node.path.clone(),
-                        kind: entry_kind_from_node_kind(&node.kind),
-                        updated_at: node.updated_at,
-                        etag: node.etag.clone(),
-                        deleted_at: node.deleted_at,
-                        has_children: has_visible_descendants(nodes, &node.path),
+                        path: row.path.clone(),
+                        kind: entry_kind_from_node_kind(&row.kind),
+                        updated_at: row.updated_at,
+                        etag: row.etag.clone(),
+                        deleted_at: row.deleted_at,
+                        has_children: has_visible_descendants(rows, &row.path),
                     },
                     false => NodeEntry {
                         path: child_path.clone(),
                         kind: NodeEntryKind::Directory,
-                        updated_at: directory_updated_at(nodes, &child_path),
+                        updated_at: directory_updated_at(rows, &child_path),
                         etag: String::new(),
                         deleted_at: None,
                         has_children: true,
@@ -146,27 +217,30 @@ pub(crate) fn build_entries(nodes: &[Node], prefix: &str, recursive: bool) -> Ve
     entries.into_values().collect()
 }
 
-pub(crate) fn build_glob_entries(nodes: &[Node], prefix: &str) -> Vec<NodeEntry> {
+pub(crate) fn build_glob_entries_from_rows(
+    rows: &[ScopedEntryRow],
+    prefix: &str,
+) -> Vec<NodeEntry> {
     let mut entries = BTreeMap::new();
-    for node in nodes {
+    for row in rows {
         entries.insert(
-            node.path.clone(),
+            row.path.clone(),
             NodeEntry {
-                path: node.path.clone(),
-                kind: entry_kind_from_node_kind(&node.kind),
-                updated_at: node.updated_at,
-                etag: node.etag.clone(),
-                deleted_at: node.deleted_at,
-                has_children: has_visible_descendants(nodes, &node.path),
+                path: row.path.clone(),
+                kind: entry_kind_from_node_kind(&row.kind),
+                updated_at: row.updated_at,
+                etag: row.etag.clone(),
+                deleted_at: row.deleted_at,
+                has_children: has_visible_descendants(rows, &row.path),
             },
         );
-        for directory_path in ancestor_directory_paths(prefix, &node.path) {
+        for directory_path in ancestor_directory_paths(prefix, &row.path) {
             entries
                 .entry(directory_path.clone())
                 .or_insert_with(|| NodeEntry {
                     path: directory_path.clone(),
                     kind: NodeEntryKind::Directory,
-                    updated_at: directory_updated_at(nodes, &directory_path),
+                    updated_at: directory_updated_at(rows, &directory_path),
                     etag: String::new(),
                     deleted_at: None,
                     has_children: true,
@@ -225,10 +299,18 @@ pub(crate) fn prefix_filter_sql(
     prefix: &str,
     start_index: usize,
 ) -> (String, Vec<rusqlite::types::Value>) {
+    prefix_filter_sql_for_column("path", prefix, start_index)
+}
+
+pub(crate) fn prefix_filter_sql_for_column(
+    column_name: &str,
+    prefix: &str,
+    start_index: usize,
+) -> (String, Vec<rusqlite::types::Value>) {
     let equal_index = start_index;
     let like_index = start_index + 1;
     (
-        format!(" AND (path = ?{equal_index} OR path LIKE ?{like_index})"),
+        format!(" AND ({column_name} = ?{equal_index} OR {column_name} LIKE ?{like_index})"),
         vec![
             rusqlite::types::Value::from(prefix.to_string()),
             rusqlite::types::Value::from(format!("{prefix}/%")),
@@ -265,6 +347,32 @@ fn map_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<Node> {
         etag: row.get(5)?,
         deleted_at: row.get(6)?,
         metadata_json: row.get(7)?,
+    })
+}
+
+fn map_stored_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {
+    Ok(StoredNode {
+        row_id: row.get(0)?,
+        node: Node {
+            path: row.get(1)?,
+            kind: node_kind_from_db(&row.get::<_, String>(2)?)?,
+            content: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+            etag: row.get(6)?,
+            deleted_at: row.get(7)?,
+            metadata_json: row.get(8)?,
+        },
+    })
+}
+
+fn map_scoped_entry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScopedEntryRow> {
+    Ok(ScopedEntryRow {
+        path: row.get(0)?,
+        kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
+        updated_at: row.get(2)?,
+        etag: row.get(3)?,
+        deleted_at: row.get(4)?,
     })
 }
 
@@ -324,19 +432,17 @@ fn hex_encode(bytes: &[u8]) -> String {
     encoded
 }
 
-fn directory_updated_at(nodes: &[Node], child_prefix: &str) -> i64 {
-    nodes
-        .iter()
-        .filter(|node| node.path.starts_with(&format!("{child_prefix}/")))
-        .map(|node| node.updated_at)
+fn directory_updated_at(rows: &[ScopedEntryRow], child_prefix: &str) -> i64 {
+    rows.iter()
+        .filter(|row| row.path.starts_with(&format!("{child_prefix}/")))
+        .map(|row| row.updated_at)
         .max()
         .unwrap_or(0)
 }
 
-fn has_visible_descendants(nodes: &[Node], child_prefix: &str) -> bool {
-    nodes
-        .iter()
-        .any(|node| node.path.starts_with(&format!("{child_prefix}/")))
+fn has_visible_descendants(rows: &[ScopedEntryRow], child_prefix: &str) -> bool {
+    rows.iter()
+        .any(|row| row.path.starts_with(&format!("{child_prefix}/")))
 }
 
 fn snapshot_line(node: &Node) -> String {

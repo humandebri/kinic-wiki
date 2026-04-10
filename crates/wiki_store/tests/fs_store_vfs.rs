@@ -4,7 +4,7 @@ use wiki_store::FsStore;
 use wiki_types::{
     AppendNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind,
-    RecentNodesRequest,
+    RecentNodesRequest, SearchNodePathsRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -34,7 +34,14 @@ fn append_node_creates_updates_and_checks_etag() {
         )
         .expect("append create should succeed");
     assert!(created.created);
-    assert_eq!(created.node.content, "alpha");
+    assert_eq!(
+        store
+            .read_node("/Wiki/log.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "alpha"
+    );
 
     let updated = store
         .append_node(
@@ -49,7 +56,14 @@ fn append_node_creates_updates_and_checks_etag() {
             11,
         )
         .expect("append update should succeed");
-    assert_eq!(updated.node.content, "alpha\nbeta");
+    assert_eq!(
+        store
+            .read_node("/Wiki/log.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "alpha\nbeta"
+    );
     assert_ne!(updated.node.etag, created.node.etag);
 
     let stale = store
@@ -86,7 +100,7 @@ fn append_node_preserves_existing_kind_and_metadata() {
         )
         .expect("append create should succeed");
 
-    let updated = store
+    let _updated = store
         .append_node(
             AppendNodeRequest {
                 path: "/Wiki/log.md".to_string(),
@@ -100,9 +114,13 @@ fn append_node_preserves_existing_kind_and_metadata() {
         )
         .expect("append update should succeed");
 
-    assert_eq!(updated.node.kind, NodeKind::Source);
-    assert_eq!(updated.node.metadata_json, "{\"v\":1}");
-    assert_eq!(updated.node.content, "alpha\nbeta");
+    let current = store
+        .read_node("/Wiki/log.md")
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(current.kind, NodeKind::Source);
+    assert_eq!(current.metadata_json, "{\"v\":1}");
+    assert_eq!(current.content, "alpha\nbeta");
 }
 
 #[test]
@@ -149,7 +167,14 @@ fn edit_node_enforces_plain_text_replacement_rules() {
         )
         .expect("replace_all edit should succeed");
     assert_eq!(edited.replacement_count, 2);
-    assert_eq!(edited.node.content, "three two three");
+    assert_eq!(
+        store
+            .read_node("/Wiki/edit.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "three two three"
+    );
 
     let missing = store
         .edit_node(
@@ -217,6 +242,15 @@ fn move_node_renames_and_updates_search() {
             10,
         )
         .expect("create should succeed");
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let before_row_id: i64 = conn
+        .query_row(
+            "SELECT id FROM fs_nodes WHERE path = ?1",
+            ["/Wiki/from.md"],
+            |row| row.get(0),
+        )
+        .expect("source row id should exist");
+    drop(conn);
 
     let moved = store
         .move_node(
@@ -244,6 +278,16 @@ fn move_node_renames_and_updates_search() {
         .expect("new node should exist");
     assert_eq!(new.content, "alpha");
 
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let current_row_id: i64 = conn
+        .query_row(
+            "SELECT id FROM fs_nodes WHERE path = ?1",
+            ["/Wiki/to.md"],
+            |row| row.get(0),
+        )
+        .expect("moved row id should exist");
+    assert_eq!(current_row_id, before_row_id);
+
     let hits = store
         .search_nodes(wiki_types::SearchNodesRequest {
             query_text: "alpha".to_string(),
@@ -251,8 +295,22 @@ fn move_node_renames_and_updates_search() {
             top_k: 5,
         })
         .expect("search should succeed");
+    #[cfg(feature = "bench-disable-fts")]
+    assert!(hits.is_empty());
+    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(hits.len(), 1);
+    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(hits[0].path, "/Wiki/to.md");
+
+    let path_hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "TO".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 5,
+        })
+        .expect("path search should succeed");
+    assert_eq!(path_hits.len(), 1);
+    assert_eq!(path_hits[0].path, "/Wiki/to.md");
 }
 
 #[test]
@@ -299,7 +357,6 @@ fn move_node_overwrite_replaces_live_target() {
 
     assert!(moved.overwrote);
     assert_eq!(moved.node.path, "/Wiki/to.md");
-    assert_eq!(moved.node.content, "source");
     assert!(
         store
             .read_node("/Wiki/from.md")
@@ -369,7 +426,14 @@ fn move_node_overwrite_revives_tombstoned_target() {
 
     assert!(!moved.overwrote);
     assert!(moved.node.deleted_at.is_none());
-    assert_eq!(moved.node.content, "source");
+    assert_eq!(
+        store
+            .read_node("/Wiki/to.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "source"
+    );
 }
 
 #[test]
@@ -433,6 +497,58 @@ fn glob_nodes_matches_files_and_virtual_directories() {
             .iter()
             .any(|hit| hit.path == "/Wiki/nested" && hit.kind == NodeEntryKind::Directory)
     );
+}
+
+#[test]
+fn list_and_glob_do_not_depend_on_large_content_loading() {
+    let (_dir, store) = new_store();
+    let large = "x".repeat(128 * 1024);
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/large.md".to_string(),
+                content: large,
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("large create should succeed");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/nested/child.md".to_string(),
+                content: "child".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("nested create should succeed");
+
+    let list = store
+        .list_nodes(ListNodesRequest {
+            prefix: "/Wiki".to_string(),
+            recursive: false,
+            include_deleted: false,
+        })
+        .expect("list should succeed");
+    assert!(list.iter().any(|entry| entry.path == "/Wiki/large.md"));
+    assert!(list.iter().any(|entry| entry.path == "/Wiki/nested"));
+
+    let glob = store
+        .glob_nodes(GlobNodesRequest {
+            pattern: "**/*.md".to_string(),
+            path: Some("/Wiki".to_string()),
+            node_type: Some(GlobNodeType::File),
+        })
+        .expect("glob should succeed");
+    assert!(glob.iter().any(|hit| hit.path == "/Wiki/large.md"));
+    assert!(glob.iter().any(|hit| hit.path == "/Wiki/nested/child.md"));
 }
 
 #[test]
@@ -590,7 +706,14 @@ fn multi_edit_node_is_atomic() {
         )
         .expect("multi edit should succeed");
     assert_eq!(updated.replacement_count, 2);
-    assert_eq!(updated.node.content, "one beta three");
+    assert_eq!(
+        store
+            .read_node("/Wiki/multi.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "one beta three"
+    );
 
     let failed = store
         .multi_edit_node(

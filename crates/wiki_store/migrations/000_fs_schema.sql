@@ -1,5 +1,6 @@
 CREATE TABLE fs_nodes (
-    path TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
     kind TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -10,13 +11,13 @@ CREATE TABLE fs_nodes (
 );
 
 CREATE VIRTUAL TABLE fs_nodes_fts USING fts5(
-    path,
-    kind,
-    content
+    content,
+    content='fs_nodes',
+    content_rowid='id'
 );
 
-INSERT INTO fs_nodes_fts (path, kind, content)
-SELECT path, kind, content
+INSERT INTO fs_nodes_fts (rowid, content)
+SELECT id, content
 FROM fs_nodes
 WHERE deleted_at IS NULL;
 
