@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use wiki_types::{Node, NodeEntry, NodeEntryKind, NodeKind};
+use wiki_types::{Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck};
 
 use crate::hashing::sha256_hex;
 
@@ -37,26 +37,55 @@ pub(crate) fn normalize_node_path(path: &str, allow_root: bool) -> Result<String
 }
 
 pub(crate) fn compute_node_etag(node: &Node) -> String {
-    let deleted_at = node
+    let deleted = node
         .deleted_at
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-    sha256_hex(&format!(
+        .map_or_else(|| "null".to_string(), |value| value.to_string());
+    let payload = format!(
         "{}\n{}\n{}\n{}\n{}",
         node.path,
-        node_kind_to_db(&node.kind),
+        node_kind_tag(&node.kind),
         node.content,
         node.metadata_json,
-        deleted_at
-    ))
+        deleted
+    );
+    format!("v4h:{}", sha256_hex(&payload))
+}
+
+pub(crate) fn node_ack(node: &Node) -> NodeMutationAck {
+    NodeMutationAck {
+        path: node.path.clone(),
+        kind: node.kind.clone(),
+        updated_at: node.updated_at,
+        etag: node.etag.clone(),
+        deleted_at: node.deleted_at,
+    }
+}
+
+pub(crate) struct StoredNode {
+    pub(crate) row_id: i64,
+    pub(crate) node: Node,
+}
+
+fn node_kind_tag(kind: &NodeKind) -> &'static str {
+    match kind {
+        NodeKind::File => "file",
+        NodeKind::Source => "source",
+    }
 }
 
 pub(crate) fn load_node(conn: &Connection, path: &str) -> Result<Option<Node>, String> {
+    Ok(load_stored_node(conn, path)?.map(|stored| stored.node))
+}
+
+pub(crate) fn load_stored_node(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<StoredNode>, String> {
     conn.query_row(
-        "SELECT path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
+        "SELECT id, path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
          FROM fs_nodes WHERE path = ?1",
         params![path],
-        map_node,
+        map_stored_node,
     )
     .optional()
     .map_err(|error| error.to_string())
@@ -225,10 +254,18 @@ pub(crate) fn prefix_filter_sql(
     prefix: &str,
     start_index: usize,
 ) -> (String, Vec<rusqlite::types::Value>) {
+    prefix_filter_sql_for_column("path", prefix, start_index)
+}
+
+pub(crate) fn prefix_filter_sql_for_column(
+    column_name: &str,
+    prefix: &str,
+    start_index: usize,
+) -> (String, Vec<rusqlite::types::Value>) {
     let equal_index = start_index;
     let like_index = start_index + 1;
     (
-        format!(" AND (path = ?{equal_index} OR path LIKE ?{like_index})"),
+        format!(" AND ({column_name} = ?{equal_index} OR {column_name} LIKE ?{like_index})"),
         vec![
             rusqlite::types::Value::from(prefix.to_string()),
             rusqlite::types::Value::from(format!("{prefix}/%")),
@@ -265,6 +302,22 @@ fn map_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<Node> {
         etag: row.get(5)?,
         deleted_at: row.get(6)?,
         metadata_json: row.get(7)?,
+    })
+}
+
+fn map_stored_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {
+    Ok(StoredNode {
+        row_id: row.get(0)?,
+        node: Node {
+            path: row.get(1)?,
+            kind: node_kind_from_db(&row.get::<_, String>(2)?)?,
+            content: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+            etag: row.get(6)?,
+            deleted_at: row.get(7)?,
+            metadata_json: row.get(8)?,
+        },
     })
 }
 

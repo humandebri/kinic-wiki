@@ -174,7 +174,10 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
         kind: None,
     })
     .expect("append update should succeed");
-    assert_eq!(appended_again.node.content, "alpha\nbeta");
+    let appended_node = read_node("/Wiki/work/log.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(appended_node.content, "alpha\nbeta");
 
     let edited = edit_node(EditNodeRequest {
         path: "/Wiki/work/log.md".to_string(),
@@ -185,7 +188,10 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     })
     .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    assert_eq!(edited.node.content, "alpha\ngamma");
+    let edited_node = read_node("/Wiki/work/log.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(edited_node.content, "alpha\ngamma");
 }
 
 #[test]
@@ -247,7 +253,10 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     })
     .expect("multi edit should succeed");
     assert_eq!(edited.replacement_count, 2);
-    assert_eq!(edited.node.content, "one two");
+    let edited_node = read_node("/Wiki/archive/item.md".to_string())
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(edited_node.content, "one two");
 }
 
 #[test]

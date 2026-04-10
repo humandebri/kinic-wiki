@@ -142,7 +142,14 @@ fn fs_service_exposes_minimal_vfs_methods() {
         )
         .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    assert_eq!(edited.node.content, "beta");
+    assert_eq!(
+        service
+            .read_node("/Wiki/work/log.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "beta"
+    );
 }
 
 #[test]
@@ -212,5 +219,12 @@ fn fs_service_exposes_extended_vfs_methods() {
         )
         .expect("multi edit should succeed");
     assert_eq!(multi_edited.replacement_count, 2);
-    assert_eq!(multi_edited.node.content, "after beta");
+    assert_eq!(
+        service
+            .read_node("/Wiki/nested/b.md")
+            .expect("read should succeed")
+            .expect("node should exist")
+            .content,
+        "after beta"
+    );
 }

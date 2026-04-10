@@ -67,7 +67,15 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
                 100 + index as i64,
             )
             .expect("size write should succeed");
-        assert_eq!(created.node.content.len(), size);
+        assert_eq!(
+            store
+                .read_node(&path)
+                .expect("read should succeed")
+                .expect("node should exist")
+                .content
+                .len(),
+            size
+        );
 
         let appended = store
             .append_node(
@@ -82,12 +90,20 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
                 200 + index as i64,
             )
             .expect("append should succeed");
-        assert!(appended.node.content.len() > size);
+        assert!(
+            store
+                .read_node(&path)
+                .expect("read should succeed")
+                .expect("node should exist")
+                .content
+                .len()
+                > size
+        );
 
         let edited = store
             .edit_node(
                 wiki_types::EditNodeRequest {
-                    path,
+                    path: path.clone(),
                     old_text: marker.clone(),
                     new_text: format!("UPDATED_{size}"),
                     expected_etag: Some(appended.node.etag),
@@ -97,7 +113,14 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
             )
             .expect("edit should succeed");
         assert_eq!(edited.replacement_count, 1);
-        assert!(edited.node.content.contains(&format!("UPDATED_{size}")));
+        assert!(
+            store
+                .read_node(&path)
+                .expect("read should succeed")
+                .expect("node should exist")
+                .content
+                .contains(&format!("UPDATED_{size}"))
+        );
     }
 }
 

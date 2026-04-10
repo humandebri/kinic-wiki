@@ -63,8 +63,17 @@ pub struct WriteNodeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeMutationAck {
+    pub path: String,
+    pub kind: NodeKind,
+    pub updated_at: i64,
+    pub etag: String,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct WriteNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub created: bool,
 }
 
@@ -89,7 +98,7 @@ pub struct EditNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct EditNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub replacement_count: u32,
 }
 
@@ -114,7 +123,7 @@ pub struct MoveNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MoveNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub from_path: String,
     pub overwrote: bool,
 }
@@ -175,7 +184,7 @@ pub struct MultiEditNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MultiEditNodeResult {
-    pub node: Node,
+    pub node: NodeMutationAck,
     pub replacement_count: u32,
 }
 

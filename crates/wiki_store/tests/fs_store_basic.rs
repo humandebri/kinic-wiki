@@ -47,6 +47,67 @@ fn fs_migrations_create_tables() {
             .expect("table lookup should succeed");
         assert_eq!(exists, 1);
     }
+
+    let fts_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'fs_nodes_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("fts sql lookup should succeed");
+    assert!(fts_sql.contains("content='fs_nodes'"));
+    assert!(fts_sql.contains("content_rowid='id'"));
+}
+
+#[test]
+fn fs_migrations_upgrade_existing_schema_to_rowid_backed_fts() {
+    let dir = tempdir().expect("temp dir should exist");
+    let db_path = dir.path().join("wiki.sqlite3");
+    let conn = Connection::open(&db_path).expect("db should open");
+    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
+        .expect("schema_migrations bootstrap should succeed");
+    conn.execute_batch(include_str!("../migrations/000_fs_schema.sql"))
+        .expect("legacy fs schema should succeed");
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)",
+        ["wiki_store:000_fs_schema"],
+    )
+    .expect("legacy migration version should be recorded");
+    conn.execute(
+        "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json)
+         VALUES (?1, 'file', 'alpha body', 10, 10, 'etag', NULL, '{}')",
+        ["/Wiki/legacy.md"],
+    )
+    .expect("legacy row should insert");
+    conn.execute(
+        "INSERT INTO fs_nodes_fts (path, kind, content) VALUES (?1, 'file', 'alpha body')",
+        ["/Wiki/legacy.md"],
+    )
+    .expect("legacy fts row should insert");
+    drop(conn);
+
+    let store = FsStore::new(db_path);
+    store
+        .run_fs_migrations()
+        .expect("upgrading migrations should succeed");
+
+    let conn = Connection::open(store.database_path()).expect("db should reopen");
+    let id: i64 = conn
+        .query_row(
+            "SELECT id FROM fs_nodes WHERE path = ?1",
+            ["/Wiki/legacy.md"],
+            |row| row.get(0),
+        )
+        .expect("migrated row id should exist");
+    assert!(id > 0);
+    let fts_hits: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fs_nodes_fts WHERE fs_nodes_fts MATCH 'alpha'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("fts should be rebuilt");
+    assert_eq!(fts_hits, 1);
 }
 
 #[test]
@@ -113,7 +174,16 @@ fn write_update_delete_and_revive_follow_etag_rules() {
         store
             .read_node("/Wiki/foo.md")
             .expect("read should succeed"),
-        Some(first.node.clone())
+        Some(wiki_types::Node {
+            path: first.node.path.clone(),
+            kind: first.node.kind.clone(),
+            content: "alpha".to_string(),
+            created_at: 10,
+            updated_at: 10,
+            etag: first.node.etag.clone(),
+            deleted_at: None,
+            metadata_json: "{}".to_string(),
+        })
     );
 
     let stale_error = store
@@ -144,7 +214,11 @@ fn write_update_delete_and_revive_follow_etag_rules() {
         .expect("update should succeed");
     assert!(!second.created);
     assert_ne!(first.node.etag, second.node.etag);
-    assert_eq!(second.node.created_at, first.node.created_at);
+    let second_node = store
+        .read_node("/Wiki/foo.md")
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(second_node.created_at, 10);
 
     let deleted = store
         .delete_node(
@@ -185,7 +259,11 @@ fn write_update_delete_and_revive_follow_etag_rules() {
             15,
         )
         .expect("revive should succeed");
-    assert_eq!(revive.node.created_at, first.node.created_at);
+    let revived_node = store
+        .read_node("/Wiki/foo.md")
+        .expect("read should succeed")
+        .expect("node should exist");
+    assert_eq!(revived_node.created_at, 10);
     assert_eq!(revive.node.updated_at, 15);
     assert!(revive.node.deleted_at.is_none());
 }
@@ -343,8 +421,13 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             top_k: 5,
         })
         .expect("search should succeed");
+    #[cfg(feature = "bench-disable-fts")]
+    assert!(search_hits.is_empty());
+    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(search_hits.len(), 1);
+    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(search_hits[0].path, "/Wiki/nested/beta.md");
+    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(search_hits[0].match_reasons, vec!["fts5_bm25".to_string()]);
 
     let missing_hits = store
@@ -377,5 +460,5 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     );
     assert!(snapshot.snapshot_revision.starts_with("v3:"));
     assert!(!snapshot.snapshot_revision.is_empty());
-    assert_eq!(beta.len(), 64);
+    assert!(beta.starts_with("v4h:"));
 }
