@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use tempfile::tempdir;
 use wiki_store::FsStore;
 use wiki_types::{
@@ -80,6 +81,46 @@ fn fetch_updates_returns_empty_when_snapshot_matches() {
     assert_eq!(updates.snapshot_revision, snapshot.snapshot_revision);
     assert!(updates.changed_nodes.is_empty());
     assert!(updates.removed_paths.is_empty());
+}
+
+#[test]
+fn fetch_updates_noop_uses_revision_scope_without_reading_state_hash() {
+    let (_dir, store) = new_store();
+    write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
+    let snapshot = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("snapshot should succeed");
+    assert_v4_snapshot_revision_without_state_hash(&snapshot.snapshot_revision);
+
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute(
+        "UPDATE fs_nodes SET content = ?1 WHERE path = ?2",
+        ["changed without revision", "/Wiki/alpha.md"],
+    )
+    .expect("direct content change should succeed");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: snapshot.snapshot_revision.clone(),
+            prefix: Some("/Wiki".to_string()),
+            include_deleted: false,
+        })
+        .expect("updates should succeed");
+    assert_eq!(updates.snapshot_revision, snapshot.snapshot_revision);
+    assert!(updates.changed_nodes.is_empty());
+    assert!(updates.removed_paths.is_empty());
+}
+
+fn assert_v4_snapshot_revision_without_state_hash(snapshot_revision: &str) {
+    let parts = snapshot_revision.split(':').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "v4");
+    assert!(parts[1].parse::<i64>().expect("revision should parse") >= 0);
+    assert!(matches!(parts[2], "0" | "1"));
+    assert!(!parts[3].is_empty());
 }
 
 #[test]
@@ -236,27 +277,32 @@ fn fetch_updates_full_refreshes_for_unknown_snapshot_revision() {
     write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
     write_node(&store, "/Wiki/beta.md", "beta", None, 11);
 
-    let updates = store
-        .fetch_updates(FetchUpdatesRequest {
-            known_snapshot_revision: "unknown".to_string(),
-            prefix: Some("/Wiki".to_string()),
-            include_deleted: false,
-        })
-        .expect("unknown snapshot should full refresh");
-    assert_eq!(updates.changed_nodes.len(), 2);
-    assert!(
-        updates
-            .changed_nodes
-            .iter()
-            .any(|node| node.path == "/Wiki/alpha.md")
-    );
-    assert!(
-        updates
-            .changed_nodes
-            .iter()
-            .any(|node| node.path == "/Wiki/beta.md")
-    );
-    assert!(updates.removed_paths.is_empty());
+    for known_snapshot_revision in [
+        "unknown".to_string(),
+        "v3:1:0:2f57696b69:old-state-hash".to_string(),
+    ] {
+        let updates = store
+            .fetch_updates(FetchUpdatesRequest {
+                known_snapshot_revision,
+                prefix: Some("/Wiki".to_string()),
+                include_deleted: false,
+            })
+            .expect("unknown snapshot should full refresh");
+        assert_eq!(updates.changed_nodes.len(), 2);
+        assert!(
+            updates
+                .changed_nodes
+                .iter()
+                .any(|node| node.path == "/Wiki/alpha.md")
+        );
+        assert!(
+            updates
+                .changed_nodes
+                .iter()
+                .any(|node| node.path == "/Wiki/beta.md")
+        );
+        assert!(updates.removed_paths.is_empty());
+    }
 }
 
 #[test]
@@ -387,7 +433,7 @@ fn fetch_updates_full_refreshes_when_deleted_visibility_changes_without_new_writ
 }
 
 #[test]
-fn fetch_updates_reports_removed_paths_when_deleted_visibility_shrinks() {
+fn fetch_updates_full_refreshes_when_deleted_visibility_shrinks() {
     let (_dir, store) = new_store();
     let alpha = write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
     store
@@ -415,7 +461,7 @@ fn fetch_updates_reports_removed_paths_when_deleted_visibility_shrinks() {
         .expect("updates should succeed");
 
     assert!(updates.changed_nodes.is_empty());
-    assert_eq!(updates.removed_paths, vec!["/Wiki/alpha.md".to_string()]);
+    assert!(updates.removed_paths.is_empty());
 }
 
 #[test]
@@ -455,7 +501,7 @@ fn fetch_updates_full_refreshes_when_prefix_changes_without_new_writes() {
 }
 
 #[test]
-fn fetch_updates_reports_removed_paths_when_prefix_shrinks_without_new_writes() {
+fn fetch_updates_full_refreshes_when_prefix_shrinks_without_new_writes() {
     let (_dir, store) = new_store();
     write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
     write_node(&store, "/Wiki/nested/beta.md", "beta", None, 11);
@@ -476,7 +522,7 @@ fn fetch_updates_reports_removed_paths_when_prefix_shrinks_without_new_writes() 
 
     assert_eq!(updates.changed_nodes.len(), 1);
     assert_eq!(updates.changed_nodes[0].path, "/Wiki/nested/beta.md");
-    assert_eq!(updates.removed_paths, vec!["/Wiki/alpha.md".to_string()]);
+    assert!(updates.removed_paths.is_empty());
 }
 
 #[test]

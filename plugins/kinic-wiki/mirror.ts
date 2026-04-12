@@ -66,10 +66,30 @@ export async function removeStaleManagedFiles(app: App, mirrorRoot: string, acti
   }
 }
 
-export async function collectChangedManagedNodeFiles(app: App, mirrorRoot: string, lastSyncedAt: number): Promise<TFile[]> {
+export async function collectDirtyManagedNodePaths(
+  app: App,
+  mirrorRoot: string,
+  lastSyncedAt: number,
+  pendingConflictPaths = new Set<string>()
+): Promise<Set<string>> {
+  const dirtyPaths = new Set<string>();
+  for (const node of await collectManagedNodes(app, mirrorRoot)) {
+    if (node.file.stat.mtime > lastSyncedAt || pendingConflictPaths.has(node.metadata.path)) {
+      dirtyPaths.add(node.metadata.path);
+    }
+  }
+  return dirtyPaths;
+}
+
+export async function collectChangedManagedNodeFiles(
+  app: App,
+  mirrorRoot: string,
+  lastSyncedAt: number,
+  pendingConflictPaths = new Set<string>()
+): Promise<TFile[]> {
   const results: TFile[] = [];
   for (const node of await collectManagedNodes(app, mirrorRoot)) {
-    if (node.file.stat.mtime > lastSyncedAt) {
+    if (node.file.stat.mtime > lastSyncedAt || pendingConflictPaths.has(node.metadata.path)) {
       results.push(node.file);
     }
   }
@@ -147,6 +167,21 @@ export async function openMirrorFile(app: App, path: string): Promise<void> {
 export async function writeConflictFile(app: App, mirrorRoot: string, remotePath: string, conflictMarkdown: string): Promise<void> {
   await ensureFolder(app, `${mirrorRoot}/conflicts`);
   await upsertTextFile(app, conflictFilePath(mirrorRoot, remotePath), conflictMarkdown);
+}
+
+export async function writeRemoteUpdateConflictFile(app: App, mirrorRoot: string, node: NodeSnapshot): Promise<void> {
+  const body = [
+    "# Remote update conflict",
+    "",
+    `Remote path: ${node.path}`,
+    `Remote etag: ${node.etag}`,
+    `Remote updated_at: ${node.updated_at}`,
+    "",
+    "## Remote content",
+    "",
+    node.content
+  ].join("\n");
+  await writeConflictFile(app, mirrorRoot, node.path, body);
 }
 
 function remoteToLocalPath(mirrorRoot: string, remotePath: string): string {

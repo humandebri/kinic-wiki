@@ -430,7 +430,7 @@ fn recent_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "limit": { "type": "integer", "minimum": 1 },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
             "path": { "type": "string" },
             "include_deleted": { "type": "boolean" }
         },
@@ -480,7 +480,7 @@ fn search_schema() -> Value {
         "properties": {
             "query_text": { "type": "string" },
             "prefix": { "type": "string" },
-            "top_k": { "type": "integer", "minimum": 1 }
+            "top_k": { "type": "integer", "minimum": 1, "maximum": 100 }
         },
         "required": ["query_text"],
         "additionalProperties": false

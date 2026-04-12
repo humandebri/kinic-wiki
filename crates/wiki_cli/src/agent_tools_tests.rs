@@ -219,6 +219,26 @@ fn tool_schemas_include_minimal_vfs_tools() {
     }
 }
 
+#[test]
+fn tool_schemas_cap_query_result_limits() {
+    let openai = create_openai_tools();
+    let recent = openai_tool_parameters(&openai, "recent");
+    assert_eq!(recent["properties"]["limit"]["maximum"], 100);
+
+    let search = openai_tool_parameters(&openai, "search");
+    assert_eq!(search["properties"]["top_k"]["maximum"], 100);
+
+    let search_paths = openai_tool_parameters(&openai, "search_paths");
+    assert_eq!(search_paths["properties"]["top_k"]["maximum"], 100);
+}
+
+fn openai_tool_parameters<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+    &tools
+        .iter()
+        .find(|tool| tool["function"]["name"] == name)
+        .expect("tool should exist")["function"]["parameters"]
+}
+
 #[tokio::test]
 async fn openai_dispatch_routes_append_and_edit() {
     let client = ToolMockClient::default();

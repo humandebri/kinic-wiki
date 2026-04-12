@@ -1,7 +1,7 @@
 // Where: plugins/kinic-wiki/mirror_logic.ts
 // What: Pure helpers for mirror deletion detection and conflict file naming.
 // Why: These helpers should stay testable without the Obsidian runtime module.
-import { TrackedNodeState } from "./types";
+import { NodeSnapshot, TrackedNodeState } from "./types";
 
 const utf8Encoder = new TextEncoder();
 const CONFLICT_FILE_SUFFIX = ".conflict.md";
@@ -17,6 +17,60 @@ export function findDeletedTrackedNodes(
   localFileExists: (localPath: string) => boolean
 ): TrackedNodeState[] {
   return trackedNodes.filter((tracked) => !localFileExists(toLocalPath(tracked.path)));
+}
+
+export interface PullUpdatePartition {
+  safeChangedNodes: NodeSnapshot[];
+  conflictChangedNodes: NodeSnapshot[];
+  safeRemovedPaths: string[];
+  conflictRemovedPaths: string[];
+  nextTrackedNodes: TrackedNodeState[];
+}
+
+export function partitionPullUpdates(
+  changedNodes: NodeSnapshot[],
+  removedPaths: string[],
+  dirtyPaths: Set<string>,
+  trackedNodes: TrackedNodeState[]
+): PullUpdatePartition {
+  const nextTracked = new Map<string, TrackedNodeState>();
+  for (const tracked of trackedNodes) {
+    nextTracked.set(tracked.path, { ...tracked });
+  }
+
+  const safeChangedNodes: NodeSnapshot[] = [];
+  const conflictChangedNodes: NodeSnapshot[] = [];
+  for (const node of changedNodes) {
+    if (dirtyPaths.has(node.path)) {
+      conflictChangedNodes.push(node);
+      continue;
+    }
+    safeChangedNodes.push(node);
+    nextTracked.set(node.path, {
+      path: node.path,
+      kind: node.kind,
+      etag: node.etag
+    });
+  }
+
+  const safeRemovedPaths: string[] = [];
+  const conflictRemovedPaths: string[] = [];
+  for (const path of removedPaths) {
+    if (dirtyPaths.has(path)) {
+      conflictRemovedPaths.push(path);
+      continue;
+    }
+    safeRemovedPaths.push(path);
+    nextTracked.delete(path);
+  }
+
+  return {
+    safeChangedNodes,
+    conflictChangedNodes,
+    safeRemovedPaths,
+    conflictRemovedPaths,
+    nextTrackedNodes: [...nextTracked.values()].sort((left, right) => left.path.localeCompare(right.path))
+  };
 }
 
 export function conflictFilePath(mirrorRoot: string, remotePath: string): string {

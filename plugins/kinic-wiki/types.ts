@@ -18,6 +18,7 @@ export interface PluginSettings {
   autoPullOnStartup: boolean;
   lastSnapshotRevision: string;
   lastSyncedAt: number;
+  pendingConflictPaths: string[];
   trackedNodes: TrackedNodeState[];
 }
 
@@ -132,11 +133,12 @@ const DEFAULTS: PluginSettings = {
   autoPullOnStartup: true,
   lastSnapshotRevision: "",
   lastSyncedAt: 0,
+  pendingConflictPaths: [],
   trackedNodes: []
 };
 
 export function defaultPluginSettings(): PluginSettings {
-  return { ...DEFAULTS, trackedNodes: [] };
+  return { ...DEFAULTS, pendingConflictPaths: [], trackedNodes: [] };
 }
 
 export function parsePluginSettings(input: unknown): PluginSettings {
@@ -150,6 +152,7 @@ export function parsePluginSettings(input: unknown): PluginSettings {
     autoPullOnStartup: readBoolean(input, "autoPullOnStartup", DEFAULTS.autoPullOnStartup),
     lastSnapshotRevision: readString(input, "lastSnapshotRevision", DEFAULTS.lastSnapshotRevision),
     lastSyncedAt: readNumber(input, "lastSyncedAt", DEFAULTS.lastSyncedAt),
+    pendingConflictPaths: readStringArray(input, "pendingConflictPaths"),
     trackedNodes: readTrackedNodes(input.trackedNodes)
   };
 }
@@ -269,6 +272,10 @@ export function isDeleteNodeResult(input: unknown): input is DeleteNodeResult {
 
 function readTrackedNodes(input: unknown): TrackedNodeState[] {
   return Array.isArray(input) ? input.filter(isTrackedNodeState) : [];
+}
+
+function readStringArray(input: Record<string, unknown>, key: string): string[] {
+  return isStringArray(input[key]) ? input[key] : [];
 }
 
 function isTrackedNodeState(input: unknown): input is TrackedNodeState {

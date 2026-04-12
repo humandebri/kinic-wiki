@@ -1,5 +1,5 @@
 // Where: crates/wiki_store/src/fs_helpers.rs
-// What: Shared FS-first helpers for path validation, row loading, and snapshot hashing.
+// What: Shared FS-first helpers for path validation, row loading, etags, and sync cursors.
 // Why: FsStore behavior must stay deterministic across CRUD, list, search, and sync flows.
 use std::collections::BTreeMap;
 
@@ -73,6 +73,11 @@ pub(crate) struct ScopedEntryRow {
     pub(crate) updated_at: i64,
     pub(crate) etag: String,
     pub(crate) deleted_at: Option<i64>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DirectoryStats {
+    updated_at: i64,
 }
 
 fn node_kind_tag(kind: &NodeKind) -> &'static str {
@@ -160,6 +165,7 @@ pub(crate) fn build_entries_from_rows(
     prefix: &str,
     recursive: bool,
 ) -> Vec<NodeEntry> {
+    let directory_stats = directory_stats_by_path(rows, prefix);
     if recursive {
         return rows
             .iter()
@@ -169,7 +175,7 @@ pub(crate) fn build_entries_from_rows(
                 updated_at: row.updated_at,
                 etag: row.etag.clone(),
                 deleted_at: row.deleted_at,
-                has_children: has_visible_descendants(rows, &row.path),
+                has_children: directory_stats.contains_key(&row.path),
             })
             .collect();
     }
@@ -189,9 +195,12 @@ pub(crate) fn build_entries_from_rows(
                         entry.etag = row.etag.clone();
                         entry.deleted_at = row.deleted_at;
                     } else if entry.kind == NodeEntryKind::Directory {
-                        entry.updated_at = entry.updated_at.max(row.updated_at);
+                        entry.updated_at = directory_stats
+                            .get(&child_path)
+                            .map(|stats| stats.updated_at)
+                            .unwrap_or(entry.updated_at);
                     }
-                    entry.has_children = has_visible_descendants(rows, &child_path);
+                    entry.has_children = directory_stats.contains_key(&child_path);
                 })
                 .or_insert_with(|| match child_path == row.path {
                     true => NodeEntry {
@@ -200,12 +209,15 @@ pub(crate) fn build_entries_from_rows(
                         updated_at: row.updated_at,
                         etag: row.etag.clone(),
                         deleted_at: row.deleted_at,
-                        has_children: has_visible_descendants(rows, &row.path),
+                        has_children: directory_stats.contains_key(&row.path),
                     },
                     false => NodeEntry {
                         path: child_path.clone(),
                         kind: NodeEntryKind::Directory,
-                        updated_at: directory_updated_at(rows, &child_path),
+                        updated_at: directory_stats
+                            .get(&child_path)
+                            .map(|stats| stats.updated_at)
+                            .unwrap_or(0),
                         etag: String::new(),
                         deleted_at: None,
                         has_children: true,
@@ -221,6 +233,7 @@ pub(crate) fn build_glob_entries_from_rows(
     rows: &[ScopedEntryRow],
     prefix: &str,
 ) -> Vec<NodeEntry> {
+    let directory_stats = directory_stats_by_path(rows, prefix);
     let mut entries = BTreeMap::new();
     for row in rows {
         entries.insert(
@@ -231,7 +244,7 @@ pub(crate) fn build_glob_entries_from_rows(
                 updated_at: row.updated_at,
                 etag: row.etag.clone(),
                 deleted_at: row.deleted_at,
-                has_children: has_visible_descendants(rows, &row.path),
+                has_children: directory_stats.contains_key(&row.path),
             },
         );
         for directory_path in ancestor_directory_paths(prefix, &row.path) {
@@ -240,7 +253,10 @@ pub(crate) fn build_glob_entries_from_rows(
                 .or_insert_with(|| NodeEntry {
                     path: directory_path.clone(),
                     kind: NodeEntryKind::Directory,
-                    updated_at: directory_updated_at(rows, &directory_path),
+                    updated_at: directory_stats
+                        .get(&directory_path)
+                        .map(|stats| stats.updated_at)
+                        .unwrap_or(0),
                     etag: String::new(),
                     deleted_at: None,
                     has_children: true,
@@ -250,25 +266,14 @@ pub(crate) fn build_glob_entries_from_rows(
     entries.into_values().collect()
 }
 
-pub(crate) fn snapshot_state_hash(nodes: &[Node]) -> String {
-    let payload = nodes
-        .iter()
-        .map(snapshot_line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    sha256_hex(&payload)
-}
-
 pub(crate) fn snapshot_revision_token(
     prefix: &str,
     include_deleted: bool,
     revision: i64,
-    nodes: &[Node],
 ) -> String {
     let include_deleted_flag = if include_deleted { "1" } else { "0" };
     let prefix_hex = hex_encode(prefix.as_bytes());
-    let state_hash = snapshot_state_hash(nodes);
-    format!("v3:{revision}:{include_deleted_flag}:{prefix_hex}:{state_hash}")
+    format!("v4:{revision}:{include_deleted_flag}:{prefix_hex}")
 }
 
 pub(crate) fn relative_to_prefix(prefix: &str, path: &str) -> Option<String> {
@@ -422,6 +427,26 @@ fn ancestor_directory_paths(prefix: &str, path: &str) -> Vec<String> {
     directories
 }
 
+fn directory_stats_by_path(
+    rows: &[ScopedEntryRow],
+    prefix: &str,
+) -> BTreeMap<String, DirectoryStats> {
+    let mut stats_by_path = BTreeMap::new();
+    for row in rows {
+        for directory_path in ancestor_directory_paths(prefix, &row.path) {
+            stats_by_path
+                .entry(directory_path)
+                .and_modify(|stats: &mut DirectoryStats| {
+                    stats.updated_at = stats.updated_at.max(row.updated_at);
+                })
+                .or_insert(DirectoryStats {
+                    updated_at: row.updated_at,
+                });
+        }
+    }
+    stats_by_path
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -430,33 +455,6 @@ fn hex_encode(bytes: &[u8]) -> String {
         encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
     encoded
-}
-
-fn directory_updated_at(rows: &[ScopedEntryRow], child_prefix: &str) -> i64 {
-    rows.iter()
-        .filter(|row| row.path.starts_with(&format!("{child_prefix}/")))
-        .map(|row| row.updated_at)
-        .max()
-        .unwrap_or(0)
-}
-
-fn has_visible_descendants(rows: &[ScopedEntryRow], child_prefix: &str) -> bool {
-    rows.iter()
-        .any(|row| row.path.starts_with(&format!("{child_prefix}/")))
-}
-
-fn snapshot_line(node: &Node) -> String {
-    format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
-        node.path,
-        node_kind_to_db(&node.kind),
-        node.content,
-        node.etag,
-        node.deleted_at
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        node.metadata_json
-    )
 }
 
 fn entry_kind_from_node_kind(kind: &NodeKind) -> NodeEntryKind {

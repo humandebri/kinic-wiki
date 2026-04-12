@@ -3,7 +3,7 @@ use tempfile::tempdir;
 use wiki_store::FsStore;
 use wiki_types::{
     DeleteNodeRequest, ExportSnapshotRequest, ListNodesRequest, NodeEntryKind, NodeKind,
-    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -85,56 +85,68 @@ fn fs_migrations_create_tables() {
         .collect::<Result<Vec<_>, _>>()
         .expect("versions should collect");
     assert_eq!(versions, vec!["wiki_store:000_fs_schema".to_string()]);
+
+    for index in [
+        "fs_nodes_visible_path_covering_idx",
+        "fs_nodes_path_covering_idx",
+        "fs_nodes_visible_recent_covering_idx",
+        "fs_nodes_recent_covering_idx",
+    ] {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
+                [index],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("index lookup should succeed");
+        assert_eq!(exists, 1);
+    }
 }
 
 #[test]
-fn fs_migrations_reject_legacy_schema_bootstrap() {
-    let dir = tempdir().expect("temp dir should exist");
-    let db_path = dir.path().join("wiki.sqlite3");
-    let conn = Connection::open(&db_path).expect("db should open");
-    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
-        .expect("schema_migrations bootstrap should succeed");
-    conn.execute_batch(
-        "CREATE TABLE fs_nodes (
-            path TEXT PRIMARY KEY,
-            kind TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            etag TEXT NOT NULL,
-            deleted_at INTEGER,
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE VIRTUAL TABLE fs_nodes_fts USING fts5(
-            path,
-            kind,
-            content
-        );",
-    )
-    .expect("legacy fs schema should succeed");
-    conn.execute(
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)",
-        ["wiki_store:000_fs_schema"],
-    )
-    .expect("legacy migration version should be recorded");
-    conn.execute(
-        "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json)
-         VALUES (?1, 'file', 'alpha body', 10, 10, 'etag', NULL, '{}')",
-        ["/Wiki/legacy.md"],
-    )
-    .expect("legacy row should insert");
-    conn.execute(
-        "INSERT INTO fs_nodes_fts (path, kind, content) VALUES (?1, 'file', 'alpha body')",
-        ["/Wiki/legacy.md"],
-    )
-    .expect("legacy fts row should insert");
-    drop(conn);
+fn list_and_recent_queries_use_covering_indexes() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/indexed.md", None, 10);
+    let conn = Connection::open(store.database_path()).expect("db should open");
 
-    let store = FsStore::new(db_path);
-    let error = store
-        .run_fs_migrations()
-        .expect_err("legacy schema should be rejected");
-    assert!(error.contains("legacy fs_nodes schema is not supported"));
+    let list_plan = explain_query_plan(
+        &conn,
+        "SELECT path, kind, updated_at, etag, deleted_at
+         FROM fs_nodes
+         WHERE deleted_at IS NULL
+           AND (path = ?1 OR path LIKE ?2)
+         ORDER BY path ASC",
+        ["/Wiki", "/Wiki/%"],
+    );
+    assert!(
+        list_plan.contains("COVERING INDEX fs_nodes_visible_path_covering_idx"),
+        "list should avoid table lookups: {list_plan}"
+    );
+
+    let recent_plan = explain_query_plan(
+        &conn,
+        "SELECT path, kind, updated_at, etag, deleted_at
+         FROM fs_nodes
+         WHERE deleted_at IS NULL
+           AND (path = ?1 OR path LIKE ?2)
+         ORDER BY updated_at DESC, path ASC
+         LIMIT 10",
+        ["/Wiki", "/Wiki/%"],
+    );
+    assert!(
+        recent_plan.contains("COVERING INDEX fs_nodes_visible_recent_covering_idx"),
+        "recent should avoid table lookups: {recent_plan}"
+    );
+}
+
+fn explain_query_plan(conn: &Connection, sql: &str, params: [&str; 2]) -> String {
+    conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .expect("explain should prepare")
+        .query_map(params, |row| row.get::<_, String>(3))
+        .expect("explain should run")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("explain rows should collect")
+        .join("\n")
 }
 
 #[test]
@@ -493,9 +505,114 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             .iter()
             .any(|node| node.path == "/Wiki/nested/beta.md")
     );
-    assert!(snapshot.snapshot_revision.starts_with("v3:"));
-    assert!(!snapshot.snapshot_revision.is_empty());
+    assert_v4_snapshot_revision_without_state_hash(&snapshot.snapshot_revision);
     assert!(beta.starts_with("v4h:"));
+}
+
+fn assert_v4_snapshot_revision_without_state_hash(snapshot_revision: &str) {
+    let parts = snapshot_revision.split(':').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "v4");
+    assert!(parts[1].parse::<i64>().expect("revision should parse") >= 0);
+    assert!(matches!(parts[2], "0" | "1"));
+    assert!(!parts[3].is_empty());
+}
+
+#[test]
+fn search_nodes_clamps_snippets_from_large_single_token_content() {
+    let (_dir, store) = new_store();
+    let ascii_content = "x".repeat(1024 * 1024);
+    let multibyte_content = "検索".repeat(600);
+
+    for (index, (path, content)) in [
+        ("/Wiki/large-ascii.md", ascii_content),
+        ("/Wiki/large-multibyte.md", multibyte_content),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .write_node(
+                WriteNodeRequest {
+                    path: path.to_string(),
+                    kind: NodeKind::File,
+                    content: content.clone(),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                },
+                100 + index as i64,
+            )
+            .expect("large token write should succeed");
+
+        let hits = store
+            .search_nodes(SearchNodesRequest {
+                query_text: content,
+                prefix: Some("/Wiki".to_string()),
+                top_k: 5,
+            })
+            .expect("large token search should succeed");
+
+        assert!(
+            hits.iter().any(|hit| hit.path == path),
+            "large token search should return the written node"
+        );
+        for hit in hits {
+            assert!(
+                hit.snippet.chars().count() <= 243,
+                "snippet should be limited to 240 chars plus ellipsis"
+            );
+            assert!(
+                hit.snippet.len() <= 512,
+                "snippet should be limited to 512 utf-8 bytes"
+            );
+        }
+    }
+}
+
+#[test]
+fn query_limits_are_capped_at_one_hundred() {
+    let (_dir, store) = new_store();
+    for index in 0..150 {
+        store
+            .write_node(
+                WriteNodeRequest {
+                    path: format!("/Wiki/capped/node-{index:03}.md"),
+                    kind: NodeKind::File,
+                    content: format!("shared-cap-token path-cap-{index}"),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                },
+                1_000 + index,
+            )
+            .expect("write should succeed");
+    }
+
+    let recent = store
+        .recent_nodes(RecentNodesRequest {
+            limit: 1_000,
+            path: Some("/Wiki/capped".to_string()),
+            include_deleted: false,
+        })
+        .expect("recent should succeed");
+    assert_eq!(recent.len(), 100);
+
+    let search = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "shared-cap-token".to_string(),
+            prefix: Some("/Wiki/capped".to_string()),
+            top_k: 1_000,
+        })
+        .expect("search should succeed");
+    assert_eq!(search.len(), 100);
+
+    let path_search = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "node".to_string(),
+            prefix: Some("/Wiki/capped".to_string()),
+            top_k: 1_000,
+        })
+        .expect("path search should succeed");
+    assert_eq!(path_search.len(), 100);
 }
 
 #[test]

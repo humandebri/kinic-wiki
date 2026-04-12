@@ -39,3 +39,15 @@ SELECT
     END
 FROM fs_nodes
 ORDER BY path ASC;
+
+CREATE INDEX fs_nodes_visible_path_covering_idx
+ON fs_nodes (deleted_at, path, kind, updated_at, etag);
+
+CREATE INDEX fs_nodes_path_covering_idx
+ON fs_nodes (path, kind, updated_at, etag, deleted_at);
+
+CREATE INDEX fs_nodes_visible_recent_covering_idx
+ON fs_nodes (deleted_at, updated_at DESC, path ASC, kind, etag);
+
+CREATE INDEX fs_nodes_recent_covering_idx
+ON fs_nodes (updated_at DESC, path ASC, kind, etag, deleted_at);

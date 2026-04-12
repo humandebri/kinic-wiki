@@ -25,6 +25,11 @@ use crate::{
     schema,
 };
 
+const SEARCH_SNIPPET_MAX_CHARS: usize = 240;
+const SEARCH_SNIPPET_MAX_BYTES: usize = 512;
+const SEARCH_SNIPPET_ELLIPSIS: &str = "...";
+const QUERY_RESULT_LIMIT_MAX: u32 = 100;
+
 // Where: crates/wiki_store/src/fs_store.rs
 // What: Change-log semantics used by delta sync visibility checks.
 // Why: Tombstones and move removals need distinct history meanings.
@@ -288,7 +293,7 @@ impl FsStore {
             sql.push_str(&scope_sql);
             values.extend(scope_values);
         }
-        let limit = i64::from(request.limit.max(1));
+        let limit = capped_query_limit(request.limit);
         sql.push_str(&format!(
             " ORDER BY updated_at DESC, path ASC LIMIT {limit}"
         ));
@@ -381,7 +386,7 @@ impl FsStore {
         let query = build_fts_query(&request.query_text)
             .ok_or_else(|| "query_text must not be empty".to_string())?;
         let conn = self.open()?;
-        let top_k = i64::from(request.top_k.max(1));
+        let top_k = capped_query_limit(request.top_k);
         let mut sql = String::from(
             "SELECT fs_nodes.path, fs_nodes.kind,
                     snippet(fs_nodes_fts, 0, '[', ']', '...', 12) AS snippet,
@@ -401,10 +406,11 @@ impl FsStore {
         sql.push_str(&format!(" ORDER BY score ASC, path ASC LIMIT {top_k}"));
         let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
         stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            let snippet = clamp_search_snippet(row.get(2)?);
             Ok(SearchNodeHit {
                 path: row.get(0)?,
                 kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
-                snippet: row.get(2)?,
+                snippet,
                 score: row.get(3)?,
                 match_reasons: vec!["fts5_bm25".to_string()],
             })
@@ -426,7 +432,7 @@ impl FsStore {
         let terms = split_path_search_terms(&request.query_text)
             .ok_or_else(|| "query_text must not be empty".to_string())?;
         let conn = self.open()?;
-        let top_k = i64::from(request.top_k.max(1));
+        let top_k = capped_query_limit(request.top_k);
         let mut sql = String::from(
             "SELECT path,
                     kind,
@@ -479,8 +485,10 @@ impl FsStore {
             .transpose()?;
         let prefix = prefix.unwrap_or_else(|| "/".to_string());
         let conn = self.open()?;
+        let current_change_revision = current_snapshot_revision_number(&conn)?;
         let nodes = load_scoped_nodes(&conn, &prefix, request.include_deleted)?;
-        let revision = scoped_snapshot_revision(&conn, &prefix, request.include_deleted, &nodes)?;
+        let revision =
+            scoped_snapshot_revision(&prefix, request.include_deleted, current_change_revision);
         Ok(ExportSnapshotResponse {
             snapshot_revision: revision,
             nodes,
@@ -499,47 +507,35 @@ impl FsStore {
         let prefix = prefix.unwrap_or_else(|| "/".to_string());
         let conn = self.open()?;
         let current_change_revision = current_snapshot_revision_number(&conn)?;
-        let current = ExportSnapshotResponse {
-            nodes: load_scoped_nodes(&conn, &prefix, request.include_deleted)?,
-            snapshot_revision: String::new(),
-        };
         let current_snapshot_revision =
-            scoped_snapshot_revision(&conn, &prefix, request.include_deleted, &current.nodes)?;
+            scoped_snapshot_revision(&prefix, request.include_deleted, current_change_revision);
         let known_snapshot = parse_known_snapshot_revision(&request.known_snapshot_revision);
-        if current_snapshot_revision == request.known_snapshot_revision {
-            return Ok(FetchUpdatesResponse {
-                snapshot_revision: current_snapshot_revision,
-                changed_nodes: Vec::new(),
-                removed_paths: Vec::new(),
-            });
+        if let Some(known_snapshot) = known_snapshot.as_ref() {
+            if known_snapshot.revision == current_change_revision
+                && known_snapshot.prefix == prefix
+                && known_snapshot.include_deleted == request.include_deleted
+            {
+                return Ok(FetchUpdatesResponse {
+                    snapshot_revision: current_snapshot_revision,
+                    changed_nodes: Vec::new(),
+                    removed_paths: Vec::new(),
+                });
+            }
         }
         let Some(known_snapshot) = known_snapshot else {
             return Ok(FetchUpdatesResponse {
                 snapshot_revision: current_snapshot_revision,
-                changed_nodes: current.nodes,
+                changed_nodes: load_scoped_nodes(&conn, &prefix, request.include_deleted)?,
                 removed_paths: Vec::new(),
             });
         };
         if known_snapshot.prefix != prefix
             || known_snapshot.include_deleted != request.include_deleted
+            || known_snapshot.revision > current_change_revision
         {
             return Ok(FetchUpdatesResponse {
                 snapshot_revision: current_snapshot_revision,
-                changed_nodes: current.nodes,
-                removed_paths: load_removed_paths_for_scope_change(
-                    &conn,
-                    &known_snapshot.prefix,
-                    known_snapshot.include_deleted,
-                    known_snapshot.revision,
-                    &prefix,
-                    request.include_deleted,
-                )?,
-            });
-        }
-        if known_snapshot.revision > current_change_revision {
-            return Ok(FetchUpdatesResponse {
-                snapshot_revision: current_snapshot_revision,
-                changed_nodes: current.nodes,
+                changed_nodes: load_scoped_nodes(&conn, &prefix, request.include_deleted)?,
                 removed_paths: Vec::new(),
             });
         }
@@ -629,19 +625,8 @@ struct KnownSnapshotRevision {
     include_deleted: bool,
 }
 
-fn scoped_snapshot_revision(
-    conn: &Connection,
-    prefix: &str,
-    include_deleted: bool,
-    nodes: &[Node],
-) -> Result<String, String> {
-    let revision = current_snapshot_revision_number(conn)?;
-    Ok(snapshot_revision_token(
-        prefix,
-        include_deleted,
-        revision,
-        nodes,
-    ))
+fn scoped_snapshot_revision(prefix: &str, include_deleted: bool, revision: i64) -> String {
+    snapshot_revision_token(prefix, include_deleted, revision)
 }
 
 fn parse_known_snapshot_revision(snapshot_revision: &str) -> Option<KnownSnapshotRevision> {
@@ -654,8 +639,7 @@ fn parse_known_snapshot_revision(snapshot_revision: &str) -> Option<KnownSnapsho
         _ => return None,
     };
     let prefix = decode_hex_to_string(parts.next()?)?;
-    let _state_hash = parts.next()?;
-    if version != "v3" || parsed < 0 || parts.next().is_some() {
+    if version != "v4" || parsed < 0 || parts.next().is_some() {
         return None;
     }
     Some(KnownSnapshotRevision {
@@ -663,6 +647,10 @@ fn parse_known_snapshot_revision(snapshot_revision: &str) -> Option<KnownSnapsho
         prefix,
         include_deleted,
     })
+}
+
+fn capped_query_limit(requested: u32) -> i64 {
+    i64::from(requested.clamp(1, QUERY_RESULT_LIMIT_MAX))
 }
 
 fn load_changed_paths_since(
@@ -678,49 +666,6 @@ fn load_changed_paths_since(
     let mut values = vec![rusqlite::types::Value::from(known_revision)];
     if prefix != "/" {
         let (scope_sql, scope_values) = prefix_filter_sql(prefix, 2);
-        sql.push_str(&scope_sql);
-        values.extend(scope_values);
-    }
-    sql.push_str(" ORDER BY path ASC");
-    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
-}
-
-fn load_removed_paths_for_scope_change(
-    conn: &Connection,
-    previous_prefix: &str,
-    previous_include_deleted: bool,
-    previous_revision: i64,
-    current_prefix: &str,
-    current_include_deleted: bool,
-) -> Result<Vec<String>, String> {
-    let candidate_paths = load_paths_seen_under_prefix(conn, previous_prefix)?;
-    let mut removed_paths = Vec::new();
-    for path in candidate_paths {
-        if !path_was_visible_in_scope_at_revision(
-            conn,
-            &path,
-            previous_prefix,
-            previous_include_deleted,
-            previous_revision,
-        )? {
-            continue;
-        }
-        if !path_is_visible_in_scope_now(conn, &path, current_prefix, current_include_deleted)? {
-            removed_paths.push(path);
-        }
-    }
-    Ok(removed_paths)
-}
-
-fn load_paths_seen_under_prefix(conn: &Connection, prefix: &str) -> Result<Vec<String>, String> {
-    let mut sql = String::from("SELECT DISTINCT path FROM fs_change_log WHERE 1 = 1");
-    let mut values = Vec::new();
-    if prefix != "/" {
-        let (scope_sql, scope_values) = prefix_filter_sql(prefix, 1);
         sql.push_str(&scope_sql);
         values.extend(scope_values);
     }
@@ -762,23 +707,6 @@ fn path_was_visible_in_scope_at_revision(
             },
             None => false,
         })
-    })
-}
-
-fn path_is_visible_in_scope_now(
-    conn: &Connection,
-    path: &str,
-    prefix: &str,
-    include_deleted: bool,
-) -> Result<bool, String> {
-    if !path_matches_prefix(path, prefix) {
-        return Ok(false);
-    }
-    let current = load_node(conn, path)?;
-    Ok(match current {
-        Some(node) if node.deleted_at.is_none() => true,
-        Some(node) if include_deleted && node.deleted_at.is_some() => true,
-        _ => false,
     })
 }
 
@@ -989,6 +917,31 @@ fn save_node(tx: &Transaction<'_>, row_id: Option<i64>, node: &Node) -> Result<i
             Ok(tx.last_insert_rowid())
         }
     }
+}
+
+fn clamp_search_snippet(snippet: String) -> String {
+    let mut out = if snippet.chars().count() > SEARCH_SNIPPET_MAX_CHARS {
+        let mut shortened = snippet
+            .chars()
+            .take(SEARCH_SNIPPET_MAX_CHARS)
+            .collect::<String>();
+        shortened.push_str(SEARCH_SNIPPET_ELLIPSIS);
+        shortened
+    } else {
+        snippet
+    };
+
+    if out.len() <= SEARCH_SNIPPET_MAX_BYTES {
+        return out;
+    }
+
+    while out.len() + SEARCH_SNIPPET_ELLIPSIS.len() > SEARCH_SNIPPET_MAX_BYTES {
+        if out.pop().is_none() {
+            break;
+        }
+    }
+    out.push_str(SEARCH_SNIPPET_ELLIPSIS);
+    out
 }
 
 #[cfg(not(feature = "bench-disable-fts"))]

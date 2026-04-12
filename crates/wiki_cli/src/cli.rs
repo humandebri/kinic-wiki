@@ -123,7 +123,7 @@ pub enum Command {
         json: bool,
     },
     RecentNodes {
-        #[arg(long)]
+        #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
         #[arg(long, default_value = "/Wiki")]
         path: String,
@@ -146,7 +146,11 @@ pub enum Command {
         query_text: String,
         #[arg(long, default_value = "/Wiki")]
         prefix: String,
-        #[arg(long, default_value_t = 10)]
+        #[arg(
+            long,
+            default_value_t = 10,
+            help = "Maximum 100; 0 is treated as 1 by the canister"
+        )]
         top_k: u32,
         #[arg(long)]
         json: bool,
@@ -155,7 +159,11 @@ pub enum Command {
         query_text: String,
         #[arg(long, default_value = "/Wiki")]
         prefix: String,
-        #[arg(long, default_value_t = 10)]
+        #[arg(
+            long,
+            default_value_t = 10,
+            help = "Maximum 100; 0 is treated as 1 by the canister"
+        )]
         top_k: u32,
         #[arg(long)]
         json: bool,
