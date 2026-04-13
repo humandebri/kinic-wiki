@@ -180,7 +180,6 @@ async fn dispatch_tool_call_impl(
                 .list_nodes(ListNodesRequest {
                     prefix: args.prefix.unwrap_or_else(|| "/Wiki".to_string()),
                     recursive: args.recursive.unwrap_or(false),
-                    include_deleted: args.include_deleted.unwrap_or(false),
                 })
                 .await?;
             tool_ok(json!({ "entries": result }))
@@ -221,7 +220,6 @@ async fn dispatch_tool_call_impl(
                 .recent_nodes(RecentNodesRequest {
                     limit: args.limit.unwrap_or(10),
                     path: args.path,
-                    include_deleted: args.include_deleted.unwrap_or(false),
                 })
                 .await?;
             tool_ok(json!({ "hits": result }))
@@ -383,8 +381,7 @@ fn list_schema() -> Value {
         "type": "object",
         "properties": {
             "prefix": { "type": "string" },
-            "recursive": { "type": "boolean" },
-            "include_deleted": { "type": "boolean" }
+            "recursive": { "type": "boolean" }
         },
         "additionalProperties": false
     })
@@ -431,8 +428,7 @@ fn recent_schema() -> Value {
         "type": "object",
         "properties": {
             "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
-            "path": { "type": "string" },
-            "include_deleted": { "type": "boolean" }
+            "path": { "type": "string" }
         },
         "additionalProperties": false
     })
@@ -524,7 +520,6 @@ struct EditArgs {
 struct ListArgs {
     prefix: Option<String>,
     recursive: Option<bool>,
-    include_deleted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -551,7 +546,6 @@ struct GlobArgs {
 struct RecentArgs {
     limit: Option<u32>,
     path: Option<String>,
-    include_deleted: Option<bool>,
 }
 
 #[derive(Deserialize)]

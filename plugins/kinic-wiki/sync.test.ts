@@ -10,7 +10,7 @@ import {
   sortedUniquePaths
 } from "./sync_logic";
 
-test("push does not skip remote tombstones when only deletions are pending", () => {
+test("push does not skip remote deletions when only deletions are pending", () => {
   assert.equal(shouldSkipPush(0, 1), false);
   assert.equal(shouldSkipPush(1, 0), false);
   assert.equal(shouldSkipPush(0, 0), true);

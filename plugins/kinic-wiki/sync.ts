@@ -82,7 +82,7 @@ export class WikiSyncService {
 
   async showStatus(): Promise<void> {
     const status = await this.client().status();
-    new Notice(`Files ${status.file_count}, Sources ${status.source_count}, Deleted ${status.deleted_count}`);
+    new Notice(`Files ${status.file_count}, Sources ${status.source_count}`);
   }
 
   async pushCurrentNote(): Promise<void> {

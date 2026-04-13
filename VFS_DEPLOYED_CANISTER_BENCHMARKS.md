@@ -128,12 +128,12 @@ summary では `isolated_single_op` に対して `setup_cycles_delta` / `measure
 
 | Method | Response Shape |
 | --- | --- |
-| `write_node` | `path`, `kind`, `updated_at`, `etag`, `deleted_at`, `created` |
-| `append_node` | `path`, `kind`, `updated_at`, `etag`, `deleted_at`, `created=false` |
-| `edit_node` | `path`, `kind`, `updated_at`, `etag`, `deleted_at`, `replacement_count` |
-| `move_node` | `from_path`, `path`, `kind`, `updated_at`, `etag`, `deleted_at`, `overwrote` |
-| `delete_node` | `path`, `etag`, `deleted_at` |
-| `multi_edit_node` | `path`, `kind`, `updated_at`, `etag`, `deleted_at`, `replacement_count` |
+| `write_node` | `path`, `kind`, `updated_at`, `etag`, `created` |
+| `append_node` | `path`, `kind`, `updated_at`, `etag`, `created=false` |
+| `edit_node` | `path`, `kind`, `updated_at`, `etag`, `replacement_count` |
+| `move_node` | `from_path`, `path`, `kind`, `updated_at`, `etag`, `overwrote` |
+| `delete_node` | `path` |
+| `multi_edit_node` | `path`, `kind`, `updated_at`, `etag`, `replacement_count` |
 
 大きい本文は暗黙に返りません。更新直後に本文が必要な caller は、別途 `read_node` を呼びます。
 

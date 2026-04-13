@@ -43,15 +43,10 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         Command::ListNodes {
             prefix,
             recursive,
-            include_deleted,
             json,
         } => {
             let entries = client
-                .list_nodes(ListNodesRequest {
-                    prefix,
-                    recursive,
-                    include_deleted,
-                })
+                .list_nodes(ListNodesRequest { prefix, recursive })
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -148,7 +143,7 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("{}", result.etag);
+                println!("{}", result.path);
             }
         }
         Command::MkdirNode { path, json } => {
@@ -201,17 +196,11 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::RecentNodes {
-            limit,
-            path,
-            include_deleted,
-            json,
-        } => {
+        Command::RecentNodes { limit, path, json } => {
             let hits = client
                 .recent_nodes(RecentNodesRequest {
                     limit,
                     path: Some(path),
-                    include_deleted,
                 })
                 .await?;
             if json {
@@ -306,8 +295,8 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&(remote, local))?);
             } else {
                 println!(
-                    "remote: files={} sources={} deleted={}",
-                    remote.file_count, remote.source_count, remote.deleted_count
+                    "remote: files={} sources={}",
+                    remote.file_count, remote.source_count
                 );
                 if let Some((state, tracked_count)) = local {
                     println!(
@@ -379,7 +368,6 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         let snapshot = client
             .export_snapshot(ExportSnapshotRequest {
                 prefix: Some(REMOTE_PREFIX.to_string()),
-                include_deleted: false,
             })
             .await?;
         write_snapshot_mirror(mirror_root, &snapshot.nodes)?;
@@ -407,7 +395,6 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         .fetch_updates(FetchUpdatesRequest {
             known_snapshot_revision: state.snapshot_revision.clone(),
             prefix: Some(REMOTE_PREFIX.to_string()),
-            include_deleted: false,
         })
         .await?;
     write_snapshot_mirror(mirror_root, &updates.changed_nodes)?;
@@ -497,7 +484,6 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         .fetch_updates(FetchUpdatesRequest {
             known_snapshot_revision: state.snapshot_revision,
             prefix: Some(REMOTE_PREFIX.to_string()),
-            include_deleted: false,
         })
         .await?;
     write_snapshot_mirror(mirror_root, &updates.changed_nodes)?;

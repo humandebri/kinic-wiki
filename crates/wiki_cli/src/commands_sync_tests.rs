@@ -29,7 +29,6 @@ impl WikiApi for SyncMockClient {
         Ok(Status {
             file_count: 0,
             source_count: 0,
-            deleted_count: 0,
         })
     }
 
@@ -82,18 +81,13 @@ impl WikiApi for SyncMockClient {
                 path: request.path,
                 kind: request.kind,
                 updated_at: 2,
-                etag: "etag-updated".to_string(),
-                deleted_at: None,
+                etag: "etag-write".to_string(),
             },
         })
     }
 
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
-        Ok(DeleteNodeResult {
-            path: request.path,
-            etag: "etag-deleted".to_string(),
-            deleted_at: 3,
-        })
+        Ok(DeleteNodeResult { path: request.path })
     }
     async fn export_snapshot(
         &self,
@@ -125,7 +119,6 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
         created_at: 1,
         updated_at: 2,
         etag: "etag-1".to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     };
     write_node_mirror(&root, &initial).expect("mirror write should succeed");
@@ -197,7 +190,7 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
             &crate::mirror::MirrorFrontmatter {
                 path: first.path.clone(),
                 kind: NodeKind::File,
-                etag: "etag-a".to_string(),
+                etag: first.etag.clone(),
                 updated_at: 2,
                 mirror: true,
             },
@@ -211,7 +204,7 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
             &crate::mirror::MirrorFrontmatter {
                 path: second.path.clone(),
                 kind: NodeKind::File,
-                etag: "etag-b".to_string(),
+                etag: second.etag.clone(),
                 updated_at: 2,
                 mirror: true,
             },
@@ -303,7 +296,6 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
         created_at: 1,
         updated_at: 2,
         etag: "etag-stale".to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     };
     write_node_mirror(&root, &stale).expect("mirror write should succeed");
@@ -323,7 +315,6 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
         created_at: 1,
         updated_at: 3,
         etag: "etag-fresh".to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     };
     let client = SyncMockClient {
@@ -357,7 +348,6 @@ fn sync_node(path: &str, content: &str, etag: &str) -> Node {
         created_at: 1,
         updated_at: 2,
         etag: etag.to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     }
 }

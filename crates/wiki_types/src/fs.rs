@@ -32,7 +32,6 @@ pub struct Node {
     pub created_at: i64,
     pub updated_at: i64,
     pub etag: String,
-    pub deleted_at: Option<i64>,
     pub metadata_json: String,
 }
 
@@ -40,7 +39,6 @@ pub struct Node {
 pub struct ListNodesRequest {
     pub prefix: String,
     pub recursive: bool,
-    pub include_deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -49,7 +47,6 @@ pub struct NodeEntry {
     pub kind: NodeEntryKind,
     pub updated_at: i64,
     pub etag: String,
-    pub deleted_at: Option<i64>,
     pub has_children: bool,
 }
 
@@ -68,7 +65,6 @@ pub struct NodeMutationAck {
     pub kind: NodeKind,
     pub updated_at: i64,
     pub etag: String,
-    pub deleted_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -157,7 +153,6 @@ pub struct GlobNodeHit {
 pub struct RecentNodesRequest {
     pub limit: u32,
     pub path: Option<String>,
-    pub include_deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -166,7 +161,6 @@ pub struct RecentNodeHit {
     pub kind: NodeKind,
     pub updated_at: i64,
     pub etag: String,
-    pub deleted_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -197,8 +191,6 @@ pub struct DeleteNodeRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct DeleteNodeResult {
     pub path: String,
-    pub etag: String,
-    pub deleted_at: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -227,7 +219,6 @@ pub struct SearchNodeHit {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ExportSnapshotRequest {
     pub prefix: Option<String>,
-    pub include_deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -240,7 +231,6 @@ pub struct ExportSnapshotResponse {
 pub struct FetchUpdatesRequest {
     pub known_snapshot_revision: String,
     pub prefix: Option<String>,
-    pub include_deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

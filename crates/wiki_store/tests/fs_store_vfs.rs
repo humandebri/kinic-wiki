@@ -220,7 +220,6 @@ fn mkdir_node_is_validation_only() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: false,
         })
         .expect("list should succeed");
     assert!(list.is_empty());
@@ -374,7 +373,7 @@ fn move_node_overwrite_replaces_live_target() {
 }
 
 #[test]
-fn move_node_overwrite_revives_tombstoned_target() {
+fn move_node_overwrite_reuses_deleted_target_path() {
     let (_dir, store) = new_store();
     let source = store
         .append_node(
@@ -425,7 +424,6 @@ fn move_node_overwrite_revives_tombstoned_target() {
         .expect("move should succeed");
 
     assert!(!moved.overwrote);
-    assert!(moved.node.deleted_at.is_none());
     assert_eq!(
         store
             .read_node("/Wiki/to.md")
@@ -534,7 +532,6 @@ fn list_and_glob_do_not_depend_on_large_content_loading() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: false,
         })
         .expect("list should succeed");
     assert!(list.iter().any(|entry| entry.path == "/Wiki/large.md"));
@@ -608,7 +605,7 @@ fn glob_nodes_tolerates_existing_paths_longer_than_previous_match_limit() {
 }
 
 #[test]
-fn recent_nodes_orders_by_updated_at_and_can_include_deleted() {
+fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
     let (_dir, store) = new_store();
     let first = store
         .append_node(
@@ -650,7 +647,6 @@ fn recent_nodes_orders_by_updated_at_and_can_include_deleted() {
         .recent_nodes(RecentNodesRequest {
             limit: 5,
             path: Some("/Wiki".to_string()),
-            include_deleted: false,
         })
         .expect("recent visible should succeed");
     assert_eq!(visible.len(), 1);
@@ -661,12 +657,10 @@ fn recent_nodes_orders_by_updated_at_and_can_include_deleted() {
         .recent_nodes(RecentNodesRequest {
             limit: 5,
             path: Some("/Wiki".to_string()),
-            include_deleted: true,
         })
         .expect("recent all should succeed");
-    assert_eq!(all.len(), 2);
-    assert_eq!(all[0].path, "/Wiki/one.md");
-    assert_eq!(all[0].deleted_at, Some(30));
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].path, "/Wiki/two.md");
 }
 
 #[test]

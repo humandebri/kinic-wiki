@@ -60,12 +60,11 @@ export class KinicCanisterClient {
     return normalizeReadNode(await actor.read_node(path));
   }
 
-  async listNodes(prefix: string, recursive: boolean, includeDeleted: boolean): Promise<NodeEntry[]> {
+  async listNodes(prefix: string, recursive: boolean): Promise<NodeEntry[]> {
     const actor = await this.actor();
     return normalizeListNodes(await actor.list_nodes({
       prefix,
-      recursive,
-      include_deleted: includeDeleted
+      recursive
     }));
   }
 
@@ -151,12 +150,11 @@ export class KinicCanisterClient {
     }));
   }
 
-  async recentNodes(limit: number, path: string, includeDeleted: boolean): Promise<RecentNodeHit[]> {
+  async recentNodes(limit: number, path: string): Promise<RecentNodeHit[]> {
     const actor = await this.actor();
     return normalizeRecentNodeHits(await actor.recent_nodes({
       limit,
-      path: [path],
-      include_deleted: includeDeleted
+      path: [path]
     }));
   }
 
@@ -194,8 +192,7 @@ export class KinicCanisterClient {
   async exportSnapshot(): Promise<ExportSnapshotResponse> {
     const actor = await this.actor();
     return normalizeExportResponse(await actor.export_snapshot({
-      prefix: ["/Wiki"],
-      include_deleted: false
+      prefix: ["/Wiki"]
     }));
   }
 
@@ -203,8 +200,7 @@ export class KinicCanisterClient {
     const actor = await this.actor();
     return normalizeFetchResponse(await actor.fetch_updates({
       known_snapshot_revision: lastSnapshotRevision,
-      prefix: ["/Wiki"],
-      include_deleted: false
+      prefix: ["/Wiki"]
     }));
   }
 

@@ -143,7 +143,6 @@ async fn recent_node_command_calls_canister_recent() {
         test_cli(Command::RecentNodes {
             limit: 5,
             path: "/Wiki".to_string(),
-            include_deleted: true,
             json: false,
         }),
     )
@@ -153,7 +152,7 @@ async fn recent_node_command_calls_canister_recent() {
     let recents = client.recents.lock().expect("recents should lock");
     assert_eq!(recents.len(), 1);
     assert_eq!(recents[0].limit, 5);
-    assert!(recents[0].include_deleted);
+    assert_eq!(recents[0].path.as_deref(), Some("/Wiki"));
 }
 
 #[tokio::test]

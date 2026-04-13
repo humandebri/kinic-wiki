@@ -261,7 +261,6 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 etag: format!("etag-{next}"),
-                deleted_at: None,
                 metadata_json: request.metadata_json,
             };
             self.nodes
@@ -274,7 +273,6 @@ mod tests {
                     kind: node.kind,
                     updated_at: node.updated_at,
                     etag: node.etag,
-                    deleted_at: node.deleted_at,
                 },
                 created: true,
             })

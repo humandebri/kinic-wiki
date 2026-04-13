@@ -78,7 +78,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
 }
 
 #[test]
-fn canister_fetch_updates_changes_with_deleted_visibility() {
+fn canister_fetch_updates_reports_removed_paths_after_delete() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
@@ -90,14 +90,8 @@ fn canister_fetch_updates_changes_with_deleted_visibility() {
     })
     .expect("write should succeed");
 
-    let without_deleted = export_snapshot(ExportSnapshotRequest {
+    let snapshot = export_snapshot(ExportSnapshotRequest {
         prefix: Some("/Wiki/scope".to_string()),
-        include_deleted: false,
-    })
-    .expect("snapshot should succeed");
-    let with_deleted = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki/scope".to_string()),
-        include_deleted: true,
     })
     .expect("snapshot should succeed");
 
@@ -107,28 +101,16 @@ fn canister_fetch_updates_changes_with_deleted_visibility() {
     })
     .expect("delete should succeed");
 
-    let hidden = fetch_updates(FetchUpdatesRequest {
-        known_snapshot_revision: without_deleted.snapshot_revision,
+    let updates = fetch_updates(FetchUpdatesRequest {
+        known_snapshot_revision: snapshot.snapshot_revision,
         prefix: Some("/Wiki/scope".to_string()),
-        include_deleted: false,
     })
     .expect("updates should succeed");
-    assert!(hidden.changed_nodes.is_empty());
+    assert!(updates.changed_nodes.is_empty());
     assert_eq!(
-        hidden.removed_paths,
+        updates.removed_paths,
         vec!["/Wiki/scope/item.md".to_string()]
     );
-
-    let visible = fetch_updates(FetchUpdatesRequest {
-        known_snapshot_revision: with_deleted.snapshot_revision,
-        prefix: Some("/Wiki/scope".to_string()),
-        include_deleted: true,
-    })
-    .expect("updates should succeed");
-    assert_eq!(visible.changed_nodes.len(), 1);
-    assert_eq!(visible.changed_nodes[0].path, "/Wiki/scope/item.md");
-    assert_eq!(visible.changed_nodes[0].deleted_at, Some(1_700_000_000_000));
-    assert!(visible.removed_paths.is_empty());
 }
 
 #[test]
@@ -154,13 +136,11 @@ fn canister_fetch_updates_full_refreshes_when_prefix_scope_changes() {
 
     let narrow = export_snapshot(ExportSnapshotRequest {
         prefix: Some("/Wiki/a".to_string()),
-        include_deleted: false,
     })
     .expect("snapshot should succeed");
     let widened = fetch_updates(FetchUpdatesRequest {
         known_snapshot_revision: narrow.snapshot_revision,
         prefix: Some("/Wiki".to_string()),
-        include_deleted: false,
     })
     .expect("updates should succeed");
     assert_eq!(widened.changed_nodes.len(), 2);

@@ -111,7 +111,6 @@ fn seed_dataset(case: BenchCase, prefix: &str) {
 fn snapshot_metrics(prefix: &str) -> SnapshotMetrics {
     let snapshot = export_snapshot(ExportSnapshotRequest {
         prefix: Some(prefix.to_string()),
-        include_deleted: false,
     })
     .expect("bench snapshot export should succeed");
     SnapshotMetrics {
@@ -239,7 +238,6 @@ pub(super) fn run_export_snapshot(case: BenchCase) -> BenchResult {
         black_box(
             export_snapshot(ExportSnapshotRequest {
                 prefix: Some(prefix.clone()),
-                include_deleted: false,
             })
             .expect("bench export_snapshot should succeed"),
         );
@@ -251,7 +249,6 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
     seed_dataset(case, &prefix);
     let baseline = export_snapshot(ExportSnapshotRequest {
         prefix: Some(prefix.clone()),
-        include_deleted: false,
     })
     .expect("bench baseline export should succeed");
     for index in 0..case.updated_count {
@@ -268,7 +265,6 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
             fetch_updates(FetchUpdatesRequest {
                 known_snapshot_revision: baseline.snapshot_revision.clone(),
                 prefix: Some(prefix.clone()),
-                include_deleted: false,
             })
             .expect("bench fetch_updates should succeed"),
         );
@@ -291,7 +287,6 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 etag: "etag-1".to_string(),
-                deleted_at: None,
                 metadata_json: "{\"k\":\"v\"}".to_string(),
             }],
         };

@@ -816,7 +816,6 @@ where
     let request = ListNodesRequest {
         prefix: list_prefix(&args.prefix, args.directory_shape),
         recursive: false,
-        include_deleted: false,
     };
     let client = Arc::clone(client);
     run_parallel(args.iterations, args.concurrent_clients, move |_| {
@@ -838,7 +837,6 @@ where
     let request = ListNodesRequest {
         prefix: list_prefix(&args.prefix, args.directory_shape),
         recursive: false,
-        include_deleted: false,
     };
     let client = Arc::clone(client);
     run_parallel(args.iterations, args.concurrent_clients, move |_| {
@@ -1000,7 +998,6 @@ where
     let request = RecentNodesRequest {
         limit,
         path: Some(args.prefix.clone()),
-        include_deleted: false,
     };
     let client = Arc::clone(client);
     run_parallel(args.iterations, args.concurrent_clients, move |_| {
@@ -1027,7 +1024,6 @@ where
     let request = RecentNodesRequest {
         limit,
         path: Some(args.prefix.clone()),
-        include_deleted: false,
     };
     let client = Arc::clone(client);
     run_parallel(args.iterations, args.concurrent_clients, move |_| {
@@ -1389,7 +1385,6 @@ mod tests {
             Ok(Status {
                 file_count: 0,
                 source_count: 0,
-                deleted_count: 0,
             })
         }
         async fn read_node(&self, path: &str) -> Result<Option<Node>> {
@@ -1417,7 +1412,6 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 etag: format!("etag-{next}"),
-                deleted_at: None,
                 metadata_json: request.metadata_json,
             };
             self.nodes
@@ -1430,7 +1424,6 @@ mod tests {
                     kind: node.kind,
                     updated_at: node.updated_at,
                     etag: node.etag,
-                    deleted_at: node.deleted_at,
                 },
                 created: true,
             })
@@ -1482,12 +1475,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("delete:{}", request.path));
-            let removed = self.nodes.lock().unwrap().remove(&request.path).unwrap();
-            Ok(DeleteNodeResult {
-                path: request.path,
-                etag: removed.etag,
-                deleted_at: 3,
-            })
+            self.nodes.lock().unwrap().remove(&request.path).unwrap();
+            Ok(DeleteNodeResult { path: request.path })
         }
         async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
             self.ops
@@ -1511,7 +1500,6 @@ mod tests {
                     kind: node.kind,
                     updated_at: node.updated_at,
                     etag: node.etag,
-                    deleted_at: node.deleted_at,
                 },
                 from_path: request.from_path,
                 overwrote: false,

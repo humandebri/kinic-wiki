@@ -35,7 +35,6 @@ impl WikiApi for MockClient {
         Ok(Status {
             file_count: 0,
             source_count: 0,
-            deleted_count: 0,
         })
     }
 
@@ -46,8 +45,7 @@ impl WikiApi for MockClient {
             content: "# Remote".to_string(),
             created_at: 1,
             updated_at: 3,
-            etag: "etag-2".to_string(),
-            deleted_at: None,
+            etag: "etag-remote".to_string(),
             metadata_json: "{}".to_string(),
         }))
     }
@@ -67,8 +65,7 @@ impl WikiApi for MockClient {
                 path: request.path,
                 kind: request.kind,
                 updated_at: 3,
-                etag: "etag-2".to_string(),
-                deleted_at: None,
+                etag: "etag-write".to_string(),
             },
         })
     }
@@ -84,8 +81,7 @@ impl WikiApi for MockClient {
                 path: request.path,
                 kind: request.kind.unwrap_or(NodeKind::File),
                 updated_at: 3,
-                etag: "etag-appended".to_string(),
-                deleted_at: None,
+                etag: "etag-append".to_string(),
             },
         })
     }
@@ -100,8 +96,7 @@ impl WikiApi for MockClient {
                 path: request.path,
                 kind: NodeKind::File,
                 updated_at: 3,
-                etag: "etag-edited".to_string(),
-                deleted_at: None,
+                etag: "etag-edit".to_string(),
             },
             replacement_count: 1,
         })
@@ -112,11 +107,7 @@ impl WikiApi for MockClient {
             .lock()
             .expect("deletes should lock")
             .push(request.clone());
-        Ok(DeleteNodeResult {
-            path: request.path,
-            etag: "etag-deleted".to_string(),
-            deleted_at: 4,
-        })
+        Ok(DeleteNodeResult { path: request.path })
     }
 
     async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
@@ -142,8 +133,7 @@ impl WikiApi for MockClient {
                 path: request.to_path,
                 kind: NodeKind::File,
                 updated_at: 5,
-                etag: "etag-moved".to_string(),
-                deleted_at: None,
+                etag: "etag-move".to_string(),
             },
         })
     }
@@ -171,8 +161,7 @@ impl WikiApi for MockClient {
                 path: request.path,
                 kind: NodeKind::File,
                 updated_at: 6,
-                etag: "etag-multi-edit".to_string(),
-                deleted_at: None,
+                etag: "etag-multi".to_string(),
             },
             replacement_count: 2,
         })
@@ -224,7 +213,6 @@ async fn pull_writes_nodes_under_mirror_root() {
             created_at: 1,
             updated_at: 2,
             etag: "etag-1".to_string(),
-            deleted_at: None,
             metadata_json: "{}".to_string(),
         }],
         ..Default::default()
@@ -257,7 +245,6 @@ async fn push_uses_expected_etag_from_frontmatter() {
         created_at: 1,
         updated_at: 2,
         etag: "etag-1".to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     };
     crate::mirror::write_node_mirror(&root, &initial).expect("mirror write should succeed");

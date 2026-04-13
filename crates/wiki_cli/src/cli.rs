@@ -39,8 +39,6 @@ pub enum Command {
         #[arg(long)]
         recursive: bool,
         #[arg(long)]
-        include_deleted: bool,
-        #[arg(long)]
         json: bool,
     },
     WriteNode {
@@ -127,8 +125,6 @@ pub enum Command {
         limit: u32,
         #[arg(long, default_value = "/Wiki")]
         path: String,
-        #[arg(long)]
-        include_deleted: bool,
         #[arg(long)]
         json: bool,
     },

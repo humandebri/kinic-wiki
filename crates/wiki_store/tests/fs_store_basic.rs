@@ -84,14 +84,15 @@ fn fs_migrations_create_tables() {
         .expect("version query should run")
         .collect::<Result<Vec<_>, _>>()
         .expect("versions should collect");
-    assert_eq!(versions, vec!["wiki_store:000_fs_schema".to_string()]);
+    assert_eq!(
+        versions,
+        vec![
+            "wiki_store:000_fs_schema".to_string(),
+            "wiki_store:001_fs_remove_tombstones".to_string(),
+        ]
+    );
 
-    for index in [
-        "fs_nodes_visible_path_covering_idx",
-        "fs_nodes_path_covering_idx",
-        "fs_nodes_visible_recent_covering_idx",
-        "fs_nodes_recent_covering_idx",
-    ] {
+    for index in ["fs_nodes_path_covering_idx", "fs_nodes_recent_covering_idx"] {
         let exists = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
@@ -111,30 +112,28 @@ fn list_and_recent_queries_use_covering_indexes() {
 
     let list_plan = explain_query_plan(
         &conn,
-        "SELECT path, kind, updated_at, etag, deleted_at
+        "SELECT path, kind, updated_at, etag
          FROM fs_nodes
-         WHERE deleted_at IS NULL
-           AND (path = ?1 OR path LIKE ?2)
+         WHERE path = ?1 OR path LIKE ?2
          ORDER BY path ASC",
         ["/Wiki", "/Wiki/%"],
     );
     assert!(
-        list_plan.contains("COVERING INDEX fs_nodes_visible_path_covering_idx"),
+        list_plan.contains("COVERING INDEX fs_nodes_path_covering_idx"),
         "list should avoid table lookups: {list_plan}"
     );
 
     let recent_plan = explain_query_plan(
         &conn,
-        "SELECT path, kind, updated_at, etag, deleted_at
+        "SELECT path, kind, updated_at, etag
          FROM fs_nodes
-         WHERE deleted_at IS NULL
-           AND (path = ?1 OR path LIKE ?2)
+         WHERE path = ?1 OR path LIKE ?2
          ORDER BY updated_at DESC, path ASC
          LIMIT 10",
         ["/Wiki", "/Wiki/%"],
     );
     assert!(
-        recent_plan.contains("COVERING INDEX fs_nodes_visible_recent_covering_idx"),
+        recent_plan.contains("COVERING INDEX fs_nodes_recent_covering_idx"),
         "recent should avoid table lookups: {recent_plan}"
     );
 }
@@ -150,7 +149,7 @@ fn explain_query_plan(conn: &Connection, sql: &str, params: [&str; 2]) -> String
 }
 
 #[test]
-fn status_counts_files_sources_and_tombstones() {
+fn status_counts_live_files_and_sources() {
     let (_dir, store) = new_store();
     let file = store
         .write_node(
@@ -189,12 +188,41 @@ fn status_counts_files_sources_and_tombstones() {
     let status = store.status().expect("status should succeed");
     assert_eq!(status.file_count, 0);
     assert_eq!(status.source_count, 1);
-    assert_eq!(status.deleted_count, 1);
     assert_eq!(source.node.kind, NodeKind::Source);
 }
 
 #[test]
-fn write_update_delete_and_revive_follow_etag_rules() {
+fn change_log_compaction_keeps_recent_revisions_only() {
+    let (_dir, store) = new_store();
+    for now in 10..=270 {
+        let path = format!("/Wiki/compact-{now}.md");
+        write_file(&store, &path, None, now);
+    }
+
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let revision_count = conn
+        .query_row("SELECT COUNT(*) FROM fs_change_log", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("count should succeed");
+    let oldest_revision = conn
+        .query_row("SELECT MIN(revision) FROM fs_change_log", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("min revision should succeed");
+    let newest_revision = conn
+        .query_row("SELECT MAX(revision) FROM fs_change_log", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("max revision should succeed");
+
+    assert_eq!(revision_count, 256);
+    assert_eq!(oldest_revision, 6);
+    assert_eq!(newest_revision, 261);
+}
+
+#[test]
+fn write_update_delete_and_recreate_follow_etag_rules() {
     let (_dir, store) = new_store();
     let first = store
         .write_node(
@@ -220,7 +248,6 @@ fn write_update_delete_and_revive_follow_etag_rules() {
             created_at: 10,
             updated_at: 10,
             etag: first.node.etag.clone(),
-            deleted_at: None,
             metadata_json: "{}".to_string(),
         })
     );
@@ -259,7 +286,7 @@ fn write_update_delete_and_revive_follow_etag_rules() {
         .expect("node should exist");
     assert_eq!(second_node.created_at, 10);
 
-    let deleted = store
+    let _deleted = store
         .delete_node(
             DeleteNodeRequest {
                 path: "/Wiki/foo.md".to_string(),
@@ -268,7 +295,6 @@ fn write_update_delete_and_revive_follow_etag_rules() {
             13,
         )
         .expect("delete should succeed");
-    assert_eq!(deleted.deleted_at, 13);
     let stale_delete = store
         .delete_node(
             DeleteNodeRequest {
@@ -278,7 +304,7 @@ fn write_update_delete_and_revive_follow_etag_rules() {
             14,
         )
         .expect_err("stale delete should fail");
-    assert!(stale_delete.contains("already deleted"));
+    assert!(stale_delete.contains("node does not exist"));
     assert!(
         store
             .read_node("/Wiki/foo.md")
@@ -286,25 +312,24 @@ fn write_update_delete_and_revive_follow_etag_rules() {
             .is_none()
     );
 
-    let revive = store
+    let recreated = store
         .write_node(
             WriteNodeRequest {
                 path: "/Wiki/foo.md".to_string(),
                 kind: NodeKind::File,
                 content: "gamma".to_string(),
                 metadata_json: "{}".to_string(),
-                expected_etag: Some(deleted.etag),
+                expected_etag: None,
             },
             15,
         )
-        .expect("revive should succeed");
-    let revived_node = store
+        .expect("recreate should succeed");
+    let recreated_node = store
         .read_node("/Wiki/foo.md")
         .expect("read should succeed")
         .expect("node should exist");
-    assert_eq!(revived_node.created_at, 10);
-    assert_eq!(revive.node.updated_at, 15);
-    assert!(revive.node.deleted_at.is_none());
+    assert_eq!(recreated_node.created_at, 15);
+    assert_eq!(recreated.node.updated_at, 15);
 }
 
 #[test]
@@ -319,7 +344,6 @@ fn list_search_and_export_respect_deleted_and_prefix() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: false,
         })
         .expect("root list should succeed");
     assert_eq!(root_entries.len(), 4);
@@ -352,7 +376,6 @@ fn list_search_and_export_respect_deleted_and_prefix() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki/nested".to_string(),
             recursive: true,
-            include_deleted: false,
         })
         .expect("nested list should succeed");
     assert_eq!(nested_entries.len(), 1);
@@ -368,7 +391,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             12,
         )
         .expect("delete should succeed");
-    let deleted_tombstone = store
+    let _deleted_leaf = store
         .delete_node(
             DeleteNodeRequest {
                 path: "/Wiki/deleted/leaf.md".to_string(),
@@ -382,13 +405,11 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             },
             14,
         )
-        .expect("deleted leaf tombstone should succeed");
-    assert_eq!(deleted_tombstone.deleted_at, 14);
+        .expect("deleted leaf delete should succeed");
     let visible_after_delete = store
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: true,
-            include_deleted: false,
         })
         .expect("visible list should succeed");
     assert_eq!(visible_after_delete.len(), 3);
@@ -408,15 +429,14 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             .any(|entry| entry.path == "/Wiki/tree/leaf.md")
     );
 
-    let root_after_tombstone = store
+    let root_after_delete = store
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: false,
         })
-        .expect("root list after tombstone should succeed");
+        .expect("root list after delete should succeed");
     assert!(
-        !root_after_tombstone
+        !root_after_delete
             .iter()
             .any(|entry| entry.path == "/Wiki/deleted")
     );
@@ -425,26 +445,14 @@ fn list_search_and_export_respect_deleted_and_prefix() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: true,
-            include_deleted: true,
         })
         .expect("deleted list should succeed");
-    assert_eq!(deleted_entries.len(), 5);
-    assert!(
-        deleted_entries
-            .iter()
-            .any(|entry| entry.path == "/Wiki/alpha.md")
-    );
-    assert!(
-        deleted_entries
-            .iter()
-            .any(|entry| entry.path == "/Wiki/deleted/leaf.md")
-    );
+    assert_eq!(deleted_entries.len(), 3);
 
     let deleted_root_entries = store
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: true,
         })
         .expect("deleted root list should succeed");
     assert!(
@@ -489,33 +497,25 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     let snapshot = store
         .export_snapshot(ExportSnapshotRequest {
             prefix: Some("/Wiki".to_string()),
-            include_deleted: true,
         })
         .expect("snapshot should succeed");
-    assert_eq!(snapshot.nodes.len(), 5);
-    assert!(
-        snapshot
-            .nodes
-            .iter()
-            .any(|node| node.path == "/Wiki/alpha.md")
-    );
+    assert_eq!(snapshot.nodes.len(), 3);
     assert!(
         snapshot
             .nodes
             .iter()
             .any(|node| node.path == "/Wiki/nested/beta.md")
     );
-    assert_v4_snapshot_revision_without_state_hash(&snapshot.snapshot_revision);
+    assert_v5_snapshot_revision_without_state_hash(&snapshot.snapshot_revision);
     assert!(beta.starts_with("v4h:"));
 }
 
-fn assert_v4_snapshot_revision_without_state_hash(snapshot_revision: &str) {
+fn assert_v5_snapshot_revision_without_state_hash(snapshot_revision: &str) {
     let parts = snapshot_revision.split(':').collect::<Vec<_>>();
-    assert_eq!(parts.len(), 4);
-    assert_eq!(parts[0], "v4");
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0], "v5");
     assert!(parts[1].parse::<i64>().expect("revision should parse") >= 0);
-    assert!(matches!(parts[2], "0" | "1"));
-    assert!(!parts[3].is_empty());
+    assert!(!parts[2].is_empty());
 }
 
 #[test]
@@ -591,7 +591,6 @@ fn query_limits_are_capped_at_one_hundred() {
         .recent_nodes(RecentNodesRequest {
             limit: 1_000,
             path: Some("/Wiki/capped".to_string()),
-            include_deleted: false,
         })
         .expect("recent should succeed");
     assert_eq!(recent.len(), 100);

@@ -37,16 +37,12 @@ pub(crate) fn normalize_node_path(path: &str, allow_root: bool) -> Result<String
 }
 
 pub(crate) fn compute_node_etag(node: &Node) -> String {
-    let deleted = node
-        .deleted_at
-        .map_or_else(|| "null".to_string(), |value| value.to_string());
     let payload = format!(
-        "{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         node.path,
         node_kind_tag(&node.kind),
         node.content,
         node.metadata_json,
-        deleted
     );
     format!("v4h:{}", sha256_hex(&payload))
 }
@@ -57,7 +53,6 @@ pub(crate) fn node_ack(node: &Node) -> NodeMutationAck {
         kind: node.kind.clone(),
         updated_at: node.updated_at,
         etag: node.etag.clone(),
-        deleted_at: node.deleted_at,
     }
 }
 
@@ -72,7 +67,6 @@ pub(crate) struct ScopedEntryRow {
     pub(crate) kind: NodeKind,
     pub(crate) updated_at: i64,
     pub(crate) etag: String,
-    pub(crate) deleted_at: Option<i64>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -96,7 +90,7 @@ pub(crate) fn load_stored_node(
     path: &str,
 ) -> Result<Option<StoredNode>, String> {
     conn.query_row(
-        "SELECT id, path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
+        "SELECT id, path, kind, content, created_at, updated_at, etag, metadata_json
          FROM fs_nodes WHERE path = ?1",
         params![path],
         map_stored_node,
@@ -105,19 +99,12 @@ pub(crate) fn load_stored_node(
     .map_err(|error| error.to_string())
 }
 
-pub(crate) fn load_scoped_nodes(
-    conn: &Connection,
-    prefix: &str,
-    include_deleted: bool,
-) -> Result<Vec<Node>, String> {
+pub(crate) fn load_scoped_nodes(conn: &Connection, prefix: &str) -> Result<Vec<Node>, String> {
     let mut sql = String::from(
-        "SELECT path, kind, content, created_at, updated_at, etag, deleted_at, metadata_json
+        "SELECT path, kind, content, created_at, updated_at, etag, metadata_json
          FROM fs_nodes WHERE 1 = 1",
     );
     let mut values = Vec::new();
-    if !include_deleted {
-        sql.push_str(" AND deleted_at IS NULL");
-    }
     if prefix != "/" {
         let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
         sql.push_str(&scope_sql);
@@ -134,16 +121,12 @@ pub(crate) fn load_scoped_nodes(
 pub(crate) fn load_scoped_entry_rows(
     conn: &Connection,
     prefix: &str,
-    include_deleted: bool,
 ) -> Result<Vec<ScopedEntryRow>, String> {
     let mut sql = String::from(
-        "SELECT path, kind, updated_at, etag, deleted_at
+        "SELECT path, kind, updated_at, etag
          FROM fs_nodes WHERE 1 = 1",
     );
     let mut values = Vec::new();
-    if !include_deleted {
-        sql.push_str(" AND deleted_at IS NULL");
-    }
     if prefix != "/" {
         let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
         sql.push_str(&scope_sql);
@@ -174,7 +157,6 @@ pub(crate) fn build_entries_from_rows(
                 kind: entry_kind_from_node_kind(&row.kind),
                 updated_at: row.updated_at,
                 etag: row.etag.clone(),
-                deleted_at: row.deleted_at,
                 has_children: directory_stats.contains_key(&row.path),
             })
             .collect();
@@ -183,9 +165,6 @@ pub(crate) fn build_entries_from_rows(
     let mut entries = BTreeMap::new();
     for row in rows {
         if let Some(child_path) = direct_child_path(prefix, &row.path) {
-            if child_path != row.path && row.deleted_at.is_some() {
-                continue;
-            }
             entries
                 .entry(child_path.clone())
                 .and_modify(|entry: &mut NodeEntry| {
@@ -193,7 +172,6 @@ pub(crate) fn build_entries_from_rows(
                         entry.kind = entry_kind_from_node_kind(&row.kind);
                         entry.updated_at = row.updated_at;
                         entry.etag = row.etag.clone();
-                        entry.deleted_at = row.deleted_at;
                     } else if entry.kind == NodeEntryKind::Directory {
                         entry.updated_at = directory_stats
                             .get(&child_path)
@@ -208,7 +186,6 @@ pub(crate) fn build_entries_from_rows(
                         kind: entry_kind_from_node_kind(&row.kind),
                         updated_at: row.updated_at,
                         etag: row.etag.clone(),
-                        deleted_at: row.deleted_at,
                         has_children: directory_stats.contains_key(&row.path),
                     },
                     false => NodeEntry {
@@ -219,7 +196,6 @@ pub(crate) fn build_entries_from_rows(
                             .map(|stats| stats.updated_at)
                             .unwrap_or(0),
                         etag: String::new(),
-                        deleted_at: None,
                         has_children: true,
                     },
                 });
@@ -243,7 +219,6 @@ pub(crate) fn build_glob_entries_from_rows(
                 kind: entry_kind_from_node_kind(&row.kind),
                 updated_at: row.updated_at,
                 etag: row.etag.clone(),
-                deleted_at: row.deleted_at,
                 has_children: directory_stats.contains_key(&row.path),
             },
         );
@@ -258,7 +233,6 @@ pub(crate) fn build_glob_entries_from_rows(
                         .map(|stats| stats.updated_at)
                         .unwrap_or(0),
                     etag: String::new(),
-                    deleted_at: None,
                     has_children: true,
                 });
         }
@@ -266,14 +240,9 @@ pub(crate) fn build_glob_entries_from_rows(
     entries.into_values().collect()
 }
 
-pub(crate) fn snapshot_revision_token(
-    prefix: &str,
-    include_deleted: bool,
-    revision: i64,
-) -> String {
-    let include_deleted_flag = if include_deleted { "1" } else { "0" };
+pub(crate) fn snapshot_revision_token(prefix: &str, revision: i64) -> String {
     let prefix_hex = hex_encode(prefix.as_bytes());
-    format!("v4:{revision}:{include_deleted_flag}:{prefix_hex}")
+    format!("v5:{revision}:{prefix_hex}")
 }
 
 pub(crate) fn relative_to_prefix(prefix: &str, path: &str) -> Option<String> {
@@ -350,8 +319,7 @@ fn map_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<Node> {
         created_at: row.get(3)?,
         updated_at: row.get(4)?,
         etag: row.get(5)?,
-        deleted_at: row.get(6)?,
-        metadata_json: row.get(7)?,
+        metadata_json: row.get(6)?,
     })
 }
 
@@ -365,8 +333,7 @@ fn map_stored_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {
             created_at: row.get(4)?,
             updated_at: row.get(5)?,
             etag: row.get(6)?,
-            deleted_at: row.get(7)?,
-            metadata_json: row.get(8)?,
+            metadata_json: row.get(7)?,
         },
     })
 }
@@ -377,7 +344,6 @@ fn map_scoped_entry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScopedEntry
         kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
         updated_at: row.get(2)?,
         etag: row.get(3)?,
-        deleted_at: row.get(4)?,
     })
 }
 

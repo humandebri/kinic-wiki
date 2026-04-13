@@ -189,7 +189,7 @@ The public API is VFS-first.
 | `multi_edit_node` | Multiple atomic plain-text replacements |
 | `mkdir_node` | Validate a directory-like path without persisting a directory row |
 | `move_node` | Rename one node path |
-| `delete_node` | Tombstone delete |
+| `delete_node` | Physical delete |
 | `glob_nodes` | Shell-style path matching |
 | `recent_nodes` | Recently updated nodes |
 | `search_nodes` | Full-text search across current content |
@@ -282,8 +282,7 @@ async fn run() -> Result<()> {
         "ls",
         json!({
             "prefix": "/Wiki",
-            "recursive": false,
-            "include_deleted": false
+            "recursive": false
         }),
     )
     .await?;
@@ -362,7 +361,7 @@ wiki-cli move-node --from-path /Wiki/draft.md --to-path /Wiki/archive/draft.md -
 Notes:
 
 - `append_node` appends content only when the node already exists. `kind` and `metadata_json` are only used when append creates a new node.
-- `move_node --overwrite` replaces a live target or revives a tombstoned target at the destination path.
+- `move_node --overwrite` replaces a live target or reuses a previously deleted destination path.
 - `glob_nodes` rejects overlong patterns, but stored node paths do not make the entire glob query fail just because they are long.
 
 ## Use with Obsidian
@@ -405,7 +404,6 @@ Main fields:
 - `created_at`
 - `updated_at`
 - `etag`
-- `deleted_at`
 - `metadata_json`
 
 Persisted node kinds:
@@ -440,7 +438,7 @@ Concurrency is controlled with `etag`, which is a content digest for the current
 - delete: current `etag` must match
 - stale writes fail instead of silently merging
 
-Deletes are tombstones.
+Deletes physically remove the node row.
 Moves are path renames, not copy-plus-delete at the API boundary.
 
 ## Search
@@ -448,7 +446,7 @@ Moves are path renames, not copy-plus-delete at the API boundary.
 Search is built into the same SQLite store.
 
 - backend: SQLite FTS
-- target: current non-deleted content
+- target: current content
 - prefix scoping supported
 
 There is no separate canister-only search implementation.
@@ -460,13 +458,13 @@ Sync uses:
 - `export_snapshot` for full export
 - `fetch_updates` for delta sync
 
-If the client does not know a valid snapshot revision, `fetch_updates` returns a full refresh instead of erroring.
+If the client does not know a valid snapshot revision, or the revision is older than the retained
+change-log floor, `fetch_updates` returns a full refresh instead of erroring.
 
 Scope changes compare the known snapshot scope against the current scope:
 
-- tombstones stay in `changed_nodes` when `include_deleted=true`
-- tombstones move to `removed_paths` when `include_deleted=false`
-- moved old paths appear in `removed_paths`, but they are not treated as tombstones
+- deleted paths appear in `removed_paths`
+- moved old paths appear in `removed_paths`
 
 For rename operations, sync observes:
 

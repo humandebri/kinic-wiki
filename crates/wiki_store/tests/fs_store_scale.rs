@@ -140,7 +140,6 @@ fn list_nodes_scales_to_thousand_entries() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki/scale".to_string(),
             recursive: false,
-            include_deleted: false,
         })
         .expect("root list should succeed");
     assert_eq!(root_entries.len(), 10);
@@ -154,14 +153,13 @@ fn list_nodes_scales_to_thousand_entries() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki/scale".to_string(),
             recursive: true,
-            include_deleted: false,
         })
         .expect("recursive list should succeed");
     assert_eq!(recursive_entries.len(), 1_000);
 }
 
 #[test]
-fn glob_and_search_scale_cases_respect_scope_and_tombstones() {
+fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
     let (_dir, store) = new_store();
 
     for index in 0..120 {
@@ -289,7 +287,6 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
     let base = store
         .export_snapshot(ExportSnapshotRequest {
             prefix: Some("/Wiki/snapshot".to_string()),
-            include_deleted: false,
         })
         .expect("base snapshot should succeed");
     assert_eq!(base.nodes.len(), 1_000);
@@ -321,7 +318,6 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
         .fetch_updates(FetchUpdatesRequest {
             known_snapshot_revision: base.snapshot_revision,
             prefix: Some("/Wiki/snapshot".to_string()),
-            include_deleted: false,
         })
         .expect("updates should succeed");
     assert_eq!(updates.changed_nodes.len(), 2);

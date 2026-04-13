@@ -182,7 +182,6 @@ function nodeSnapshot(path: string, etag: string): NodeSnapshot {
     created_at: 1,
     updated_at: 2,
     etag,
-    deleted_at: null,
     metadata_json: "{}"
   };
 }

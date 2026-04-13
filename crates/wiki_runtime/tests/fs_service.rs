@@ -23,7 +23,6 @@ fn fs_service_delegates_to_fs_store() {
     let initial = service.status().expect("status should succeed");
     assert_eq!(initial.file_count, 0);
     assert_eq!(initial.source_count, 0);
-    assert_eq!(initial.deleted_count, 0);
 
     let write = service
         .write_node(
@@ -63,7 +62,6 @@ fn fs_service_delegates_to_fs_store() {
         .list_nodes(ListNodesRequest {
             prefix: "/Wiki".to_string(),
             recursive: false,
-            include_deleted: false,
         })
         .expect("list should succeed");
     assert!(entries.iter().any(|entry| entry.path == "/Wiki/alpha.md"));
@@ -95,14 +93,12 @@ fn fs_service_delegates_to_fs_store() {
     let snapshot = service
         .export_fs_snapshot(ExportSnapshotRequest {
             prefix: Some("/Wiki".to_string()),
-            include_deleted: false,
         })
         .expect("snapshot should succeed");
     let updates = service
         .fetch_fs_updates(FetchUpdatesRequest {
             known_snapshot_revision: snapshot.snapshot_revision,
             prefix: Some("/Wiki".to_string()),
-            include_deleted: false,
         })
         .expect("updates should succeed");
     assert!(updates.changed_nodes.is_empty());
@@ -111,7 +107,6 @@ fn fs_service_delegates_to_fs_store() {
     let status = service.status().expect("status should succeed");
     assert_eq!(status.file_count, 2);
     assert_eq!(status.source_count, 0);
-    assert_eq!(status.deleted_count, 0);
 }
 
 #[test]
@@ -203,7 +198,6 @@ fn fs_service_exposes_extended_vfs_methods() {
         .recent_nodes(RecentNodesRequest {
             limit: 5,
             path: Some("/Wiki".to_string()),
-            include_deleted: false,
         })
         .expect("recent should succeed");
     assert_eq!(recent[0].path, "/Wiki/nested/b.md");

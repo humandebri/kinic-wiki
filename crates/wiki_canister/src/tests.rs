@@ -34,7 +34,6 @@ fn status_stays_available_after_fs_migrations() {
 
     assert_eq!(current.file_count, 0);
     assert_eq!(current.source_count, 0);
-    assert_eq!(current.deleted_count, 0);
 }
 
 #[test]
@@ -77,7 +76,6 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     let entries = list_nodes(ListNodesRequest {
         prefix: "/Wiki".to_string(),
         recursive: false,
-        include_deleted: false,
     })
     .expect("list should succeed");
     assert!(
@@ -106,7 +104,6 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
         prefix: Some("/Wiki".to_string()),
-        include_deleted: false,
     })
     .expect("snapshot should export");
     assert_eq!(snapshot.nodes.len(), 2);
@@ -114,7 +111,6 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     let empty_delta = fetch_updates(FetchUpdatesRequest {
         known_snapshot_revision: snapshot.snapshot_revision.clone(),
         prefix: Some("/Wiki".to_string()),
-        include_deleted: false,
     })
     .expect("matching snapshot should produce empty delta");
     assert!(empty_delta.changed_nodes.is_empty());
@@ -123,7 +119,6 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     let full_refresh = fetch_updates(FetchUpdatesRequest {
         known_snapshot_revision: "missing".to_string(),
         prefix: Some("/Wiki".to_string()),
-        include_deleted: false,
     })
     .expect("unknown snapshot should full refresh");
     assert_eq!(full_refresh.changed_nodes.len(), 2);
@@ -140,7 +135,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         expected_etag: Some(created.node.etag.clone()),
     })
     .expect("delete should succeed");
-    assert!(deleted.deleted_at > 0);
+    assert_eq!(deleted.path, "/Wiki/foo.md");
 
     let deleted_read = read_node("/Wiki/foo.md".to_string()).expect("read should succeed");
     assert!(deleted_read.is_none());
@@ -241,7 +236,6 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     let recent = recent_nodes(RecentNodesRequest {
         limit: 5,
         path: Some("/Wiki".to_string()),
-        include_deleted: false,
     })
     .expect("recent should succeed");
     assert_eq!(recent[0].path, "/Wiki/archive/item.md");

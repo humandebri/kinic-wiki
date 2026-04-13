@@ -17,13 +17,11 @@ test("normalizeNodeKind maps candid variants to plugin strings", () => {
 test("normalizeStatus converts bigint counts to numbers", () => {
   const status = normalizeStatus({
     file_count: 1n,
-    source_count: 0n,
-    deleted_count: 2n
+    source_count: 0n
   });
   assert.deepEqual(status, {
     file_count: 1,
-    source_count: 0,
-    deleted_count: 2
+    source_count: 0
   });
 });
 
@@ -38,7 +36,6 @@ test("normalizeWriteNodeResult converts node timestamps and opt values", () => {
         created_at: 1n,
         updated_at: 2n,
         etag: "etag-1",
-        deleted_at: [],
         metadata_json: "{}"
       }
     }
@@ -46,7 +43,6 @@ test("normalizeWriteNodeResult converts node timestamps and opt values", () => {
 
   assert.equal(result.node.kind, "file");
   assert.equal(result.node.updated_at, 2);
-  assert.equal(result.node.deleted_at, null);
 });
 
 test("normalizeGlobNodeHits accepts the compact glob wire shape", () => {

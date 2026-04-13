@@ -29,7 +29,6 @@ export interface NodeSnapshot {
   created_at: number;
   updated_at: number;
   etag: string;
-  deleted_at: number | null;
   metadata_json: string;
 }
 
@@ -38,7 +37,6 @@ export interface NodeEntry {
   kind: NodeEntryKind;
   updated_at: number;
   etag: string;
-  deleted_at: number | null;
   has_children: boolean;
 }
 
@@ -93,7 +91,6 @@ export interface RecentNodeHit {
   kind: NodeKind;
   updated_at: number;
   etag: string;
-  deleted_at: number | null;
 }
 
 export interface MultiEdit {
@@ -108,14 +105,11 @@ export interface MultiEditNodeResult {
 
 export interface DeleteNodeResult {
   path: string;
-  etag: string;
-  deleted_at: number;
 }
 
 export interface StatusResponse {
   file_count: number;
   source_count: number;
-  deleted_count: number;
 }
 
 export interface MirrorFrontmatter {
@@ -160,8 +154,7 @@ export function parsePluginSettings(input: unknown): PluginSettings {
 export function isStatusResponse(input: unknown): input is StatusResponse {
   return isRecord(input)
     && isNumberValue(input.file_count)
-    && isNumberValue(input.source_count)
-    && isNumberValue(input.deleted_count);
+    && isNumberValue(input.source_count);
 }
 
 export function isNodeSnapshot(input: unknown): input is NodeSnapshot {
@@ -172,7 +165,6 @@ export function isNodeSnapshot(input: unknown): input is NodeSnapshot {
     && isNumberValue(input.created_at)
     && isNumberValue(input.updated_at)
     && isString(input.etag)
-    && (input.deleted_at === null || isNumberValue(input.deleted_at))
     && isString(input.metadata_json);
 }
 
@@ -182,7 +174,6 @@ export function isNodeEntry(input: unknown): input is NodeEntry {
     && isNodeEntryKind(input.kind)
     && isNumberValue(input.updated_at)
     && isString(input.etag)
-    && (input.deleted_at === null || isNumberValue(input.deleted_at))
     && isBooleanValue(input.has_children);
 }
 
@@ -247,8 +238,7 @@ export function isRecentNodeHit(input: unknown): input is RecentNodeHit {
     && isString(input.path)
     && isNodeKind(input.kind)
     && isNumberValue(input.updated_at)
-    && isString(input.etag)
-    && (input.deleted_at === null || isNumberValue(input.deleted_at));
+    && isString(input.etag);
 }
 
 export function isMultiEdit(input: unknown): input is MultiEdit {
@@ -265,9 +255,7 @@ export function isMultiEditNodeResult(input: unknown): input is MultiEditNodeRes
 
 export function isDeleteNodeResult(input: unknown): input is DeleteNodeResult {
   return isRecord(input)
-    && isString(input.path)
-    && isString(input.etag)
-    && isNumberValue(input.deleted_at);
+    && isString(input.path);
 }
 
 function readTrackedNodes(input: unknown): TrackedNodeState[] {

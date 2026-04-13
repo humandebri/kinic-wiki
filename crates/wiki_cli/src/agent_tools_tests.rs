@@ -34,7 +34,6 @@ impl WikiApi for ToolMockClient {
         Ok(Status {
             file_count: 0,
             source_count: 0,
-            deleted_count: 0,
         })
     }
 
@@ -83,11 +82,7 @@ impl WikiApi for ToolMockClient {
     }
 
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
-        Ok(DeleteNodeResult {
-            path: request.path,
-            etag: "etag-delete".to_string(),
-            deleted_at: 1,
-        })
+        Ok(DeleteNodeResult { path: request.path })
     }
 
     async fn move_node(&self, request: MoveNodeRequest) -> Result<MoveNodeResult> {
@@ -134,8 +129,7 @@ impl WikiApi for ToolMockClient {
             path: "/Wiki/a.md".to_string(),
             kind: NodeKind::File,
             updated_at: 2,
-            etag: "etag-recent".to_string(),
-            deleted_at: None,
+            etag: "etag-a".to_string(),
         }])
     }
 
@@ -352,8 +346,7 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
         "recent",
         serde_json::json!({
             "limit": 5,
-            "path": "/Wiki",
-            "include_deleted": false
+            "path": "/Wiki"
         }),
     )
     .await
@@ -446,7 +439,6 @@ fn sample_node(path: &str, content: &str, etag: &str) -> Node {
         created_at: 1,
         updated_at: 2,
         etag: etag.to_string(),
-        deleted_at: None,
         metadata_json: "{}".to_string(),
     }
 }
@@ -457,7 +449,6 @@ fn sample_ack(path: &str, kind: NodeKind, etag: &str) -> NodeMutationAck {
         kind,
         updated_at: 2,
         etag: etag.to_string(),
-        deleted_at: None,
     }
 }
 

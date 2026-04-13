@@ -47,7 +47,6 @@ type RawNode = {
   created_at: bigint;
   updated_at: bigint;
   etag: string;
-  deleted_at: [] | [bigint];
   metadata_json: string;
 };
 type RawNodeEntry = {
@@ -55,7 +54,6 @@ type RawNodeEntry = {
   kind: RawNodeEntryKind;
   updated_at: bigint;
   etag: string;
-  deleted_at: [] | [bigint];
   has_children: boolean;
 };
 type RawGlobNodeHit = {
@@ -70,7 +68,7 @@ type RawSearchNodeHit = {
   score: number;
   match_reasons: string[];
 };
-type RawStatus = { file_count: bigint; source_count: bigint; deleted_count: bigint };
+type RawStatus = { file_count: bigint; source_count: bigint };
 
 export interface KinicCanisterApi {
   status: () => Promise<RawStatus>;
@@ -78,7 +76,6 @@ export interface KinicCanisterApi {
   list_nodes: (request: {
     prefix: string;
     recursive: boolean;
-    include_deleted: boolean;
   }) => Promise<RawResult<RawNodeEntry[]>>;
   write_node: (request: {
     path: string;
@@ -105,7 +102,7 @@ export interface KinicCanisterApi {
   delete_node: (request: {
     path: string;
     expected_etag: [] | [string];
-  }) => Promise<RawResult<{ path: string; etag: string; deleted_at: bigint }>>;
+  }) => Promise<RawResult<{ path: string }>>;
   mkdir_node: (request: {
     path: string;
   }) => Promise<RawResult<{ path: string; created: boolean }>>;
@@ -123,13 +120,11 @@ export interface KinicCanisterApi {
   recent_nodes: (request: {
     limit: number;
     path: [] | [string];
-    include_deleted: boolean;
   }) => Promise<RawResult<Array<{
     path: string;
     kind: RawNodeKind;
     updated_at: bigint;
     etag: string;
-    deleted_at: [] | [bigint];
   }>>>;
   multi_edit_node: (request: {
     path: string;
@@ -148,12 +143,10 @@ export interface KinicCanisterApi {
   }) => Promise<RawResult<RawSearchNodeHit[]>>;
   export_snapshot: (request: {
     prefix: [] | [string];
-    include_deleted: boolean;
   }) => Promise<RawResult<{ snapshot_revision: string; nodes: RawNode[] }>>;
   fetch_updates: (request: {
     known_snapshot_revision: string;
     prefix: [] | [string];
-    include_deleted: boolean;
   }) => Promise<RawResult<{ snapshot_revision: string; changed_nodes: RawNode[]; removed_paths: string[] }>>;
 }
 
@@ -178,7 +171,6 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     created_at: candid.Int64,
     updated_at: candid.Int64,
     etag: candid.Text,
-    deleted_at: candid.Opt(candid.Int64),
     metadata_json: candid.Text
   });
   const NodeEntry = candid.Record({
@@ -186,7 +178,6 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     kind: NodeEntryKind,
     updated_at: candid.Int64,
     etag: candid.Text,
-    deleted_at: candid.Opt(candid.Int64),
     has_children: candid.Bool
   });
   const GlobNodeHit = candid.Record({
@@ -204,14 +195,12 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
   return candid.Service({
     status: candid.Func([], [candid.Record({
       file_count: candid.Nat64,
-      source_count: candid.Nat64,
-      deleted_count: candid.Nat64
+      source_count: candid.Nat64
     })], ["query"]),
     read_node: candid.Func([candid.Text], [candid.Variant({ Ok: candid.Opt(Node), Err: candid.Text })], ["query"]),
     list_nodes: candid.Func([candid.Record({
       prefix: candid.Text,
-      recursive: candid.Bool,
-      include_deleted: candid.Bool
+      recursive: candid.Bool
     })], [candid.Variant({ Ok: candid.Vec(NodeEntry), Err: candid.Text })], ["query"]),
     write_node: candid.Func([candid.Record({
       path: candid.Text,
@@ -238,7 +227,7 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     delete_node: candid.Func([candid.Record({
       path: candid.Text,
       expected_etag: candid.Opt(candid.Text)
-    })], [candid.Variant({ Ok: candid.Record({ path: candid.Text, etag: candid.Text, deleted_at: candid.Int64 }), Err: candid.Text })], []),
+    })], [candid.Variant({ Ok: candid.Record({ path: candid.Text }), Err: candid.Text })], []),
     mkdir_node: candid.Func([candid.Record({
       path: candid.Text
     })], [candid.Variant({ Ok: candid.Record({ path: candid.Text, created: candid.Bool }), Err: candid.Text })], ["query"]),
@@ -255,14 +244,12 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
     })], [candid.Variant({ Ok: candid.Vec(GlobNodeHit), Err: candid.Text })], ["query"]),
     recent_nodes: candid.Func([candid.Record({
       limit: candid.Nat32,
-      path: candid.Opt(candid.Text),
-      include_deleted: candid.Bool
+      path: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Vec(candid.Record({
       path: candid.Text,
       kind: NodeKind,
       updated_at: candid.Int64,
-      etag: candid.Text,
-      deleted_at: candid.Opt(candid.Int64)
+      etag: candid.Text
     })), Err: candid.Text })], ["query"]),
     multi_edit_node: candid.Func([candid.Record({
       path: candid.Text,
@@ -283,13 +270,11 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
       top_k: candid.Nat32
     })], [candid.Variant({ Ok: candid.Vec(SearchNodeHit), Err: candid.Text })], ["query"]),
     export_snapshot: candid.Func([candid.Record({
-      prefix: candid.Opt(candid.Text),
-      include_deleted: candid.Bool
+      prefix: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Record({ snapshot_revision: candid.Text, nodes: candid.Vec(Node) }), Err: candid.Text })], ["query"]),
     fetch_updates: candid.Func([candid.Record({
       known_snapshot_revision: candid.Text,
-      prefix: candid.Opt(candid.Text),
-      include_deleted: candid.Bool
+      prefix: candid.Opt(candid.Text)
     })], [candid.Variant({ Ok: candid.Record({ snapshot_revision: candid.Text, changed_nodes: candid.Vec(Node), removed_paths: candid.Vec(candid.Text) }), Err: candid.Text })], ["query"])
   });
 };
@@ -297,8 +282,7 @@ export const idlFactory: ActorFactory = ({ IDL: candid }) => {
 export function normalizeStatus(raw: RawStatus): StatusResponse {
   return validate("status", {
     file_count: toNumber(raw.file_count),
-    source_count: toNumber(raw.source_count),
-    deleted_count: toNumber(raw.deleted_count)
+    source_count: toNumber(raw.source_count)
   }, isStatusResponse);
 }
 
@@ -327,12 +311,10 @@ export function normalizeEditNodeResult(raw: RawResult<{ node: RawNode; replacem
   }, isEditNodeResult);
 }
 
-export function normalizeDeleteNodeResult(raw: RawResult<{ path: string; etag: string; deleted_at: bigint }>): DeleteNodeResult {
+export function normalizeDeleteNodeResult(raw: RawResult<{ path: string }>): DeleteNodeResult {
   const ok = unwrapResult(raw);
   return validate("delete_node", {
-    path: ok.path,
-    etag: ok.etag,
-    deleted_at: toNumber(ok.deleted_at)
+    path: ok.path
   }, isDeleteNodeResult);
 }
 
@@ -368,15 +350,13 @@ export function normalizeRecentNodeHits(raw: RawResult<Array<{
   kind: RawNodeKind;
   updated_at: bigint;
   etag: string;
-  deleted_at: [] | [bigint];
 }>>): RecentNodeHit[] {
   return unwrapResult(raw).map((entry) =>
     validate("recent_nodes", {
       path: entry.path,
       kind: normalizeNodeKind(entry.kind),
       updated_at: toNumber(entry.updated_at),
-      etag: entry.etag,
-      deleted_at: entry.deleted_at.length === 0 ? null : toNumber(entry.deleted_at[0])
+      etag: entry.etag
     }, isRecentNodeHit)
   );
 }
@@ -434,7 +414,6 @@ function normalizeNode(raw: RawNode): NodeSnapshot {
     created_at: toNumber(raw.created_at),
     updated_at: toNumber(raw.updated_at),
     etag: raw.etag,
-    deleted_at: raw.deleted_at.length === 0 ? null : toNumber(raw.deleted_at[0]),
     metadata_json: raw.metadata_json
   }, isNodeSnapshot);
 }
@@ -445,7 +424,6 @@ function normalizeNodeEntry(raw: RawNodeEntry): NodeEntry {
     kind: normalizeNodeEntryKind(raw.kind),
     updated_at: toNumber(raw.updated_at),
     etag: raw.etag,
-    deleted_at: raw.deleted_at.length === 0 ? null : toNumber(raw.deleted_at[0]),
     has_children: raw.has_children
   }, isNodeEntry);
 }
