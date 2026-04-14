@@ -12,16 +12,21 @@ use crate::mirror::{
     update_local_node_metadata, write_conflict_file, write_snapshot_mirror,
 };
 use anyhow::{Result, anyhow};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    FetchUpdatesRequest, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest,
-    MultiEdit, MultiEditNodeRequest, RecentNodesRequest, SearchNodePathsRequest,
-    SearchNodesRequest, WriteNodeRequest,
+    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
+    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest,
+    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 const REMOTE_PREFIX: &str = "/Wiki";
+/// Must match `QUERY_RESULT_LIMIT_MAX` in `wiki_store` sync paging.
+const SYNC_PAGE_LIMIT: u32 = 100;
+const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
+const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no longer current";
+const SNAPSHOT_SESSION_EXPIRED_ERROR: &str = "snapshot_session_id has expired";
 
 pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
     let Cli {
@@ -248,7 +253,7 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
                 for hit in hits {
-                    println!("{}\t{}", hit.path, hit.snippet);
+                    println!("{}\t{}", hit.path, hit.snippet.unwrap_or_default());
                 }
             }
         }
@@ -269,7 +274,7 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
                 for hit in hits {
-                    println!("{}\t{}", hit.path, hit.snippet);
+                    println!("{}\t{}", hit.path, hit.snippet.unwrap_or_default());
                 }
             }
         }
@@ -309,8 +314,9 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         Command::Pull {
             vault_path,
             mirror_root,
+            resync,
         } => {
-            pull(client, &vault_path.join(mirror_root)).await?;
+            pull(client, &vault_path.join(mirror_root), resync).await?;
         }
         Command::Push {
             vault_path,
@@ -362,19 +368,23 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
     Ok(())
 }
 
-pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
+pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Result<()> {
     let state = load_state(mirror_root)?;
-    if state.snapshot_revision.is_empty() {
-        let snapshot = client
-            .export_snapshot(ExportSnapshotRequest {
-                prefix: Some(REMOTE_PREFIX.to_string()),
-            })
-            .await?;
-        write_snapshot_mirror(mirror_root, &snapshot.nodes)?;
+    if resync || state.snapshot_revision.is_empty() {
+        let snapshot = collect_paged_snapshot(client)
+            .await
+            .map_err(snapshot_restart_required_error)?;
+        let updates = collect_paged_updates(client, &snapshot.snapshot_revision).await?;
+        let nodes = merge_snapshot_and_updates(
+            snapshot.nodes,
+            updates.changed_nodes,
+            &updates.removed_paths,
+        );
+        write_snapshot_mirror(mirror_root, &nodes)?;
+        remove_mirror_paths(mirror_root, &updates.removed_paths)?;
         remove_stale_managed_files(
             mirror_root,
-            &snapshot
-                .nodes
+            &nodes
                 .iter()
                 .map(|node| node.path.clone())
                 .collect::<HashSet<_>>(),
@@ -382,23 +392,22 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         save_state(
             mirror_root,
             &MirrorState {
-                snapshot_revision: snapshot.snapshot_revision,
+                snapshot_revision: updates.snapshot_revision,
                 last_synced_at: now_millis(),
-                tracked_nodes: tracked_nodes_from_snapshot(&snapshot.nodes),
+                tracked_nodes: tracked_nodes_from_snapshot(&nodes),
             },
         )?;
-        println!("pull complete: {} nodes", snapshot.nodes.len());
+        println!("pull complete: {} nodes", nodes.len());
         return Ok(());
     }
 
-    let updates = client
-        .fetch_updates(FetchUpdatesRequest {
-            known_snapshot_revision: state.snapshot_revision.clone(),
-            prefix: Some(REMOTE_PREFIX.to_string()),
-        })
-        .await?;
-    write_snapshot_mirror(mirror_root, &updates.changed_nodes)?;
-    remove_mirror_paths(mirror_root, &updates.removed_paths)?;
+    let updates = collect_paged_updates(client, &state.snapshot_revision)
+        .await
+        .map_err(resync_required_error)?;
+    let changed_nodes = updates.changed_nodes;
+    let removed_paths = updates.removed_paths;
+    write_snapshot_mirror(mirror_root, &changed_nodes)?;
+    remove_mirror_paths(mirror_root, &removed_paths)?;
     save_state(
         mirror_root,
         &MirrorState {
@@ -406,15 +415,15 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
             last_synced_at: now_millis(),
             tracked_nodes: merge_tracked_nodes(
                 &state.tracked_nodes,
-                &updates.changed_nodes,
-                &updates.removed_paths,
+                &changed_nodes,
+                &removed_paths,
             ),
         },
     )?;
     println!(
         "pull complete: {} changed, {} removed",
-        updates.changed_nodes.len(),
-        updates.removed_paths.len()
+        changed_nodes.len(),
+        removed_paths.len()
     );
     Ok(())
 }
@@ -480,14 +489,13 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         }
     }
 
-    let updates = client
-        .fetch_updates(FetchUpdatesRequest {
-            known_snapshot_revision: state.snapshot_revision,
-            prefix: Some(REMOTE_PREFIX.to_string()),
-        })
-        .await?;
-    write_snapshot_mirror(mirror_root, &updates.changed_nodes)?;
-    remove_mirror_paths(mirror_root, &updates.removed_paths)?;
+    let updates = collect_paged_updates(client, &state.snapshot_revision)
+        .await
+        .map_err(resync_required_error)?;
+    let changed_nodes = updates.changed_nodes;
+    let removed_paths = updates.removed_paths;
+    write_snapshot_mirror(mirror_root, &changed_nodes)?;
+    remove_mirror_paths(mirror_root, &removed_paths)?;
     save_state(
         mirror_root,
         &MirrorState {
@@ -495,8 +503,8 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
             last_synced_at: now_millis(),
             tracked_nodes: merge_tracked_nodes(
                 &state.tracked_nodes,
-                &updates.changed_nodes,
-                &updates.removed_paths,
+                &changed_nodes,
+                &removed_paths,
             ),
         },
     )?;
@@ -505,6 +513,110 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         writes, deletes, conflicts
     );
     Ok(())
+}
+
+async fn collect_paged_snapshot(client: &impl WikiApi) -> Result<ExportSnapshotResponse> {
+    let mut cursor = None;
+    let mut snapshot_revision = None;
+    let mut snapshot_session_id = None;
+    let mut nodes = Vec::new();
+    loop {
+        let page = client
+            .export_snapshot(ExportSnapshotRequest {
+                prefix: Some(REMOTE_PREFIX.to_string()),
+                limit: SYNC_PAGE_LIMIT,
+                cursor: cursor.clone(),
+                snapshot_revision: snapshot_revision.clone(),
+                snapshot_session_id: snapshot_session_id.clone(),
+            })
+            .await?;
+        snapshot_revision = Some(page.snapshot_revision.clone());
+        snapshot_session_id = page.snapshot_session_id.clone();
+        nodes.extend(page.nodes);
+        let Some(next_cursor) = page.next_cursor else {
+            return Ok(ExportSnapshotResponse {
+                snapshot_revision: snapshot_revision.unwrap_or_default(),
+                snapshot_session_id,
+                nodes,
+                next_cursor: None,
+            });
+        };
+        cursor = Some(next_cursor);
+    }
+}
+
+async fn collect_paged_updates(
+    client: &impl WikiApi,
+    known_snapshot_revision: &str,
+) -> Result<FetchUpdatesResponse> {
+    let mut cursor = None;
+    let mut target_snapshot_revision = None;
+    let mut changed_nodes = Vec::new();
+    let mut removed_paths = Vec::new();
+    loop {
+        let page = client
+            .fetch_updates(FetchUpdatesRequest {
+                known_snapshot_revision: known_snapshot_revision.to_string(),
+                prefix: Some(REMOTE_PREFIX.to_string()),
+                limit: SYNC_PAGE_LIMIT,
+                cursor: cursor.clone(),
+                target_snapshot_revision: target_snapshot_revision.clone(),
+            })
+            .await?;
+        target_snapshot_revision = Some(page.snapshot_revision.clone());
+        changed_nodes.extend(page.changed_nodes);
+        removed_paths.extend(page.removed_paths);
+        let Some(next_cursor) = page.next_cursor else {
+            return Ok(FetchUpdatesResponse {
+                snapshot_revision: target_snapshot_revision.unwrap_or_default(),
+                changed_nodes,
+                removed_paths,
+                next_cursor: None,
+            });
+        };
+        cursor = Some(next_cursor);
+    }
+}
+
+fn resync_required_error(error: anyhow::Error) -> anyhow::Error {
+    if error.to_string().contains(SNAPSHOT_UNAVAILABLE_ERROR) {
+        anyhow!("{SNAPSHOT_UNAVAILABLE_ERROR}; run pull --resync")
+    } else {
+        error
+    }
+}
+
+fn snapshot_restart_required_error(error: anyhow::Error) -> anyhow::Error {
+    let message = error.to_string();
+    if message.contains(SNAPSHOT_NO_LONGER_CURRENT_ERROR)
+        || message.contains(SNAPSHOT_SESSION_EXPIRED_ERROR)
+    {
+        anyhow!("{message}; rerun pull")
+    } else {
+        error
+    }
+}
+
+fn merge_snapshot_and_updates(
+    snapshot_nodes: Vec<wiki_types::Node>,
+    changed_nodes: Vec<wiki_types::Node>,
+    removed_paths: &[String],
+) -> Vec<wiki_types::Node> {
+    let removed = removed_paths.iter().collect::<HashSet<_>>();
+    let mut merged = BTreeMap::new();
+    for node in snapshot_nodes {
+        if removed.contains(&node.path) {
+            continue;
+        }
+        merged.insert(node.path.clone(), node);
+    }
+    for node in changed_nodes {
+        if removed.contains(&node.path) {
+            continue;
+        }
+        merged.insert(node.path.clone(), node);
+    }
+    merged.into_values().collect()
 }
 
 fn read_local_status(mirror_root: &Path) -> Result<(MirrorState, usize)> {

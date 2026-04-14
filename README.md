@@ -458,15 +458,34 @@ Sync uses:
 - `export_snapshot` for full export
 - `fetch_updates` for delta sync
 
+Both sync APIs are paged. Requests must set `limit` in `1..=100`; responses return
+`next_cursor` when another page exists. The cursor is the last absolute path from the previous
+page. Clients must not persist a new `snapshot_revision` until the final page.
+`export_snapshot` also returns `snapshot_session_id`; paged snapshot requests must resend it from
+page 2 onward so the server can keep a fixed path set for the session lifetime.
+
 `fetch_updates` only returns deltas. If the client does not know a valid snapshot revision, changes
 scope, or sends a future revision, `fetch_updates` returns an error instead of a full refresh.
 Change-log rows are retained in SQLite until storage is exhausted, so old valid revisions can still
 produce deltas.
+Paged delta race checks use a per-path `last_change_revision` index. Paths whose latest revision is
+still at or before `target_snapshot_revision` may be returned from current state; paths updated
+again after that target still fail hard.
 If an existing database has already lost historical change-log rows, revisions before the available
-log floor also return an error.
+log floor also return `known_snapshot_revision is no longer available`; clients must stop delta sync
+and run an explicit snapshot resync.
 
 Initial sync and scope changes must use `export_snapshot` first, then continue with
-`fetch_updates` for the same scope:
+`fetch_updates` for the same scope. After paged `export_snapshot` completes, clients run paged
+`fetch_updates` from that snapshot revision to catch concurrent writes before saving local sync
+state:
+
+`export_snapshot` now fixes the path set per `snapshot_session_id`, but it still reads current
+rows for node content. If a session path is deleted or renamed before its page is read, the server
+returns `snapshot_revision is no longer current` and the client must restart snapshot sync. If a
+session expires, the server returns `snapshot_session_id has expired` and the client must restart
+snapshot sync. Continued snapshot requests validate `snapshot_session_id` first, then TTL, then
+prefix, and only then validate that `cursor` is a valid session path.
 
 - deleted paths appear in `removed_paths`
 - moved old paths appear in `removed_paths`

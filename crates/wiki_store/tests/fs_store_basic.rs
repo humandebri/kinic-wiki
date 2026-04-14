@@ -40,6 +40,7 @@ fn fs_migrations_create_tables() {
         "fs_nodes",
         "fs_nodes_fts",
         "fs_change_log",
+        "fs_path_state",
         "schema_migrations",
     ];
     for table in tables {
@@ -90,10 +91,27 @@ fn fs_migrations_create_tables() {
         vec![
             "wiki_store:000_fs_schema".to_string(),
             "wiki_store:001_fs_remove_tombstones".to_string(),
+            "wiki_store:002_fs_path_state".to_string(),
+            "wiki_store:003_fs_snapshot_sessions".to_string(),
         ]
     );
 
-    for index in ["fs_nodes_path_covering_idx", "fs_nodes_recent_covering_idx"] {
+    for table in ["fs_snapshot_sessions", "fs_snapshot_session_paths"] {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+                [table],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("snapshot table lookup should succeed");
+        assert_eq!(exists, 1);
+    }
+
+    for index in [
+        "fs_nodes_path_covering_idx",
+        "fs_nodes_recent_covering_idx",
+        "fs_snapshot_sessions_expires_at_idx",
+    ] {
         let exists = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
@@ -220,6 +238,67 @@ fn change_log_retains_all_recorded_revisions() {
     assert_eq!(revision_count, 261);
     assert_eq!(oldest_revision, 1);
     assert_eq!(newest_revision, 261);
+}
+
+#[test]
+fn fs_path_state_tracks_latest_change_revision() {
+    let (_dir, store) = new_store();
+    let first = write_file(&store, "/Wiki/file.md", None, 10);
+    let second = write_file(&store, "/Wiki/file.md", Some(&first), 11);
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/file.md".to_string(),
+                expected_etag: Some(second),
+            },
+            12,
+        )
+        .expect("delete should succeed");
+
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let revision = conn
+        .query_row(
+            "SELECT last_change_revision FROM fs_path_state WHERE path = '/Wiki/file.md'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("path state should exist");
+    assert_eq!(revision, 3);
+}
+
+#[test]
+fn fs_path_state_migration_rebuilds_from_change_log() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/alpha.md", None, 10);
+    write_file(&store, "/Wiki/beta.md", None, 11);
+
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute_batch(
+        "
+        DROP TABLE fs_path_state;
+        DELETE FROM schema_migrations WHERE version = 'wiki_store:002_fs_path_state';
+        ",
+    )
+    .expect("state reset should succeed");
+
+    store
+        .run_fs_migrations()
+        .expect("path state migration should rebuild");
+
+    let rebuilt = conn
+        .query_row("SELECT COUNT(*) FROM fs_path_state", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("rebuilt count should succeed");
+    assert_eq!(rebuilt, 2);
+    let beta_revision = conn
+        .query_row(
+            "SELECT last_change_revision FROM fs_path_state WHERE path = '/Wiki/beta.md'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("beta revision should exist");
+    assert_eq!(beta_revision, 2);
 }
 
 #[test]
@@ -480,7 +559,10 @@ fn list_search_and_export_respect_deleted_and_prefix() {
         .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
     assert_eq!(path_hits[0].path, "/Wiki/nested/beta.md");
-    assert_eq!(path_hits[0].snippet, "/Wiki/nested/beta.md");
+    assert_eq!(
+        path_hits[0].snippet.as_deref(),
+        Some("/Wiki/nested/beta.md")
+    );
     assert_eq!(
         path_hits[0].match_reasons,
         vec!["path_substring".to_string()]
@@ -498,6 +580,10 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     let snapshot = store
         .export_snapshot(ExportSnapshotRequest {
             prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
         })
         .expect("snapshot should succeed");
     assert_eq!(snapshot.nodes.len(), 3);
@@ -558,20 +644,24 @@ fn search_nodes_clamps_snippets_from_large_single_token_content() {
             "large token search should return the written node"
         );
         for hit in hits {
+            let snippet = hit
+                .snippet
+                .as_deref()
+                .expect("snippet should exist for matched content");
             assert!(
-                !hit.snippet.is_empty(),
+                !snippet.is_empty(),
                 "snippet should be non-empty for {}",
                 hit.path
             );
             assert!(
-                hit.snippet.chars().count() <= 243,
+                snippet.chars().count() <= 243,
                 "snippet should be limited to 240 chars plus ellipsis"
             );
             assert!(
-                hit.snippet.len() <= 512,
+                snippet.len() <= 512,
                 "snippet should be limited to 512 utf-8 bytes"
             );
-            assert!(std::str::from_utf8(hit.snippet.as_bytes()).is_ok());
+            assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
         }
     }
 }
@@ -602,13 +692,17 @@ fn search_nodes_builds_compact_case_insensitive_preview() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "/Wiki/preview.md");
-    assert!(!hits[0].snippet.is_empty());
+    let snippet = hits[0]
+        .snippet
+        .as_deref()
+        .expect("snippet should exist for preview");
+    assert!(!snippet.is_empty());
     assert!(
-        hits[0].snippet.to_ascii_lowercase().contains("alphabeta"),
+        snippet.to_ascii_lowercase().contains("alphabeta"),
         "snippet should include the matched token: {}",
-        hits[0].snippet
+        snippet
     );
-    assert!(hits[0].snippet.len() <= 512);
+    assert!(snippet.len() <= 512);
 }
 
 #[test]
@@ -643,11 +737,15 @@ fn search_nodes_handles_ten_large_hits_without_loading_full_content() {
         assert!(window[0].score <= window[1].score);
     }
     for hit in hits {
+        let snippet = hit
+            .snippet
+            .as_deref()
+            .expect("snippet should exist for returned hit");
         assert!(hit.path.starts_with("/Wiki/large/"));
-        assert!(!hit.snippet.is_empty());
-        assert!(hit.snippet.len() <= 512);
-        assert!(hit.snippet.chars().count() <= 243);
-        assert!(std::str::from_utf8(hit.snippet.as_bytes()).is_ok());
+        assert!(!snippet.is_empty());
+        assert!(snippet.len() <= 512);
+        assert!(snippet.chars().count() <= 243);
+        assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
     }
 }
 

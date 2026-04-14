@@ -211,7 +211,7 @@ pub struct SearchNodePathsRequest {
 pub struct SearchNodeHit {
     pub path: String,
     pub kind: NodeKind,
-    pub snippet: String,
+    pub snippet: Option<String>,
     pub score: f32,
     pub match_reasons: Vec<String>,
 }
@@ -219,18 +219,27 @@ pub struct SearchNodeHit {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ExportSnapshotRequest {
     pub prefix: Option<String>,
+    pub limit: u32,
+    pub cursor: Option<String>,
+    pub snapshot_revision: Option<String>,
+    pub snapshot_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ExportSnapshotResponse {
     pub snapshot_revision: String,
+    pub snapshot_session_id: Option<String>,
     pub nodes: Vec<Node>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct FetchUpdatesRequest {
     pub known_snapshot_revision: String,
     pub prefix: Option<String>,
+    pub limit: u32,
+    pub cursor: Option<String>,
+    pub target_snapshot_revision: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -238,6 +247,7 @@ pub struct FetchUpdatesResponse {
     pub snapshot_revision: String,
     pub changed_nodes: Vec<Node>,
     pub removed_paths: Vec<String>,
+    pub next_cursor: Option<String>,
 }
 
 #[cfg(test)]

@@ -93,12 +93,19 @@ fn fs_service_delegates_to_fs_store() {
     let snapshot = service
         .export_fs_snapshot(ExportSnapshotRequest {
             prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
         })
         .expect("snapshot should succeed");
     let updates = service
         .fetch_fs_updates(FetchUpdatesRequest {
             known_snapshot_revision: snapshot.snapshot_revision,
             prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            target_snapshot_revision: None,
         })
         .expect("updates should succeed");
     assert!(updates.changed_nodes.is_empty());

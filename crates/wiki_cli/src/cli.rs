@@ -185,6 +185,8 @@ pub enum Command {
         vault_path: PathBuf,
         #[arg(long, default_value = "Wiki")]
         mirror_root: String,
+        #[arg(long)]
+        resync: bool,
     },
     Push {
         #[arg(long)]

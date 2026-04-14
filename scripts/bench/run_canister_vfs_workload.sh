@@ -47,12 +47,17 @@ node -e '
   const parseList = (value, fallback) => !value ? fallback : value.split(",").map(item => item.trim()).filter(Boolean);
   const diagnosticProfile = process.env.WIKI_CANISTER_DIAGNOSTIC_PROFILE || "baseline";
   const replicaResetMode = process.env.BENCH_REPLICA_RESET_MODE || null;
-  const sizeSpecs = [
+  const allSizeSpecs = [
     { label: "1k", bytes: 1024, iterations: Number(process.env.WORKLOAD_ITERATIONS_1K || 200) },
     { label: "10k", bytes: 10240, iterations: Number(process.env.WORKLOAD_ITERATIONS_10K || 100) },
     { label: "100k", bytes: 102400, iterations: Number(process.env.WORKLOAD_ITERATIONS_100K || 40) },
     { label: "1mb", bytes: 1048576, iterations: Number(process.env.WORKLOAD_ITERATIONS_1MB || 10) }
   ];
+  const defaultPayloadLabels = ["1k", "10k", "100k", "1mb"];
+  const payloadLabels = process.env.WORKLOAD_PAYLOAD_LABELS
+    ? parseList(process.env.WORKLOAD_PAYLOAD_LABELS, defaultPayloadLabels)
+    : defaultPayloadLabels;
+  const sizeSpecs = allSizeSpecs.filter((s) => payloadLabels.includes(s.label));
   const pickIterations = (operation, size) => {
     if (operation === "list") return Number(process.env.WORKLOAD_LIST_ITERATIONS || 100);
     if (operation === "search") return Number(process.env.WORKLOAD_SEARCH_ITERATIONS || 50);

@@ -99,25 +99,6 @@ pub(crate) fn load_stored_node(
     .map_err(|error| error.to_string())
 }
 
-pub(crate) fn load_scoped_nodes(conn: &Connection, prefix: &str) -> Result<Vec<Node>, String> {
-    let mut sql = String::from(
-        "SELECT path, kind, content, created_at, updated_at, etag, metadata_json
-         FROM fs_nodes WHERE 1 = 1",
-    );
-    let mut values = Vec::new();
-    if prefix != "/" {
-        let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
-        sql.push_str(&scope_sql);
-        values.extend(scope_values);
-    }
-    sql.push_str(" ORDER BY path ASC");
-    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    stmt.query_map(rusqlite::params_from_iter(values.iter()), map_node)
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
-}
-
 pub(crate) fn load_scoped_entry_rows(
     conn: &Connection,
     prefix: &str,
@@ -309,18 +290,6 @@ pub(crate) fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error
             rusqlite::types::Type::Text,
         )),
     }
-}
-
-fn map_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<Node> {
-    Ok(Node {
-        path: row.get(0)?,
-        kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
-        content: row.get(2)?,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
-        etag: row.get(5)?,
-        metadata_json: row.get(6)?,
-    })
 }
 
 fn map_stored_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {

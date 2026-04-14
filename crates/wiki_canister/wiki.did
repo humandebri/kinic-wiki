@@ -19,19 +19,31 @@ type EditNodeResult = record {
   node : NodeMutationAck;
   replacement_count : nat32;
 };
-type ExportSnapshotRequest = record { prefix : opt text };
+type ExportSnapshotRequest = record {
+  snapshot_revision : opt text;
+  cursor : opt text;
+  limit : nat32;
+  prefix : opt text;
+  snapshot_session_id : opt text;
+};
 type ExportSnapshotResponse = record {
   snapshot_revision : text;
   nodes : vec Node;
+  next_cursor : opt text;
+  snapshot_session_id : opt text;
 };
 type FetchUpdatesRequest = record {
   known_snapshot_revision : text;
+  cursor : opt text;
+  limit : nat32;
   prefix : opt text;
+  target_snapshot_revision : opt text;
 };
 type FetchUpdatesResponse = record {
   removed_paths : vec text;
   snapshot_revision : text;
   changed_nodes : vec Node;
+  next_cursor : opt text;
 };
 type GlobNodeHit = record {
   kind : NodeEntryKind;
@@ -111,7 +123,7 @@ type SearchNodeHit = record {
   kind : NodeKind;
   path : text;
   match_reasons : vec text;
-  snippet : text;
+  snippet : opt text;
   score : float32;
 };
 type SearchNodePathsRequest = record {

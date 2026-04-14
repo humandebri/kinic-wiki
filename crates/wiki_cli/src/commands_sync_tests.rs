@@ -95,7 +95,9 @@ impl WikiApi for SyncMockClient {
     ) -> Result<ExportSnapshotResponse> {
         Ok(ExportSnapshotResponse {
             snapshot_revision: "snap-initial".to_string(),
+            snapshot_session_id: None,
             nodes: self.snapshot_nodes.clone(),
+            next_cursor: None,
         })
     }
     async fn fetch_updates(&self, _request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
@@ -152,6 +154,7 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
             snapshot_revision: "snap-2".to_string(),
             changed_nodes: vec![initial],
             removed_paths: Vec::new(),
+            next_cursor: None,
         }),
         fail_write: true,
     };
@@ -219,6 +222,7 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
             snapshot_revision: "snap-2".to_string(),
             changed_nodes: vec![first, second],
             removed_paths: Vec::new(),
+            next_cursor: None,
         }),
         fail_write: true,
     };
@@ -323,11 +327,14 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
             snapshot_revision: "snap-2".to_string(),
             changed_nodes: vec![fresh.clone()],
             removed_paths: vec!["/Wiki/stale.md".to_string()],
+            next_cursor: None,
         }),
         fail_write: false,
     };
 
-    pull(&client, &root).await.expect("pull should succeed");
+    pull(&client, &root, false)
+        .await
+        .expect("pull should succeed");
 
     assert!(!root.join("stale.md").exists());
     let fresh_content =

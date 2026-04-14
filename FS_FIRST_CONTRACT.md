@@ -150,12 +150,28 @@ section hash や manifest は持ちません。
 - `snapshot_revision` は prefix 配下の current state から導出する決定的ハッシュ
 - `known_snapshot_revision` が一致する場合、`fetch_updates` は空差分を返す
 - 不一致の場合、`fetch_updates` は `changed_nodes` と `removed_paths` を返す
+- `export_snapshot` / `fetch_updates` は `limit` と `cursor` でページングする
+- `limit` は `1..=100` の必須値
+- `cursor` は直前ページの最後の絶対 path
+- 次ページがある場合だけ `next_cursor` を返す
+- `export_snapshot` は初回ページで `snapshot_session_id` を返し、2 ページ目以降は同じ session を再送する
+- `snapshot_session_id` は prefix 配下 path 集合を session 単位で固定する
+- 継続ページは `snapshot_session_id` → TTL → prefix → session 内 cursor の順で検証する
+- `fetch_updates` の 2 ページ目以降は、前ページの `snapshot_revision` を `target_snapshot_revision` として渡す
+- client は `next_cursor` が空になるまで新しい `snapshot_revision` を保存しない
 - `removed_paths` は削除済み node 本体ではなく path のみ返す
 - `fetch_updates` は差分専用であり、full refresh は返さない
 - `known_snapshot_revision` が不正、scope 不一致、または current revision より未来の場合は error を返す
 - change log は SQLite storage の実上限まで保持し、古い valid revision でも差分取得を試行する
+- 差分ページング中の path-level race 判定には `fs_path_state.last_change_revision` を使う
+- `last_change_revision <= target_snapshot_revision` の path は current state を返してよい
+- `last_change_revision > target_snapshot_revision` の path が未返却ページに残っていた場合だけ hard error にする
 - 既存 DB で過去の change log が欠損している場合、取得可能範囲より古い revision は error を返す
-- 初回同期と scope 変更は `export_snapshot` で snapshot を取得してから `fetch_updates` に移行する
+- 初回同期と scope 変更は paged `export_snapshot` 完了後、同じ revision から paged `fetch_updates` を実行してから state を保存する
+- `known_snapshot_revision is no longer available` は client が差分同期を中断し、明示的な snapshot 再同期へ誘導する
+- `snapshot_session_id has expired` と `snapshot_revision is no longer current` は client が snapshot 再取得へ戻る
+- `snapshot_session_id prefix does not match request prefix` は `cursor` 妥当性 error より優先する
+- path 集合は point-in-time 化されるが、content history は未導入なので session path 削除・rename 時は hard error があり得る
 - `move_node` のような物理 rename では旧 path を `removed_paths` に、新 path を `changed_nodes` に返す
 
 ## 検索契約

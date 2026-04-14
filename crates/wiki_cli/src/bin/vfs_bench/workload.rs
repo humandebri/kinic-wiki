@@ -1570,7 +1570,7 @@ mod tests {
             Ok(vec![SearchNodeHit {
                 path: "/Wiki/bench/node-000000.md".to_string(),
                 kind: NodeKind::File,
-                snippet: request.query_text,
+                snippet: Some(request.query_text),
                 score: 1.0,
                 match_reasons: vec!["text".to_string()],
             }])
@@ -1586,7 +1586,7 @@ mod tests {
             Ok(vec![SearchNodeHit {
                 path: "/Wiki/bench/node-000000.md".to_string(),
                 kind: NodeKind::File,
-                snippet: "/Wiki/bench/node-000000.md".to_string(),
+                snippet: Some("/Wiki/bench/node-000000.md".to_string()),
                 score: 1.0,
                 match_reasons: vec!["path_substring".to_string()],
             }])

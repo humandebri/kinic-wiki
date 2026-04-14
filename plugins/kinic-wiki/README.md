@@ -120,6 +120,18 @@ The plugin calls these canister methods directly:
 - `export_snapshot`
 - `fetch_updates`
 
+`export_snapshot` and `fetch_updates` are paged with `limit=100`. The plugin applies all pages
+before saving `lastSnapshotRevision`. Initial sync fetches a snapshot, then immediately fetches
+deltas from that snapshot revision before committing local sync state. Paged snapshot requests
+reuse the canister-provided `snapshot_session_id` so the remote path set stays fixed for the whole
+initial sync.
+
+If `fetch_updates` returns `known_snapshot_revision is no longer available`, the plugin stops the
+delta sync and asks the user to run `Initial sync`.
+
+If `export_snapshot` returns `snapshot_session_id has expired` or `snapshot_revision is no longer current`,
+the plugin also asks the user to rerun `Initial sync`.
+
 When the host is `localhost` or `127.0.0.1`, the plugin automatically fetches the local root key before the first request.
 
 ## Candid interface

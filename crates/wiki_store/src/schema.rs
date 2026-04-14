@@ -12,6 +12,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "wiki_store:001_fs_remove_tombstones",
         include_str!("../migrations/001_fs_remove_tombstones.sql"),
     ),
+    (
+        "wiki_store:002_fs_path_state",
+        include_str!("../migrations/002_fs_path_state.sql"),
+    ),
+    (
+        "wiki_store:003_fs_snapshot_sessions",
+        include_str!("../migrations/003_fs_snapshot_sessions.sql"),
+    ),
 ];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
     include_str!("../migrations/000_schema_migrations.sql");
