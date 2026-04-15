@@ -39,55 +39,68 @@ Current scope:
 - single-tenant
 - text-first
 - `/Wiki/...` as the primary wiki root
-- `/Sources/...` for raw source nodes managed by CLI workflows
+- `/Sources/...` for raw and session source nodes
 
-## LLM Workflow
+## Connection Resolution
 
-`wiki-cli` builds workflow context and applies validated workflow results.
-LLM-side reasoning lives in the repo-local skill:
+`wiki-cli` resolves the target canister in this order:
 
-- skill: `.agents/skills/wiki-workflow/SKILL.md`
-- raw source storage: `/Sources/raw/...`
-- session source storage: `/Sources/sessions/...`
-- generated wiki outputs: `/Wiki/sources/...`, `/Wiki/lint/...`, and targeted `/Wiki/...` updates
+1. `--local`
+2. default mainnet host `https://icp0.io`
 
-Workflow commands:
+`canister_id` resolves separately:
 
-- `wiki-cli ingest-source`
-- `wiki-cli build-ingest-context`
-- `wiki-cli build-crystallize-context`
-- `wiki-cli build-query-context`
-- `wiki-cli build-integrate-context`
-- `wiki-cli build-lint-context`
-- `wiki-cli apply-workflow-result`
-- `wiki-cli apply-integrate`
+1. `--canister-id`
+2. `WIKI_CANISTER_ID`
+3. user config
+
+Host selection flag:
+
+- `--local`
+
+Environment variables:
+
+- `WIKI_CANISTER_ID`
+
+User config paths:
+
+- `~/.config/wiki-cli/config.toml`
+- `~/.wiki-cli.toml`
+
+Config format:
+
+```toml
+canister_id = "aaaaa-aa"
+```
+
+## Source And Maintenance
+
+`wiki-cli` is VFS-first.
+Agents read, search, and edit nodes directly, then call explicit maintenance commands when needed.
+
+Source node conventions:
+
+- raw source path: `/Sources/raw/<source_id>/<source_id>.md`
+- session source path: `/Sources/sessions/<session_id>/<session_id>.md`
+- new source nodes: `write-node --kind source`
+- append to existing source nodes: `append-node --kind source`
+- when `kind=source`, CLI lightly validates the canonical path form above
+
+System maintenance commands:
+
 - `wiki-cli rebuild-index`
 - `wiki-cli append-log`
 
-Flow:
+`append-log` accepts any short activity label through `--kind <freeform>`.
+The value is trimmed, must not be empty, and must not contain newlines.
 
-1. `ingest-source` stores raw source only.
-2. `build-*-context` emits a JSON envelope plus `response_schema`.
-3. For ingest, crystallize, integrate, and lint, the skill uses that JSON to produce a structured result.
-4. `apply-workflow-result` validates and writes ingest/crystallize/lint results.
-5. `apply-integrate` validates and writes integrate results.
-6. Query is read-only by default; if the answer should update wiki content, the LLM calls explicit node commands afterward.
+Typical flow:
 
-Notes:
-
-- knowledge content stays markdown, but workflow transport stays JSON
-- ingest results must include `source_path`, `source_id`, `source_etag`, and `index_etag`
-- crystallize results must include `session_path`, `session_id`, `session_etag`, and `index_etag`
-- integrate results must include `target_paths` and `index_etag`
-- lint results must include `index_etag`
-- stale `index_etag` or stale `source_etag` is rejected
-- stale `session_etag` is rejected
-- context pages stay in one JSON bundle, but are capped by count and content length
-- truncation is explicit via `content_truncated`, `source_content_truncated`, and `index_truncated`
-- canonical raw source path is `/Sources/raw/<source_id>/<source_id>.md`
-- canonical session source path is `/Sources/sessions/<session_id>/<session_id>.md`
-
-The CLI fixes allowed write paths, update order, `index.md` rebuild, and `log.md` append for ingest/crystallize/integrate/lint workflows.
+1. Read `index.md` and related durable pages with VFS commands.
+2. Search with `search-remote`, `search-path-remote`, `glob-nodes`, or `recent-nodes` when needed.
+3. Write or edit `/Wiki/...` and `/Sources/...` nodes directly.
+4. Run `rebuild-index` after durable wiki updates when index entries may have changed.
+5. Run `append-log --kind <freeform>` when the activity should be recorded.
 
 ## CI and Benchmarks
 
@@ -182,7 +195,7 @@ Example:
 
 ```bash
 cargo run -p wiki-cli -- \
-  --replica-host http://127.0.0.1:4943 \
+  --local \
   --canister-id aaaaa-aa \
   beam-bench \
   --dataset-path fixtures/beam/beam_sample.json \
@@ -196,12 +209,17 @@ cargo run -p wiki-cli -- \
   --parallelism 1
 ```
 
+The example above uses the local replica.
+Normal mainnet usage can omit host flags.
+Local usage can use `--local`.
+Only `canister_id` still needs `--canister-id`, `WIKI_CANISTER_ID`, or user config.
+
 The harness imports each conversation under a namespaced prefix such as `/Wiki/beam/beam-run-<timestamp>/<conversation_id>/` and keeps probing answers out of the wiki notes. The `codex` provider defaults to `danger-full-access` so the child Codex process can reach the local PocketIC gateway. This command is intended for manual or dedicated benchmark runs rather than normal CI.
 
 Manual deployed canister benchmarks:
 
-- `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_workload.sh`
-- `REPLICA_HOST=http://127.0.0.1:4943 CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_latency.sh`
+- `CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_workload.sh`
+- `CANISTER_ID=<id> bash scripts/bench/run_canister_vfs_latency.sh`
 - `bash scripts/bench/run_canister_vfs_fresh_compare.sh`
 
 These runs target an already deployed canister through `ic-agent`. They complement `canbench`: `canbench` is for canister-side scaling and instruction trends, while deployed canister bench is for API-level `cycles + latency + wire IO`.
@@ -392,6 +410,9 @@ Main commands:
 - `recent-nodes`
 - `delete-node`
 - `search-remote`
+- `search-path-remote`
+- `rebuild-index`
+- `append-log`
 - `status`
 - `lint-local`
 - `pull`

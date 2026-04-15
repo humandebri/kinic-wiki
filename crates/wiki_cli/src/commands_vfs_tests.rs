@@ -9,8 +9,8 @@ use crate::commands_fs_tests::MockClient;
 fn test_cli(command: Command) -> Cli {
     Cli {
         connection: ConnectionArgs {
-            replica_host: "http://127.0.0.1:4943".to_string(),
-            canister_id: "aaaaa-aa".to_string(),
+            local: false,
+            canister_id: Some("aaaaa-aa".to_string()),
         },
         command,
     }
@@ -43,6 +43,113 @@ async fn append_node_command_calls_canister_append() {
     assert_eq!(appends[0].path, "/Wiki/foo.md");
     assert_eq!(appends[0].expected_etag.as_deref(), Some("etag-1"));
     assert_eq!(appends[0].separator.as_deref(), Some("\n"));
+}
+
+#[tokio::test]
+async fn write_node_command_supports_source_kind() {
+    let dir = tempdir().expect("temp dir should exist");
+    let input = PathBuf::from(dir.path()).join("source.md");
+    std::fs::write(&input, "# Source\n\nBody").expect("input should write");
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::WriteNode {
+            path: "/Sources/raw/source/source.md".to_string(),
+            kind: NodeKindArg::Source,
+            input,
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+            json: false,
+        }),
+    )
+    .await
+    .expect("write source command should succeed");
+
+    let writes = client.writes.lock().expect("writes should lock");
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].path, "/Sources/raw/source/source.md");
+    assert_eq!(writes[0].kind, wiki_types::NodeKind::Source);
+}
+
+#[tokio::test]
+async fn append_node_command_supports_source_kind() {
+    let dir = tempdir().expect("temp dir should exist");
+    let input = PathBuf::from(dir.path()).join("append-source.md");
+    std::fs::write(&input, "\nnext").expect("input should write");
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::AppendNode {
+            path: "/Sources/raw/source/source.md".to_string(),
+            input,
+            kind: Some(NodeKindArg::Source),
+            metadata_json: Some("{}".to_string()),
+            expected_etag: Some("etag-1".to_string()),
+            separator: Some("\n".to_string()),
+            json: false,
+        }),
+    )
+    .await
+    .expect("append source command should succeed");
+
+    let appends = client.appends.lock().expect("appends should lock");
+    assert_eq!(appends.len(), 1);
+    assert_eq!(appends[0].path, "/Sources/raw/source/source.md");
+    assert_eq!(appends[0].kind, Some(wiki_types::NodeKind::Source));
+}
+
+#[tokio::test]
+async fn write_node_command_rejects_noncanonical_source_path() {
+    let dir = tempdir().expect("temp dir should exist");
+    let input = PathBuf::from(dir.path()).join("source.md");
+    std::fs::write(&input, "# Source\n\nBody").expect("input should write");
+    let client = MockClient::default();
+
+    let error = run_command(
+        &client,
+        test_cli(Command::WriteNode {
+            path: "/Sources/raw/source.md".to_string(),
+            kind: NodeKindArg::Source,
+            input,
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+            json: false,
+        }),
+    )
+    .await
+    .expect_err("noncanonical source path should fail");
+
+    assert!(
+        error.to_string().contains("canonical form")
+            || error.to_string().contains("source path must stay under")
+    );
+}
+
+#[tokio::test]
+async fn append_node_command_rejects_noncanonical_source_path_when_kind_is_explicit() {
+    let dir = tempdir().expect("temp dir should exist");
+    let input = PathBuf::from(dir.path()).join("append-source.md");
+    std::fs::write(&input, "\nnext").expect("input should write");
+    let client = MockClient::default();
+
+    let error = run_command(
+        &client,
+        test_cli(Command::AppendNode {
+            path: "/Wiki/topic.md".to_string(),
+            input,
+            kind: Some(NodeKindArg::Source),
+            metadata_json: Some("{}".to_string()),
+            expected_etag: Some("etag-1".to_string()),
+            separator: Some("\n".to_string()),
+            json: false,
+        }),
+    )
+    .await
+    .expect_err("explicit source kind with wiki path should fail");
+
+    assert!(error.to_string().contains("source path must stay under"));
 }
 
 #[tokio::test]

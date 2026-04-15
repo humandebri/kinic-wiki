@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::cli::ConnectionArgs;
+use crate::connection::ResolvedConnection;
 
 #[derive(Debug, Clone)]
 pub struct ModelRequest {
@@ -116,7 +116,7 @@ pub async fn run_codex_question(
     model: &str,
     base_path: &str,
     question: &str,
-    connection: &ConnectionArgs,
+    connection: &ResolvedConnection,
     codex_sandbox: &str,
 ) -> Result<ModelRun> {
     let started_at = Instant::now();
@@ -191,9 +191,14 @@ fn next_codex_schema_path() -> std::path::PathBuf {
     ))
 }
 
-fn codex_prompt(base_path: &str, question: &str, connection: &ConnectionArgs) -> String {
+fn codex_prompt(base_path: &str, question: &str, connection: &ResolvedConnection) -> String {
+    let connection_args = if connection.replica_host == "http://127.0.0.1:4943" {
+        format!("--local --canister-id {}", connection.canister_id)
+    } else {
+        format!("--canister-id {}", connection.canister_id)
+    };
     format!(
-        r#"You are answering a BEAM benchmark question using llm-wiki on the local PocketIC canister.
+        r#"You are answering a BEAM benchmark question using llm-wiki.
 
 Use shell commands only through `cargo run -p wiki-cli -- ...` and only these read-only subcommands:
 - read-node
@@ -204,9 +209,9 @@ Use shell commands only through `cargo run -p wiki-cli -- ...` and only these re
 Use this exact argument order. Do not put connection flags after the subcommand:
 
 ```bash
-cargo run -p wiki-cli --bin wiki-cli -- --replica-host {replica_host} --canister-id {canister_id} list-nodes --prefix {base_path} --recursive --json
-cargo run -p wiki-cli --bin wiki-cli -- --replica-host {replica_host} --canister-id {canister_id} search-remote --prefix {base_path} "query text" --json
-cargo run -p wiki-cli --bin wiki-cli -- --replica-host {replica_host} --canister-id {canister_id} read-node --path {base_path}/conversation.md --json
+cargo run -p wiki-cli --bin wiki-cli -- {connection_args} list-nodes --prefix {base_path} --recursive --json
+cargo run -p wiki-cli --bin wiki-cli -- {connection_args} search-remote --prefix {base_path} "query text" --json
+cargo run -p wiki-cli --bin wiki-cli -- {connection_args} read-node --path {base_path}/conversation.md --json
 ```
 
 Connection:
@@ -219,6 +224,7 @@ Question:
 
 Answer with JSON matching the provided output schema. The `answer` field must be the shortest complete answer grounded in the wiki notes. If there is not enough evidence, set `answer` to exactly `insufficient evidence`.
 "#,
+        connection_args = connection_args,
         replica_host = connection.replica_host,
         canister_id = connection.canister_id,
         base_path = base_path,

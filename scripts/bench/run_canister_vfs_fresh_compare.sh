@@ -31,10 +31,6 @@ start_clean_replica() {
   dfx start --clean --background >/dev/null
 }
 
-local_replica_host() {
-  icp network status -e local | awk -F': ' '/^Api Url/ { sub(/\/$/, "", $2); print $2; exit }'
-}
-
 deploy_profile() {
   local profile="$1"
   bench_log "deploy ${profile} on fresh replica"
@@ -60,8 +56,6 @@ extract_summary_path() {
 run_profile_benches() {
   local profile="$1"
   start_clean_replica
-  local replica_host
-  replica_host="$(local_replica_host)"
   deploy_profile "${profile}"
   local status_file="${RAW_DIR}/${profile}.status.txt"
   local canister_id
@@ -71,7 +65,6 @@ run_profile_benches() {
   latency_output="$(
     BENCH_REPLICA_RESET_MODE="clean_start" \
     WIKI_CANISTER_DIAGNOSTIC_PROFILE="${profile}" \
-    REPLICA_HOST="${replica_host}" \
     CANISTER_ID="${canister_id}" \
     LATENCY_ITERATIONS_1K=0 \
     LATENCY_ITERATIONS_10K=10 \
@@ -83,7 +76,6 @@ run_profile_benches() {
   workload_output="$(
     BENCH_REPLICA_RESET_MODE="clean_start" \
     WIKI_CANISTER_DIAGNOSTIC_PROFILE="${profile}" \
-    REPLICA_HOST="${replica_host}" \
     CANISTER_ID="${canister_id}" \
     WORKLOAD_OPERATIONS="update" \
     WORKLOAD_DIRECTORY_SHAPES="flat" \

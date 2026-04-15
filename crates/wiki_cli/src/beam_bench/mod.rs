@@ -7,8 +7,8 @@ mod model;
 mod report;
 
 use crate::agent_tools::{create_openai_read_only_tools, handle_openai_tool_call};
-use crate::cli::ConnectionArgs;
 use crate::client::CanisterWikiClient;
+use crate::connection::ResolvedConnection;
 use anyhow::{Context, Result, anyhow};
 use dataset::{BeamConversation, extract_questions, load_dataset};
 use import::import_conversation;
@@ -46,7 +46,7 @@ pub enum BeamBenchProvider {
     OpenAi,
 }
 
-pub async fn run_beam_bench(connection: ConnectionArgs, args: BeamBenchArgs) -> Result<()> {
+pub async fn run_beam_bench(connection: ResolvedConnection, args: BeamBenchArgs) -> Result<()> {
     let dataset = load_dataset(&args.dataset_path, &args.split, args.limit)?;
     let namespace = args.namespace.clone().unwrap_or_else(default_namespace);
     let config = Arc::new(args);
@@ -82,7 +82,7 @@ pub async fn run_beam_bench(connection: ConnectionArgs, args: BeamBenchArgs) -> 
 }
 
 async fn run_conversation_benchmark(
-    connection: &ConnectionArgs,
+    connection: &ResolvedConnection,
     config: &BeamBenchArgs,
     namespace: &str,
     conversation: BeamConversation,

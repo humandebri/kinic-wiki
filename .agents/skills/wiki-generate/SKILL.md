@@ -65,7 +65,8 @@ For the exact phase contract and required outputs, read [references/phases.md](r
 
 - Working copy root: `Wiki/`
 - Preferred source-to-draft command: `wiki-cli source-to-draft --vault-path <path> --input <file>...`
-- Raw source ingest command: `wiki-cli ingest-source --input <file>...`
+- Raw source ingest path: `write-node --kind source --path /Sources/raw/<id>/<id>.md`
+- Existing source append path: `append-node --kind source --path /Sources/raw/<id>/<id>.md`
 - Source-only draft command: `wiki-cli generate-draft --vault-path <path> --input <file>...`
 - Query result draft command: `wiki-cli query-to-page --vault-path <path> --input <file> --title <title>`
 - Health report command: `wiki-cli lint [--json]`
@@ -112,3 +113,4 @@ When useful, also produce:
 Do not invent a separate storage format. Keep drafts in the same markdown form that humans will inspect.
 Do not merge raw source ingest, draft adoption, and push into one hidden step unless the user explicitly asks for that workflow.
 Use `source-to-draft` for source-driven work and `query-to-page` for query/comparison-driven work.
+When recording activity, use `append-log --kind <freeform>` with a short label instead of relying on fixed workflow categories.

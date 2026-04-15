@@ -33,6 +33,7 @@ raw source は `/Sources/...` の raw 専用領域に置きます。
 
 - `/Sources/...` に agent 生成物は置かない
 - canonical source path は `/Sources/raw/<source_id>/<source_id>.md`
+- `write-node --kind source` と `append-node --kind source` は canonical path を軽く検証する
 - asset は同 directory の sibling file とする
 - `source_id` は path 由来とする
 - ingest 後の rename は原則禁止とし、必要なら新 source を作る
@@ -189,16 +190,15 @@ query は page 種別ではなく workflow 名です。
 
 query 後の更新 recipe:
 
-1. `wiki-cli build-query-context` で context を読む
-2. `index.md` と関連 page を先に確認する
-3. 回答だけで十分なら保存しない
-4. 更新が必要なら対象 page を明示する
-5. 新規 page なら `write_node`
-6. 既存 page の差し替えなら `edit_node` または `multi_edit_node`
-7. 追記だけなら `append_node`
-8. 更新後に `rebuild_index`
-9. 必要なら `append-log --kind query`
-10. 根拠は本文中リンク + `## Sources` で残す
+1. `index.md` と関連 page を先に確認する
+2. 回答だけで十分なら保存しない
+3. 更新が必要なら対象 page を明示する
+4. 新規 page なら `write_node`
+5. 既存 page の差し替えなら `edit_node` または `multi_edit_node`
+6. 追記だけなら `append_node`
+7. 更新後に `rebuild_index`
+8. 必要なら `append-log --kind <freeform>`
+9. 根拠は本文中リンク + `## Sources` で残す
 
 ### 6.3 Lint
 

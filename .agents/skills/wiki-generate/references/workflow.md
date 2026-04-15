@@ -14,7 +14,7 @@ Turn local source material into draft wiki pages that fit this repo's operating 
 1. For source-driven drafting, start with `wiki-cli source-to-draft --vault-path ... --input ...`.
 2. Add `--persist-sources` when those markdown files should also be retained as raw remote sources.
 3. Inspect the resulting page map and draft pages.
-4. If you need finer control, fall back to `wiki-cli ingest-source` or `wiki-cli generate-draft` directly.
+4. If you need finer control, write raw source nodes directly with `write-node --kind source`, append to existing source nodes with `append-node --kind source`, or fall back to `wiki-cli generate-draft`.
 5. If the work product is a query/comparison result rather than source drafting, use `wiki-cli query-to-page`.
 6. Add or normalize links between those pages.
 7. Review in Obsidian.

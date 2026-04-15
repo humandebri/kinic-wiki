@@ -25,7 +25,8 @@ Understand what the source material is and what the user wants from it.
 
 - a short statement of scope
 - a list of source files or folders being used
-- whether raw source should first be persisted with `wiki-cli ingest-source`
+- whether raw source should first be persisted with `write-node --kind source`
+- whether follow-up source notes should append through `append-node --kind source`
 - optional note that graph assistance is justified
 
 ## Phase 2: Page Map

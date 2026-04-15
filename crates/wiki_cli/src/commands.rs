@@ -2,19 +2,16 @@
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
 use crate::beam_bench::{BeamBenchArgs, BeamBenchProvider, run_beam_bench};
-use crate::cli::{BeamBenchProviderArg, Cli, Command, WorkflowLogKindArg, WorkflowTaskArg};
+use crate::cli::{BeamBenchProviderArg, Cli, Command};
 use crate::client::WikiApi;
+use crate::connection::resolve_connection;
 use crate::lint_local::{lint_local, print_local_lint_report};
+use crate::maintenance::{append_log, rebuild_index};
 use crate::mirror::{
     MirrorState, collect_changed_nodes, collect_managed_nodes, deleted_tracked_nodes, load_state,
     merge_tracked_nodes, now_millis, read_managed_node_content, remove_mirror_paths,
     remove_stale_managed_files, save_state, tracked_nodes_from_snapshot,
     update_local_node_metadata, write_conflict_file, write_snapshot_mirror,
-};
-use crate::workflow::{
-    WorkflowLogKind, WorkflowTaskKind, append_log, apply_workflow_result,
-    build_crystallize_context, build_ingest_context, build_integrate_context, build_lint_context,
-    build_query_context, ingest_source, rebuild_index,
 };
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
@@ -27,6 +24,8 @@ use wiki_types::{
     RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 const REMOTE_PREFIX: &str = "/Wiki";
+const RAW_SOURCES_PREFIX: &str = "/Sources/raw";
+const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
 /// Must match `QUERY_RESULT_LIMIT_MAX` in `wiki_store` sync paging.
 const SYNC_PAGE_LIMIT: u32 = 100;
 const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
@@ -39,56 +38,6 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         command,
     } = cli;
     match command {
-        Command::IngestSource {
-            input,
-            remote_path,
-            title,
-        } => {
-            let path = ingest_source(client, &input, remote_path, title).await?;
-            println!("{path}");
-        }
-        Command::BuildIngestContext { source_ref, title } => {
-            let context = build_ingest_context(client, &source_ref, title).await?;
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        }
-        Command::BuildCrystallizeContext { session_ref, title } => {
-            let context = build_crystallize_context(client, &session_ref, title).await?;
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        }
-        Command::BuildQueryContext { query_text, title } => {
-            let context = build_query_context(client, &query_text, title).await?;
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        }
-        Command::BuildIntegrateContext {
-            target_paths,
-            title,
-            query_text,
-        } => {
-            let context = build_integrate_context(client, &target_paths, title, query_text).await?;
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        }
-        Command::BuildLintContext => {
-            let context = build_lint_context(client).await?;
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        }
-        Command::ApplyWorkflowResult { task, input } => {
-            let updated = apply_workflow_result(
-                client,
-                match task {
-                    WorkflowTaskArg::Ingest => WorkflowTaskKind::Ingest,
-                    WorkflowTaskArg::Crystallize => WorkflowTaskKind::Crystallize,
-                    WorkflowTaskArg::Lint => WorkflowTaskKind::Lint,
-                },
-                &input,
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&updated)?);
-        }
-        Command::ApplyIntegrate { input } => {
-            let updated =
-                apply_workflow_result(client, WorkflowTaskKind::Integrate, &input).await?;
-            println!("{}", serde_json::to_string_pretty(&updated)?);
-        }
         Command::RebuildIndex => {
             rebuild_index(client).await?;
             println!("index rebuilt");
@@ -102,13 +51,7 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         } => {
             append_log(
                 client,
-                match kind {
-                    WorkflowLogKindArg::Ingest => WorkflowLogKind::Ingest,
-                    WorkflowLogKindArg::Crystallize => WorkflowLogKind::Crystallize,
-                    WorkflowLogKindArg::Query => WorkflowLogKind::Query,
-                    WorkflowLogKindArg::Integrate => WorkflowLogKind::Integrate,
-                    WorkflowLogKindArg::Lint => WorkflowLogKind::Lint,
-                },
+                &kind,
                 &title,
                 &target_paths,
                 &updated_paths,
@@ -153,6 +96,7 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             json,
         } => {
             let content = fs::read_to_string(&input)?;
+            validate_source_path_for_write(&path, kind.to_node_kind())?;
             let result = client
                 .write_node(WriteNodeRequest {
                     path,
@@ -178,6 +122,9 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             json,
         } => {
             let content = fs::read_to_string(&input)?;
+            if let Some(kind_arg) = kind {
+                validate_source_path_for_write(&path, kind_arg.to_node_kind())?;
+            }
             let result = client
                 .append_node(AppendNodeRequest {
                     path,
@@ -423,8 +370,10 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             codex_bin,
             codex_sandbox,
         } => {
+            let resolved_connection =
+                resolve_connection(connection.local, connection.canister_id.clone())?;
             run_beam_bench(
-                connection,
+                resolved_connection,
                 BeamBenchArgs {
                     dataset_path,
                     split,
@@ -447,6 +396,34 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             )
             .await?;
         }
+    }
+    Ok(())
+}
+
+fn validate_source_path_for_write(path: &str, kind: wiki_types::NodeKind) -> Result<()> {
+    if kind != wiki_types::NodeKind::Source {
+        return Ok(());
+    }
+    validate_canonical_source_path(path)
+}
+
+fn validate_canonical_source_path(path: &str) -> Result<()> {
+    validate_source_path_under_prefix(path, RAW_SOURCES_PREFIX)
+        .or_else(|_| validate_source_path_under_prefix(path, SESSION_SOURCES_PREFIX))
+}
+
+fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<()> {
+    if !path.starts_with(prefix) {
+        return Err(anyhow!("source path must stay under {prefix}: {path}"));
+    }
+    let normalized = path.trim_end_matches('/');
+    let mut segments = normalized.rsplit('/');
+    let file_name = segments.next().unwrap_or_default();
+    let directory_name = segments.next().unwrap_or_default();
+    if directory_name.is_empty() || file_name != format!("{directory_name}.md") {
+        return Err(anyhow!(
+            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
+        ));
     }
     Ok(())
 }

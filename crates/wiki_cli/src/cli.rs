@@ -18,61 +18,19 @@ pub struct Cli {
 
 #[derive(Args, Debug, Clone)]
 pub struct ConnectionArgs {
-    #[arg(long)]
-    pub replica_host: String,
+    #[arg(long, help = "Use the local replica host http://127.0.0.1:4943")]
+    pub local: bool,
 
-    #[arg(long)]
-    pub canister_id: String,
+    #[arg(long, help = "Override WIKI_CANISTER_ID or user config")]
+    pub canister_id: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    IngestSource {
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(long)]
-        remote_path: Option<String>,
-        #[arg(long)]
-        title: Option<String>,
-    },
-    BuildIngestContext {
-        source_ref: String,
-        #[arg(long)]
-        title: Option<String>,
-    },
-    BuildCrystallizeContext {
-        session_ref: String,
-        #[arg(long)]
-        title: Option<String>,
-    },
-    BuildQueryContext {
-        query_text: String,
-        #[arg(long)]
-        title: Option<String>,
-    },
-    BuildIntegrateContext {
-        #[arg(long = "target-path")]
-        target_paths: Vec<String>,
-        #[arg(long)]
-        title: Option<String>,
-        #[arg(long)]
-        query_text: Option<String>,
-    },
-    BuildLintContext,
-    ApplyWorkflowResult {
-        #[arg(long, value_enum)]
-        task: WorkflowTaskArg,
-        #[arg(long)]
-        input: PathBuf,
-    },
-    ApplyIntegrate {
-        #[arg(long)]
-        input: PathBuf,
-    },
     RebuildIndex,
     AppendLog {
-        #[arg(long, value_enum)]
-        kind: WorkflowLogKindArg,
+        #[arg(long)]
+        kind: String,
         #[arg(long)]
         title: String,
         #[arg(long = "target-path")]
@@ -298,22 +256,6 @@ pub enum GlobNodeTypeArg {
 pub enum BeamBenchProviderArg {
     Codex,
     Openai,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkflowLogKindArg {
-    Ingest,
-    Crystallize,
-    Query,
-    Integrate,
-    Lint,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkflowTaskArg {
-    Ingest,
-    Crystallize,
-    Lint,
 }
 
 impl NodeKindArg {
