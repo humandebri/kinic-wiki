@@ -164,16 +164,12 @@ async fn run_conversation_benchmark(
                 )
                 .await
                 {
-                    Ok(run) => score_legacy_question(
-                        imported.conversation_id.clone(),
-                        question,
-                        run,
-                    ),
-                    Err(error) => score_legacy_failure(
-                        imported.conversation_id.clone(),
-                        question,
-                        error,
-                    ),
+                    Ok(run) => {
+                        score_legacy_question(imported.conversation_id.clone(), question, run)
+                    }
+                    Err(error) => {
+                        score_legacy_failure(imported.conversation_id.clone(), question, error)
+                    }
                 }
             }
         };
