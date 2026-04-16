@@ -4,7 +4,7 @@ use wiki_types::NodeKind;
 use crate::cli::{Cli, Command, ConnectionArgs};
 use crate::commands::run_command;
 use crate::commands_fs_tests::MockClient;
-use crate::maintenance::{append_log, normalize_log_kind, rebuild_index};
+use crate::maintenance::rebuild_index;
 
 fn node(path: &str, kind: NodeKind, content: &str) -> wiki_types::Node {
     wiki_types::Node {
@@ -67,31 +67,6 @@ async fn rebuild_index_renders_sections_from_existing_wiki_nodes() {
 }
 
 #[tokio::test]
-async fn append_log_appends_formatted_entry() {
-    let client = MockClient {
-        nodes: vec![node("/Wiki/log.md", NodeKind::File, "# Log\n")],
-        ..Default::default()
-    };
-
-    append_log(
-        &client,
-        "query",
-        "Topic note",
-        &["/Wiki/topic.md".to_string()],
-        &["/Wiki/topic.md".to_string()],
-        None,
-    )
-    .await
-    .expect("append log should succeed");
-
-    let writes = client.writes.lock().expect("writes should lock");
-    let log = writes.last().expect("log write should exist");
-    assert_eq!(log.path, "/Wiki/log.md");
-    assert!(log.content.contains("query | Topic note"));
-    assert!(log.content.contains("target_paths: /Wiki/topic.md"));
-}
-
-#[tokio::test]
 async fn rebuild_index_command_dispatches() {
     let client = MockClient::default();
 
@@ -103,41 +78,10 @@ async fn rebuild_index_command_dispatches() {
     assert_eq!(writes.last().expect("index write").path, "/Wiki/index.md");
 }
 
-#[tokio::test]
-async fn append_log_command_dispatches() {
-    let client = MockClient::default();
-
-    run_command(
-        &client,
-        test_cli(Command::AppendLog {
-            kind: "research-note".to_string(),
-            title: "Integrate".to_string(),
-            target_paths: vec!["/Wiki/topic.md".to_string()],
-            updated_paths: vec!["/Wiki/topic.md".to_string()],
-            failure: None,
-        }),
-    )
-    .await
-    .expect("append log command should succeed");
-
-    let writes = client.writes.lock().expect("writes should lock");
-    assert_eq!(writes.last().expect("log write").path, "/Wiki/log.md");
-}
-
-#[test]
-fn append_log_kind_accepts_freeform_and_rejects_invalid_values() {
-    assert_eq!(
-        normalize_log_kind(" research-note ").expect("freeform kind should pass"),
-        "research-note"
-    );
-    assert!(normalize_log_kind("").is_err());
-    assert!(normalize_log_kind("   ").is_err());
-    assert!(normalize_log_kind("bad\nkind").is_err());
-}
-
 #[test]
 fn workflow_commands_are_not_in_cli_anymore() {
     for removed in [
+        "append-log",
         "ingest-source",
         "build-ingest-context",
         "build-crystallize-context",

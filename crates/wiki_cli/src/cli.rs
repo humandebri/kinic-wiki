@@ -28,18 +28,6 @@ pub struct ConnectionArgs {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     RebuildIndex,
-    AppendLog {
-        #[arg(long)]
-        kind: String,
-        #[arg(long)]
-        title: String,
-        #[arg(long = "target-path")]
-        target_paths: Vec<String>,
-        #[arg(long = "updated-path")]
-        updated_paths: Vec<String>,
-        #[arg(long)]
-        failure: Option<String>,
-    },
     ReadNode {
         #[arg(long)]
         path: String,
@@ -212,16 +200,20 @@ pub enum Command {
         dataset_path: PathBuf,
         #[arg(long, default_value = "100K")]
         split: String,
-        #[arg(long)]
+        #[arg(long, default_value = "")]
         model: String,
         #[arg(long)]
         output_dir: PathBuf,
         #[arg(long, value_enum, default_value_t = BeamBenchProviderArg::Codex)]
         provider: BeamBenchProviderArg,
+        #[arg(long, value_enum, default_value_t = BeamBenchEvalModeArg::RetrieveAndExtract)]
+        eval_mode: BeamBenchEvalModeArg,
         #[arg(long, default_value_t = 1)]
         limit: usize,
         #[arg(long, default_value_t = 1)]
         parallelism: usize,
+        #[arg(long, default_value_t = 10)]
+        top_k: u32,
         #[arg(long, default_value = "https://api.openai.com/v1")]
         openai_base_url: String,
         #[arg(long, default_value = "OPENAI_API_KEY")]
@@ -230,6 +222,8 @@ pub enum Command {
         max_tool_roundtrips: usize,
         #[arg(long)]
         questions_per_conversation: Option<usize>,
+        #[arg(long, value_enum)]
+        include_question_class: Vec<BeamQuestionClassArg>,
         #[arg(long)]
         namespace: Option<String>,
         #[arg(long, default_value = "codex")]
@@ -256,6 +250,20 @@ pub enum GlobNodeTypeArg {
 pub enum BeamBenchProviderArg {
     Codex,
     Openai,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeamBenchEvalModeArg {
+    RetrievalOnly,
+    RetrieveAndExtract,
+    LegacyAgentAnswer,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeamQuestionClassArg {
+    Factoid,
+    Reasoning,
+    Abstention,
 }
 
 impl NodeKindArg {

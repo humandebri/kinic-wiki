@@ -89,10 +89,6 @@ Source node conventions:
 System maintenance commands:
 
 - `wiki-cli rebuild-index`
-- `wiki-cli append-log`
-
-`append-log` accepts any short activity label through `--kind <freeform>`.
-The value is trimmed, must not be empty, and must not contain newlines.
 
 Typical flow:
 
@@ -100,7 +96,6 @@ Typical flow:
 2. Search with `search-remote`, `search-path-remote`, `glob-nodes`, or `recent-nodes` when needed.
 3. Write or edit `/Wiki/...` and `/Sources/...` nodes directly.
 4. Run `rebuild-index` after durable wiki updates when index entries may have changed.
-5. Run `append-log --kind <freeform>` when the activity should be recorded.
 
 ## CI and Benchmarks
 
@@ -191,6 +186,13 @@ The BEAM harness currently targets two providers:
 - read-only tool/command access only
 - artifacts: `summary.json`, `results.jsonl`, `failures.jsonl`, `report.md`
 
+Default evaluation mode is now `retrieve-and-extract`.
+
+- primary metrics focus on factoid questions only
+- `--questions-per-conversation` applies after primary question-class filtering
+- retrieval hit rate and short-answer match rate are reported separately
+- `legacy-agent-answer` remains available for answer comparison runs, but not retrieval headline metrics
+
 Example:
 
 ```bash
@@ -200,10 +202,9 @@ cargo run -p wiki-cli -- \
   beam-bench \
   --dataset-path fixtures/beam/beam_sample.json \
   --split 100K \
-  --model gpt-4.1 \
   --output-dir artifacts/beam-sample \
-  --provider codex \
-  --codex-sandbox danger-full-access \
+  --eval-mode retrieve-and-extract \
+  --top-k 5 \
   --limit 1 \
   --questions-per-conversation 1 \
   --parallelism 1
@@ -215,6 +216,14 @@ Local usage can use `--local`.
 Only `canister_id` still needs `--canister-id`, `WIKI_CANISTER_ID`, or user config.
 
 The harness imports each conversation under a namespaced prefix such as `/Wiki/beam/beam-run-<timestamp>/<conversation_id>/` and keeps probing answers out of the wiki notes. The `codex` provider defaults to `danger-full-access` so the child Codex process can reach the local PocketIC gateway. This command is intended for manual or dedicated benchmark runs rather than normal CI.
+
+For legacy model-answer comparison, add:
+
+```bash
+--eval-mode legacy-agent-answer --provider codex --model gpt-4.1
+```
+
+In legacy mode, `retrieval_questions` will be `0` because retrieval is not evaluated separately from answer generation.
 
 Manual deployed canister benchmarks:
 
@@ -279,6 +288,130 @@ The basic pattern is:
 1. create a canister client
 2. hand the SDK the generated tools
 3. dispatch tool calls back into `handle_*_tool_call`
+
+## Interface boundaries
+
+This project has one shared canister client and two primitive interfaces on top of it.
+
+- `client`
+- `agent tools`
+- `CLI commands`
+- `skills`
+
+### Shared client
+
+`client` is the common transport layer that talks to the canister.
+
+Both agent tools and CLI commands use the same client layer and ultimately call the same canister methods such as `read_node`, `write_node`, `search_nodes`, and `move_node`.
+
+Conceptually:
+
+```text
+LLM tool call
+  -> agent_tools
+  -> client
+  -> canister
+
+shell command
+  -> CLI commands
+  -> client
+  -> canister
+```
+
+### Agent tools
+
+Agent tools are the agent-facing primitive interface.
+
+They are intended for hosts that support tool calling, such as an app built on top of the OpenAI Responses API or Anthropic tool use. In that setup, the host creates tool schemas with `create_*_tools()` and dispatches tool calls with `handle_*_tool_call()`.
+
+Agent tools are not shell commands. They are JSON-shaped tool definitions and dispatch helpers for LLM runtimes.
+
+Use agent tools when:
+
+- an LLM host already supports tool calling
+- the model should call primitive wiki operations directly
+- you want a tool surface that stays close to the VFS model
+
+Current agent tools:
+
+- `read`
+- `write`
+- `append`
+- `edit`
+- `ls`
+- `mkdir`
+- `mv`
+- `glob`
+- `recent`
+- `multi_edit`
+- `rm`
+- `search`
+- `search_paths`
+
+### CLI commands
+
+CLI commands are the shell-facing primitive interface.
+
+They are intended for humans, scripts, and coding agents that can run terminal commands directly. The CLI exposes remote VFS operations, sync flows, and maintenance commands through `wiki-cli ...`.
+
+Use CLI commands when:
+
+- working from a shell or script
+- integrating with coding agents that already have terminal access
+- running sync or maintenance flows such as `pull`, `push`, or `rebuild-index`
+
+### Skills
+
+Skills are the high-level workflow layer.
+
+Skills should orchestrate multiple primitive operations from the agent tools or the CLI. For the wiki workflow described in `idea.md`, the main skills are:
+
+- `ingest`
+- `query`
+- `lint`
+
+A useful helper skill may also exist for source normalization, such as PDF-to-Markdown conversion, but that should remain a sub-workflow under ingest rather than a new core system boundary.
+
+## Agent tool to CLI mapping
+
+The agent tool surface is intentionally close to the remote VFS command surface.
+
+| Agent tool | CLI command | Purpose |
+| --- | --- | --- |
+| `read` | `read-node` | read one node |
+| `write` | `write-node` | replace full node content |
+| `append` | `append-node` | append content |
+| `edit` | `edit-node` | plain-text replacement |
+| `ls` | `list-nodes` | list nodes under a prefix |
+| `mkdir` | `mkdir-node` | validate a directory-like path |
+| `mv` | `move-node` | move or rename a node |
+| `glob` | `glob-nodes` | path globbing |
+| `recent` | `recent-nodes` | recently updated nodes |
+| `multi_edit` | `multi-edit-node` | multiple replacements in one operation |
+| `rm` | `delete-node` | delete a node |
+| `search` | `search-remote` | full-text content search |
+| `search_paths` | `search-path-remote` | path and filename search |
+
+Not every CLI command has an agent tool equivalent. Sync and maintenance commands stay CLI-only for now.
+
+Examples:
+
+- `rebuild-index`
+- `status`
+- `pull`
+- `push`
+- `lint-local`
+
+## Design intent
+
+The design intent is:
+
+- keep the shared client as the single canister access layer
+- keep agent tools raw and composable
+- keep CLI commands raw and operational
+- keep high-level workflows in skills
+
+This separation keeps the primitive interface small while allowing higher-level wiki behavior to evolve independently.
 
 ## OpenAI-compatible tool calling
 
@@ -412,7 +545,6 @@ Main commands:
 - `search-remote`
 - `search-path-remote`
 - `rebuild-index`
-- `append-log`
 - `status`
 - `lint-local`
 - `pull`

@@ -1,6 +1,6 @@
 // Where: crates/wiki_cli/src/beam_bench/dataset.rs
-// What: BEAM dataset loading, normalization, and deterministic question extraction.
-// Why: The benchmark runner needs one stable internal shape even when the raw file is JSON, JSONL, or split-keyed JSON.
+// What: BEAM dataset loading plus question normalization for deterministic RAG evaluation.
+// Why: The benchmark needs stable question classes and optional gold evidence without depending on one raw dataset shape.
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,12 +19,29 @@ pub struct BeamConversation {
     pub probing_questions: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BeamQuestionClass {
+    Factoid,
+    Reasoning,
+    Abstention,
+}
+
+impl BeamQuestionClass {
+    pub fn is_scorable(self) -> bool {
+        !matches!(self, Self::Abstention)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BeamQuestion {
     pub question_id: String,
     pub question_type: String,
+    pub question_class: BeamQuestionClass,
     pub prompt: String,
     pub reference_answer: Option<String>,
+    pub gold_paths: Vec<String>,
+    pub gold_spans: Vec<String>,
     pub raw: Value,
 }
 
@@ -72,8 +89,17 @@ pub fn extract_questions(conversation: &BeamConversation) -> Result<Vec<BeamQues
             questions.push(BeamQuestion {
                 question_id: format!("{question_type}-{index:03}"),
                 question_type: question_type.clone(),
+                question_class: extract_question_class(question_type, item),
                 prompt: question.to_string(),
                 reference_answer: extract_reference_answer(item),
+                gold_paths: extract_string_list(
+                    item,
+                    &["gold_paths", "gold_path", "evidence_paths"],
+                ),
+                gold_spans: extract_string_list(
+                    item,
+                    &["gold_spans", "gold_span", "evidence_spans"],
+                ),
                 raw: item.clone(),
             });
         }
@@ -101,6 +127,64 @@ fn extract_reference_answer(item: &Value) -> Option<String> {
     .map(str::trim)
     .filter(|value| !value.is_empty())
     .map(ToOwned::to_owned)
+}
+
+fn extract_question_class(question_type: &str, item: &Value) -> BeamQuestionClass {
+    if let Some(value) = ["question_class", "class", "category"]
+        .iter()
+        .find_map(|key| item.get(*key).and_then(Value::as_str))
+    {
+        return parse_question_class(value).unwrap_or_else(|| infer_question_class(question_type));
+    }
+    infer_question_class(question_type)
+}
+
+fn infer_question_class(question_type: &str) -> BeamQuestionClass {
+    let normalized = question_type.trim().to_ascii_lowercase();
+    if normalized.contains("abstention") {
+        return BeamQuestionClass::Abstention;
+    }
+    if normalized.contains("reason") || normalized.contains("temporal") {
+        return BeamQuestionClass::Reasoning;
+    }
+    BeamQuestionClass::Factoid
+}
+
+fn parse_question_class(value: &str) -> Option<BeamQuestionClass> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "factoid" | "fact" => Some(BeamQuestionClass::Factoid),
+        "reasoning" | "temporal_reasoning" | "temporal" => Some(BeamQuestionClass::Reasoning),
+        "abstention" => Some(BeamQuestionClass::Abstention),
+        _ => None,
+    }
+}
+
+fn extract_string_list(item: &Value, keys: &[&str]) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| item.get(*key))
+        .map(value_to_string_list)
+        .unwrap_or_default()
+}
+
+fn value_to_string_list(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn parse_json(raw: &str, split: &str) -> Result<Vec<BeamConversation>> {
@@ -163,7 +247,7 @@ fn value_to_identifier(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_questions, load_dataset};
+    use super::{BeamQuestionClass, extract_questions, load_dataset};
     use std::fs;
 
     #[test]
@@ -181,7 +265,7 @@ mod tests {
                 "conversation_plan": "plan",
                 "user_questions": [{"messages":["q1"]}],
                 "chat": [[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]],
-                "probing_questions": "{\"abstention\":[{\"question\":\"What was said?\",\"answer\":\"hi\"}]}"
+                "probing_questions": "{\"factoid\":[{\"question\":\"What was said?\",\"answer\":\"hi\"}]}"
               }]
             }"#,
         )
@@ -192,7 +276,39 @@ mod tests {
     }
 
     #[test]
-    fn extract_questions_parses_json5_literal() {
+    fn extract_questions_parses_evidence_fields() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let path = dir.path().join("beam.json");
+        fs::write(
+            &path,
+            r#"{
+              "100K": [{
+                "conversation_id": "conv-1",
+                "conversation_seed": {"category":"General"},
+                "narratives": "narrative",
+                "user_profile": {"user_info":"info"},
+                "conversation_plan": "plan",
+                "user_questions": [{"messages":["q1"]}],
+                "chat": [[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]],
+                "probing_questions": "{'factoid':[{'question':'What date?','answer':'March 15, 2024','gold_paths':['messages/0002-assistant.md'],'gold_spans':['March 15, 2024']}],'temporal_reasoning':[{'question':'Why?','answer':'Because'}]}"
+              }]
+            }"#,
+        )
+        .expect("fixture should write");
+        let conversation = load_dataset(&path, "100K", 1)
+            .expect("dataset should load")
+            .pop()
+            .expect("conversation should exist");
+        let questions = extract_questions(&conversation).expect("questions should parse");
+        assert_eq!(questions.len(), 2);
+        assert_eq!(questions[0].question_class, BeamQuestionClass::Factoid);
+        assert_eq!(questions[0].gold_paths, vec!["messages/0002-assistant.md"]);
+        assert_eq!(questions[0].gold_spans, vec!["March 15, 2024"]);
+        assert_eq!(questions[1].question_class, BeamQuestionClass::Reasoning);
+    }
+
+    #[test]
+    fn extract_questions_keeps_old_answer_only_shape() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/beam/beam_sample.json");
         let conversation = load_dataset(fixture_path.as_path(), "100K", 1)
@@ -201,7 +317,8 @@ mod tests {
             .expect("sample fixture should contain one conversation");
         let questions = extract_questions(&conversation).expect("questions should parse");
         assert_eq!(questions.len(), 2);
-        assert_eq!(questions[0].question_type, "abstention");
+        assert_eq!(questions[0].question_class, BeamQuestionClass::Abstention);
+        assert_eq!(questions[1].question_class, BeamQuestionClass::Factoid);
         assert_eq!(
             questions[1].reference_answer.as_deref(),
             Some("March 15, 2024")

@@ -1,7 +1,8 @@
 // Where: crates/wiki_cli/src/beam_bench/mod.rs
-// What: End-to-end BEAM benchmark harness that imports conversations into llm-wiki and evaluates read-only retrieval answers.
-// Why: BEAM should measure memory quality through the existing wiki tool layer without changing the canister or store APIs.
+// What: End-to-end BEAM harness for deterministic RAG scoring plus legacy agent-answer comparison.
+// Why: Retrieval quality must be measurable without coupling the headline metric to model reasoning variance.
 mod dataset;
+mod deterministic;
 mod import;
 mod model;
 mod report;
@@ -13,7 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use dataset::{BeamConversation, extract_questions, load_dataset};
 use import::import_conversation;
 use model::{BenchmarkModel, ModelRequest, OpenAiResponsesModel, ToolLoopConfig, run_tool_loop};
-use report::{QuestionResult, summarize, write_artifacts};
+use report::{BenchmarkSummary, FailureReason, QuestionResult, summarize, write_artifacts};
 use serde_json::json;
 use std::env;
 use std::path::PathBuf;
@@ -22,6 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+pub use dataset::BeamQuestionClass;
+
 #[derive(Debug, Clone)]
 pub struct BeamBenchArgs {
     pub dataset_path: PathBuf,
@@ -29,12 +32,15 @@ pub struct BeamBenchArgs {
     pub model: String,
     pub output_dir: PathBuf,
     pub provider: BeamBenchProvider,
+    pub eval_mode: BeamBenchEvalMode,
     pub limit: usize,
     pub parallelism: usize,
+    pub top_k: u32,
     pub openai_base_url: String,
     pub openai_api_key_env: String,
     pub max_tool_roundtrips: usize,
     pub questions_per_conversation: Option<usize>,
+    pub include_question_classes: Vec<BeamQuestionClass>,
     pub namespace: Option<String>,
     pub codex_bin: PathBuf,
     pub codex_sandbox: String,
@@ -46,10 +52,17 @@ pub enum BeamBenchProvider {
     OpenAi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeamBenchEvalMode {
+    RetrievalOnly,
+    RetrieveAndExtract,
+    LegacyAgentAnswer,
+}
+
 pub async fn run_beam_bench(connection: ResolvedConnection, args: BeamBenchArgs) -> Result<()> {
     let dataset = load_dataset(&args.dataset_path, &args.split, args.limit)?;
     let namespace = args.namespace.clone().unwrap_or_else(default_namespace);
-    let config = Arc::new(args);
+    let config = Arc::new(with_defaults(args));
     let gate = Arc::new(Semaphore::new(config.parallelism.max(1)));
     let mut tasks = JoinSet::new();
 
@@ -75,10 +88,17 @@ pub async fn run_beam_bench(connection: ResolvedConnection, args: BeamBenchArgs)
             .cmp(&(&right.conversation_id, &right.question_id))
     });
 
-    let summary = summarize(&results);
+    let summary: BenchmarkSummary = summarize(&results, config.top_k);
     write_artifacts(&config.output_dir, &summary, &results)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
+}
+
+fn with_defaults(mut args: BeamBenchArgs) -> BeamBenchArgs {
+    if args.include_question_classes.is_empty() {
+        args.include_question_classes = vec![BeamQuestionClass::Factoid];
+    }
+    args
 }
 
 async fn run_conversation_benchmark(
@@ -89,7 +109,15 @@ async fn run_conversation_benchmark(
 ) -> Result<Vec<QuestionResult>> {
     let client = CanisterWikiClient::new(&connection.replica_host, &connection.canister_id).await?;
     let imported = import_conversation(&client, namespace, &conversation).await?;
-    let mut questions = extract_questions(&conversation)?;
+    let mut questions = extract_questions(&conversation)?
+        .into_iter()
+        .filter(|question| {
+            config
+                .include_question_classes
+                .iter()
+                .any(|value| *value == question.question_class)
+        })
+        .collect::<Vec<_>>();
     if let Some(limit) = config.questions_per_conversation {
         questions.truncate(limit);
     }
@@ -99,45 +127,99 @@ async fn run_conversation_benchmark(
     };
     let mut results = Vec::with_capacity(questions.len());
     for question in questions {
-        let run = match config.provider {
-            BeamBenchProvider::OpenAi => {
-                let api_key = env::var(&config.openai_api_key_env).with_context(|| {
-                    format!(
-                        "failed to read OpenAI API key from environment variable {}",
-                        config.openai_api_key_env
-                    )
-                })?;
-                let provider = OpenAiResponsesModel::new(config.openai_base_url.clone(), api_key);
-                run_openai_question(
+        let result = match config.eval_mode {
+            BeamBenchEvalMode::RetrievalOnly => {
+                deterministic::run_question(
                     &client,
-                    &provider,
+                    &imported.conversation_id,
+                    &imported,
+                    question,
+                    config.top_k,
+                    true,
+                    false,
+                )
+                .await?
+            }
+            BeamBenchEvalMode::RetrieveAndExtract => {
+                deterministic::run_question(
+                    &client,
+                    &imported.conversation_id,
+                    &imported,
+                    question,
+                    config.top_k,
+                    true,
+                    true,
+                )
+                .await?
+            }
+            BeamBenchEvalMode::LegacyAgentAnswer => {
+                match run_legacy_question(
+                    connection,
+                    &client,
                     &tools,
                     &tool_loop,
                     config,
                     &imported.base_path,
                     &question.prompt,
                 )
-                .await?
-            }
-            BeamBenchProvider::Codex => {
-                model::run_codex_question(
-                    &config.codex_bin,
-                    &config.model,
-                    &imported.base_path,
-                    &question.prompt,
-                    connection,
-                    &config.codex_sandbox,
-                )
-                .await?
+                .await
+                {
+                    Ok(run) => score_legacy_question(
+                        imported.conversation_id.clone(),
+                        question,
+                        run,
+                    ),
+                    Err(error) => score_legacy_failure(
+                        imported.conversation_id.clone(),
+                        question,
+                        error,
+                    ),
+                }
             }
         };
-        results.push(score_question(
-            imported.conversation_id.clone(),
-            question,
-            run,
-        ));
+        results.push(result);
     }
     Ok(results)
+}
+
+async fn run_legacy_question(
+    connection: &ResolvedConnection,
+    client: &CanisterWikiClient,
+    tools: &[serde_json::Value],
+    tool_loop: &ToolLoopConfig,
+    config: &BeamBenchArgs,
+    base_path: &str,
+    question: &str,
+) -> Result<model::ModelRun> {
+    match config.provider {
+        BeamBenchProvider::OpenAi => {
+            let api_key = env::var(&config.openai_api_key_env).with_context(|| {
+                format!(
+                    "failed to read OpenAI API key from environment variable {}",
+                    config.openai_api_key_env
+                )
+            })?;
+            let provider = OpenAiResponsesModel::new(config.openai_base_url.clone(), api_key);
+            run_openai_question(
+                client, &provider, tools, tool_loop, config, base_path, question,
+            )
+            .await
+        }
+        BeamBenchProvider::Codex => {
+            if config.model.trim().is_empty() {
+                return Err(anyhow!("--model is required for legacy-agent-answer mode"));
+            }
+            model::run_codex_question(
+                &config.codex_bin,
+                &config.model,
+                base_path,
+                question,
+                connection,
+                &config.codex_sandbox,
+            )
+            .await
+        }
+    }
 }
 
 async fn run_openai_question(
@@ -149,6 +231,9 @@ async fn run_openai_question(
     base_path: &str,
     question: &str,
 ) -> Result<model::ModelRun> {
+    if config.model.trim().is_empty() {
+        return Err(anyhow!("--model is required for legacy-agent-answer mode"));
+    }
     let tool_client = client.clone();
     let prompt = format!(
         "You are answering a BEAM benchmark question using llm-wiki. Use only the provided tools. Answer with the shortest complete answer grounded in the wiki notes under {base_path}. If the wiki does not contain enough evidence, answer exactly: insufficient evidence."
@@ -176,41 +261,107 @@ async fn run_openai_question(
     .await
 }
 
-fn score_question(
+fn score_legacy_question(
     conversation_id: String,
     question: dataset::BeamQuestion,
     run: model::ModelRun,
 ) -> QuestionResult {
-    let predicted_normalized = normalize_answer(&run.answer);
-    let reference_normalized = question.reference_answer.as_deref().map(normalize_answer);
-    let exact_match = question
+    let predicted_answer = if run.answer.trim().is_empty() {
+        None
+    } else {
+        Some(run.answer.clone())
+    };
+    let answer_exact_match = question
         .reference_answer
         .as_deref()
-        .map(|answer| answer.trim() == run.answer.trim())
+        .zip(predicted_answer.as_deref())
+        .map(|(expected, actual)| expected.trim() == actual.trim())
         .unwrap_or(false);
-    let normalized_match = reference_normalized
+    let answer_normalized_match = question
+        .reference_answer
         .as_deref()
-        .map(|answer| answer == predicted_normalized)
+        .zip(predicted_answer.as_deref())
+        .map(|(expected, actual)| normalize_answer(expected) == normalize_answer(actual))
         .unwrap_or(false);
     let tool_error_count = run.tool_calls.iter().filter(|call| call.is_error).count();
+    let failure_reason = if tool_error_count > 0 {
+        Some(FailureReason::ToolError)
+    } else if predicted_answer.is_some() && !answer_normalized_match {
+        Some(FailureReason::WrongShortAnswer)
+    } else {
+        None
+    };
     QuestionResult {
         conversation_id,
         question_id: question.question_id,
         question_type: question.question_type,
+        question_class: question.question_class,
         prompt: question.prompt,
         reference_answer: question.reference_answer,
-        predicted_answer: run.answer,
-        scorable: reference_normalized.is_some(),
-        exact_match,
-        normalized_match,
+        predicted_answer,
+        gold_paths: question.gold_paths,
+        gold_spans: question.gold_spans,
+        retrieved_paths: Vec::new(),
+        matched_gold_path: None,
+        matched_gold_span: None,
+        source_note_type: None,
+        included_in_primary_metrics: true,
+        retrieval_evaluable: false,
+        retrieval_hit: false,
+        answer_exact_match,
+        answer_normalized_match,
         tool_call_count: run.tool_calls.len(),
         tool_error_count,
+        docs_read_count: run.tool_calls.len(),
         input_tokens: run.input_tokens,
         output_tokens: run.output_tokens,
         total_tokens: run.total_tokens,
         latency_ms: run.latency_ms,
+        failure_reason,
         tool_calls: run.tool_calls,
         raw_events: run.raw_events,
+    }
+}
+
+fn score_legacy_failure(
+    conversation_id: String,
+    question: dataset::BeamQuestion,
+    error: anyhow::Error,
+) -> QuestionResult {
+    let reason = if error.to_string().contains("max roundtrips") {
+        FailureReason::RoundtripLimit
+    } else {
+        FailureReason::ToolError
+    };
+    QuestionResult {
+        conversation_id,
+        question_id: question.question_id,
+        question_type: question.question_type,
+        question_class: question.question_class,
+        prompt: question.prompt,
+        reference_answer: question.reference_answer,
+        predicted_answer: None,
+        gold_paths: question.gold_paths,
+        gold_spans: question.gold_spans,
+        retrieved_paths: Vec::new(),
+        matched_gold_path: None,
+        matched_gold_span: None,
+        source_note_type: None,
+        included_in_primary_metrics: true,
+        retrieval_evaluable: false,
+        retrieval_hit: false,
+        answer_exact_match: false,
+        answer_normalized_match: false,
+        tool_call_count: 0,
+        tool_error_count: 1,
+        docs_read_count: 0,
+        input_tokens: Some(0),
+        output_tokens: Some(0),
+        total_tokens: Some(0),
+        latency_ms: 0,
+        failure_reason: Some(reason),
+        tool_calls: Vec::new(),
+        raw_events: vec![json!({"error": error.to_string()})],
     }
 }
 
@@ -241,10 +392,14 @@ fn default_namespace() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_answer, score_question};
-    use crate::beam_bench::dataset::BeamQuestion;
+    use super::{
+        BeamBenchArgs, BeamBenchEvalMode, BeamBenchProvider, default_namespace, normalize_answer,
+        score_legacy_question, with_defaults,
+    };
+    use crate::beam_bench::dataset::{BeamQuestion, BeamQuestionClass};
     use crate::beam_bench::model::{ModelRun, ToolCallRecord};
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn normalize_answer_collapses_case_and_punctuation() {
@@ -252,20 +407,55 @@ mod tests {
     }
 
     #[test]
-    fn score_question_marks_unscorable_without_reference() {
-        let result = score_question(
-            "conv-1".to_string(),
+    fn defaults_factoid_class_when_unspecified() {
+        let args = with_defaults(BeamBenchArgs {
+            dataset_path: PathBuf::from("beam.json"),
+            split: "100K".to_string(),
+            model: String::new(),
+            output_dir: PathBuf::from("artifacts"),
+            provider: BeamBenchProvider::Codex,
+            eval_mode: BeamBenchEvalMode::RetrieveAndExtract,
+            limit: 1,
+            parallelism: 1,
+            top_k: 5,
+            openai_base_url: "https://api.openai.com/v1".to_string(),
+            openai_api_key_env: "OPENAI_API_KEY".to_string(),
+            max_tool_roundtrips: 8,
+            questions_per_conversation: None,
+            include_question_classes: Vec::new(),
+            namespace: None,
+            codex_bin: PathBuf::from("codex"),
+            codex_sandbox: "danger-full-access".to_string(),
+        });
+        assert_eq!(
+            args.include_question_classes,
+            vec![BeamQuestionClass::Factoid]
+        );
+    }
+
+    #[test]
+    fn default_namespace_uses_beam_prefix() {
+        assert!(default_namespace().starts_with("beam-run-"));
+    }
+
+    #[test]
+    fn legacy_question_is_not_marked_retrieval_evaluable() {
+        let result = score_legacy_question(
+            "conv".to_string(),
             BeamQuestion {
-                question_id: "abstention-000".to_string(),
-                question_type: "abstention".to_string(),
-                prompt: "Unknown?".to_string(),
-                reference_answer: None,
+                question_id: "factoid-000".to_string(),
+                question_type: "factoid".to_string(),
+                question_class: BeamQuestionClass::Factoid,
+                prompt: "When?".to_string(),
+                reference_answer: Some("March 15, 2024".to_string()),
+                gold_paths: vec!["/Wiki/beam/run/conv/messages/0002-assistant.md".to_string()],
+                gold_spans: vec!["March 15, 2024".to_string()],
                 raw: json!({}),
             },
             ModelRun {
-                answer: "insufficient evidence".to_string(),
+                answer: "March 15, 2024".to_string(),
                 tool_calls: vec![ToolCallRecord {
-                    name: "search".to_string(),
+                    name: "read".to_string(),
                     arguments: "{}".to_string(),
                     is_error: false,
                 }],
@@ -276,7 +466,8 @@ mod tests {
                 raw_events: Vec::new(),
             },
         );
-        assert!(!result.scorable);
-        assert!(!result.normalized_match);
+        assert!(result.answer_normalized_match);
+        assert!(!result.retrieval_evaluable);
+        assert!(!result.retrieval_hit);
     }
 }

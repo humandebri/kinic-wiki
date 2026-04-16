@@ -1,15 +1,13 @@
 // Where: crates/wiki_cli/src/maintenance.rs
-// What: Deterministic wiki maintenance helpers for index rebuild and log append.
-// Why: VFS-first CLI keeps system-file updates explicit even after workflow command removal.
-use anyhow::{Result, anyhow};
-use chrono::Local;
+// What: Deterministic wiki maintenance helper for index rebuild.
+// Why: VFS-first CLI keeps system-file updates explicit without reintroducing workflow commands.
+use anyhow::Result;
 use wiki_types::{ListNodesRequest, Node, NodeEntryKind, NodeKind, WriteNodeRequest};
 
 use crate::client::WikiApi;
 
 const WIKI_PREFIX: &str = "/Wiki";
 const INDEX_PATH: &str = "/Wiki/index.md";
-const LOG_PATH: &str = "/Wiki/log.md";
 
 pub async fn rebuild_index(client: &impl WikiApi) -> Result<()> {
     let entries = client
@@ -22,7 +20,7 @@ pub async fn rebuild_index(client: &impl WikiApi) -> Result<()> {
     let mut entities = Vec::new();
     let mut concepts = Vec::new();
     for entry in entries {
-        if entry.kind != NodeEntryKind::File || entry.path == INDEX_PATH || entry.path == LOG_PATH {
+        if entry.kind != NodeEntryKind::File || entry.path == INDEX_PATH {
             continue;
         }
         let node = match client.read_node(&entry.path).await? {
@@ -40,48 +38,6 @@ pub async fn rebuild_index(client: &impl WikiApi) -> Result<()> {
     }
     let body = render_index(&sources, &entities, &concepts);
     upsert_node(client, INDEX_PATH, NodeKind::File, &body).await
-}
-
-pub async fn append_log(
-    client: &impl WikiApi,
-    kind: &str,
-    title: &str,
-    target_paths: &[String],
-    updated_paths: &[String],
-    failure: Option<String>,
-) -> Result<()> {
-    let normalized_kind = normalize_log_kind(kind)?;
-    let existing = client.read_node(LOG_PATH).await?;
-    let mut content = existing
-        .map(|node| node.content)
-        .unwrap_or_else(|| "# Log\n".to_string());
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    let stamp = Local::now().format("%Y-%m-%d %H:%M").to_string();
-    content.push_str(&format!("## [{stamp}] {normalized_kind} | {title}\n"));
-    if !target_paths.is_empty() {
-        content.push_str(&format!("target_paths: {}\n", target_paths.join(", ")));
-    }
-    if !updated_paths.is_empty() {
-        content.push_str(&format!("updated_paths: {}\n", updated_paths.join(", ")));
-    }
-    if let Some(reason) = failure {
-        content.push_str(&format!("failure: {reason}\n"));
-    }
-    content.push('\n');
-    upsert_node(client, LOG_PATH, NodeKind::File, &content).await
-}
-
-pub fn normalize_log_kind(kind: &str) -> Result<String> {
-    let normalized = kind.trim();
-    if normalized.is_empty() {
-        return Err(anyhow!("kind must not be empty"));
-    }
-    if normalized.contains('\n') || normalized.contains('\r') {
-        return Err(anyhow!("kind must not contain newlines"));
-    }
-    Ok(normalized.to_string())
 }
 
 async fn upsert_node(

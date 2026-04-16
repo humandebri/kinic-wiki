@@ -1,7 +1,7 @@
 {
   "100K": [
     {
-      "conversation_id": "beam-sample-1",
+      "conversation_id": "beam-evidence-1",
       "conversation_seed": {
         "category": "General",
         "title": "Calendar planning"
@@ -32,7 +32,7 @@
           }
         ]
       ],
-      "probing_questions": "{'abstention':[{'question':'What city was the meeting in?','answer':'insufficient evidence'}],'factoid':[{'question':'When is the meeting?','answer':'March 15, 2024'}]}"
+      "probing_questions": "{'factoid':[{'question':'When is the meeting?','answer':'March 15, 2024','gold_paths':['messages/0002-assistant.md'],'gold_spans':['March 15, 2024']}],'abstention':[{'question':'What city was the meeting in?','answer':'insufficient evidence'}]}"
     }
   ]
 }

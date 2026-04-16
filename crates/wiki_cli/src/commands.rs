@@ -1,12 +1,14 @@
 // Where: crates/wiki_cli/src/commands.rs
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
-use crate::beam_bench::{BeamBenchArgs, BeamBenchProvider, run_beam_bench};
-use crate::cli::{BeamBenchProviderArg, Cli, Command};
+use crate::beam_bench::{
+    BeamBenchArgs, BeamBenchEvalMode, BeamBenchProvider, BeamQuestionClass, run_beam_bench,
+};
+use crate::cli::{BeamBenchEvalModeArg, BeamBenchProviderArg, BeamQuestionClassArg, Cli, Command};
 use crate::client::WikiApi;
 use crate::connection::resolve_connection;
 use crate::lint_local::{lint_local, print_local_lint_report};
-use crate::maintenance::{append_log, rebuild_index};
+use crate::maintenance::rebuild_index;
 use crate::mirror::{
     MirrorState, collect_changed_nodes, collect_managed_nodes, deleted_tracked_nodes, load_state,
     merge_tracked_nodes, now_millis, read_managed_node_content, remove_mirror_paths,
@@ -41,24 +43,6 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         Command::RebuildIndex => {
             rebuild_index(client).await?;
             println!("index rebuilt");
-        }
-        Command::AppendLog {
-            kind,
-            title,
-            target_paths,
-            updated_paths,
-            failure,
-        } => {
-            append_log(
-                client,
-                &kind,
-                &title,
-                &target_paths,
-                &updated_paths,
-                failure,
-            )
-            .await?;
-            println!("log updated");
         }
         Command::ReadNode { path, json } => {
             let node = client
@@ -360,12 +344,15 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             model,
             output_dir,
             provider,
+            eval_mode,
             limit,
             parallelism,
+            top_k,
             openai_base_url,
             openai_api_key_env,
             max_tool_roundtrips,
             questions_per_conversation,
+            include_question_class,
             namespace,
             codex_bin,
             codex_sandbox,
@@ -383,12 +370,30 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                         BeamBenchProviderArg::Codex => BeamBenchProvider::Codex,
                         BeamBenchProviderArg::Openai => BeamBenchProvider::OpenAi,
                     },
+                    eval_mode: match eval_mode {
+                        BeamBenchEvalModeArg::RetrievalOnly => BeamBenchEvalMode::RetrievalOnly,
+                        BeamBenchEvalModeArg::RetrieveAndExtract => {
+                            BeamBenchEvalMode::RetrieveAndExtract
+                        }
+                        BeamBenchEvalModeArg::LegacyAgentAnswer => {
+                            BeamBenchEvalMode::LegacyAgentAnswer
+                        }
+                    },
                     limit,
                     parallelism,
+                    top_k,
                     openai_base_url,
                     openai_api_key_env,
                     max_tool_roundtrips,
                     questions_per_conversation,
+                    include_question_classes: include_question_class
+                        .into_iter()
+                        .map(|value| match value {
+                            BeamQuestionClassArg::Factoid => BeamQuestionClass::Factoid,
+                            BeamQuestionClassArg::Reasoning => BeamQuestionClass::Reasoning,
+                            BeamQuestionClassArg::Abstention => BeamQuestionClass::Abstention,
+                        })
+                        .collect(),
                     namespace,
                     codex_bin,
                     codex_sandbox,

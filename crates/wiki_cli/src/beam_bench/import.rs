@@ -1,6 +1,6 @@
 // Where: crates/wiki_cli/src/beam_bench/import.rs
-// What: Deterministic conversion from BEAM raw conversations into llm-wiki notes.
-// Why: The benchmark should measure retrieval over stable wiki-shaped notes rather than over ad hoc JSON blobs.
+// What: Deterministic BEAM import that splits conversations into retrieval-friendly notes.
+// Why: RAG evaluation needs stable note boundaries so gold evidence can point at a small, explicit set of files.
 use crate::client::WikiApi;
 use anyhow::Result;
 use serde::Serialize;
@@ -14,6 +14,14 @@ pub struct ImportedConversation {
     pub conversation_id: String,
     pub base_path: String,
     pub note_paths: Vec<String>,
+    pub notes: Vec<ImportedNote>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedNote {
+    pub path: String,
+    pub content: String,
+    pub note_type: String,
 }
 
 pub async fn import_conversation(
@@ -28,31 +36,35 @@ pub async fn import_conversation(
     );
     let documents = build_documents(conversation, &base_path);
     let mut note_paths = Vec::with_capacity(documents.len());
+    let mut notes = Vec::with_capacity(documents.len());
     for (path, content) in documents {
         client
             .write_node(WriteNodeRequest {
                 path: path.clone(),
                 kind: NodeKind::File,
-                content,
+                content: content.clone(),
                 metadata_json: "{}".to_string(),
                 expected_etag: None,
             })
             .await?;
+        let note_type = note_type_for_path(&path, &base_path);
         note_paths.push(path);
+        notes.push(ImportedNote {
+            path: note_paths.last().cloned().expect("path should exist"),
+            content,
+            note_type,
+        });
     }
     Ok(ImportedConversation {
         conversation_id: conversation.conversation_id.clone(),
         base_path,
         note_paths,
+        notes,
     })
 }
 
-fn build_documents(conversation: &BeamConversation, base_path: &str) -> Vec<(String, String)> {
-    vec![
-        (
-            format!("{base_path}/conversation.md"),
-            conversation_markdown(conversation),
-        ),
+pub fn build_documents(conversation: &BeamConversation, base_path: &str) -> Vec<(String, String)> {
+    let mut documents = vec![
         (
             format!("{base_path}/profile.md"),
             json_markdown("Profile", &conversation.user_profile),
@@ -65,34 +77,30 @@ fn build_documents(conversation: &BeamConversation, base_path: &str) -> Vec<(Str
             format!("{base_path}/user_questions.md"),
             json_markdown("User Questions", &conversation.user_questions),
         ),
-    ]
-}
-
-fn conversation_markdown(conversation: &BeamConversation) -> String {
-    let mut lines = vec![
-        format!("# BEAM Conversation {}", conversation.conversation_id),
-        String::new(),
-        "## Seed".to_string(),
-        fenced_json(&conversation.conversation_seed),
-        String::new(),
     ];
     if !conversation.narratives.trim().is_empty() {
-        lines.push("## Narratives".to_string());
-        lines.push(conversation.narratives.trim().to_string());
-        lines.push(String::new());
+        documents.push((
+            format!("{base_path}/narratives.md"),
+            text_markdown("Narratives", &conversation.narratives),
+        ));
     }
-    lines.push("## Chat".to_string());
-    let messages = flatten_chat(&conversation.chat);
-    if messages.is_empty() {
-        lines.push("_No chat messages extracted._".to_string());
-    } else {
-        for (index, message) in messages.iter().enumerate() {
-            lines.push(format!("### {:04} {}", index + 1, message.label()));
-            lines.push(message.content.clone());
-            lines.push(String::new());
-        }
+    for (index, message) in flatten_chat(&conversation.chat).into_iter().enumerate() {
+        let path = format!(
+            "{base_path}/messages/{:04}-{}.md",
+            index + 1,
+            sanitize_segment(&message.label())
+        );
+        documents.push((path, message_markdown(index + 1, &message)));
     }
-    lines.join("\n")
+    documents
+}
+
+fn message_markdown(index: usize, message: &ChatMessage) -> String {
+    format!(
+        "# Message {index:04}\n\n- role: {}\n\n{}",
+        message.label(),
+        message.content.trim()
+    )
 }
 
 fn json_markdown(title: &str, value: &Value) -> String {
@@ -110,6 +118,19 @@ fn fenced_json(value: &Value) -> String {
     )
 }
 
+fn note_type_for_path(path: &str, base_path: &str) -> String {
+    let relative = path
+        .strip_prefix(base_path)
+        .unwrap_or(path)
+        .trim_start_matches('/');
+    relative
+        .split('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("root")
+        .to_string()
+}
+
 fn sanitize_segment(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -119,9 +140,9 @@ fn sanitize_segment(value: &str) -> String {
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
+                character.to_ascii_lowercase()
             } else {
-                '_'
+                '-'
             }
         })
         .collect()
@@ -197,7 +218,7 @@ mod tests {
             user_questions: json!([{"messages":["question"]}]),
             chat: json!([[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]]),
             probing_questions:
-                "{\"abstention\":[{\"question\":\"What did the assistant say?\",\"answer\":\"hi\"}]}"
+                "{\"factoid\":[{\"question\":\"What did the assistant say?\",\"answer\":\"hi\"}]}"
                     .to_string(),
         }
     }
@@ -220,13 +241,15 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "/Wiki/beam/run/conv-1/conversation.md".to_string(),
                 "/Wiki/beam/run/conv-1/profile.md".to_string(),
                 "/Wiki/beam/run/conv-1/plan.md".to_string(),
-                "/Wiki/beam/run/conv-1/user_questions.md".to_string()
+                "/Wiki/beam/run/conv-1/user_questions.md".to_string(),
+                "/Wiki/beam/run/conv-1/narratives.md".to_string(),
+                "/Wiki/beam/run/conv-1/messages/0001-user.md".to_string(),
+                "/Wiki/beam/run/conv-1/messages/0002-assistant.md".to_string()
             ]
         );
-        assert!(documents[0].1.contains("### 0001 user"));
-        assert!(documents[0].1.contains("### 0002 assistant"));
+        assert!(documents[4].1.contains("# Message 0001"));
+        assert!(documents[5].1.contains("- role: assistant"));
     }
 }
