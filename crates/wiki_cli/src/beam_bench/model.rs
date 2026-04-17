@@ -34,15 +34,19 @@ pub struct ModelRun {
 
 static CODEX_SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub async fn run_codex_question(
+pub(crate) struct CodexQuestionContext<'a> {
+    pub namespace_path: &'a str,
+    pub namespace_index_path: &'a str,
+    pub base_path: &'a str,
+    pub question: &'a str,
+    pub codex_sandbox: &'a str,
+}
+
+pub(crate) async fn run_codex_question(
     codex_bin: &Path,
     model: &str,
-    namespace_path: &str,
-    namespace_index_path: &str,
-    base_path: &str,
-    question: &str,
     connection: &ResolvedConnection,
-    codex_sandbox: &str,
+    context: CodexQuestionContext<'_>,
 ) -> Result<ModelRun> {
     let started_at = Instant::now();
     let schema_path = next_codex_schema_path();
@@ -50,10 +54,10 @@ pub async fn run_codex_question(
         .await
         .with_context(|| "failed to write Codex output schema")?;
     let prompt = codex_prompt(
-        namespace_path,
-        namespace_index_path,
-        base_path,
-        question,
+        context.namespace_path,
+        context.namespace_index_path,
+        context.base_path,
+        context.question,
         connection,
     );
     let mut child = Command::new(codex_bin)
@@ -63,7 +67,7 @@ pub async fn run_codex_question(
         .arg("--cd")
         .arg(std::env::current_dir().with_context(|| "failed to resolve current dir")?)
         .arg("--sandbox")
-        .arg(codex_sandbox)
+        .arg(context.codex_sandbox)
         .arg("-c")
         .arg("model_reasoning_effort=\"none\"")
         .arg("--output-schema")

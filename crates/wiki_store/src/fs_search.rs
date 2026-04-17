@@ -590,6 +590,18 @@ pub(crate) fn path_match_score(first_match_position: i64, path_length: i64) -> f
     ((first_match_position - 1) * 10_000 + path_length) as f32
 }
 
+fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error> {
+    match value {
+        "file" => Ok(NodeKind::File),
+        "source" => Ok(NodeKind::Source),
+        _ => Err(rusqlite::Error::InvalidColumnType(
+            1,
+            "kind".to_string(),
+            rusqlite::types::Type::Text,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -631,17 +643,5 @@ mod tests {
         let anchor =
             find_fts_anchor("prefix beta suffix", &plan).expect("term anchor should exist");
         assert_eq!(anchor.0, 7);
-    }
-}
-
-fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error> {
-    match value {
-        "file" => Ok(NodeKind::File),
-        "source" => Ok(NodeKind::Source),
-        _ => Err(rusqlite::Error::InvalidColumnType(
-            1,
-            "kind".to_string(),
-            rusqlite::types::Type::Text,
-        )),
     }
 }

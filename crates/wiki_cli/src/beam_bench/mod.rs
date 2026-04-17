@@ -17,7 +17,7 @@ use crate::connection::ResolvedConnection;
 use anyhow::{Result, anyhow};
 use dataset::{BeamConversation, extract_questions, load_dataset};
 use import::import_conversation;
-use model::run_codex_question;
+use model::{CodexQuestionContext, run_codex_question};
 use navigation::sync_beam_indexes;
 use report::{BenchmarkSummary, FailureReason, QuestionResult, summarize, write_artifacts};
 use serde_json::json;
@@ -185,12 +185,14 @@ async fn run_agent_question(
     run_codex_question(
         &config.codex_bin,
         &config.model,
-        namespace_path,
-        namespace_index_path,
-        base_path,
-        question,
         connection,
-        &config.codex_sandbox,
+        CodexQuestionContext {
+            namespace_path,
+            namespace_index_path,
+            base_path,
+            question,
+            codex_sandbox: &config.codex_sandbox,
+        },
     )
     .await
 }
