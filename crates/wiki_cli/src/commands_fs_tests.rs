@@ -4,6 +4,7 @@ use crate::commands::{pull, push, run_command};
 use crate::mirror::{load_state, parse_managed_metadata};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -201,7 +202,7 @@ impl WikiApi for MockClient {
                 etag: node.etag.clone(),
             })
             .collect::<Vec<_>>();
-        hits.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        hits.sort_by_key(|right| Reverse(right.updated_at));
         hits.truncate(request.limit as usize);
         Ok(hits)
     }
