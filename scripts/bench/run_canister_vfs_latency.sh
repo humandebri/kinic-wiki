@@ -24,7 +24,7 @@ if [[ -z "${CANISTER_ID}" ]]; then
   echo "usage: CANISTER_ID=... bash scripts/bench/run_canister_vfs_latency.sh" >&2
   exit 1
 fi
-REPLICA_HOST="http://127.0.0.1:4943"
+REPLICA_HOST="http://127.0.0.1:8000"
 LOCAL_ARGS=(--local)
 CANISTER_STATUS_ENVIRONMENT="local"
 unset CANISTER_STATUS_NETWORK

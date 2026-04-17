@@ -8,7 +8,7 @@ use canbench_rs::{BenchResult, bench_fn, bench_scope};
 use serde_json::to_vec;
 use wiki_types::{
     AppendNodeRequest, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    MoveNodeRequest, NodeKind, SearchNodesRequest, WriteNodeRequest,
+    MoveNodeRequest, NodeKind, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
 
 use crate::{
@@ -32,6 +32,7 @@ pub(super) struct BenchCase {
     pub(super) operation: &'static str,
     pub(super) n: usize,
     pub(super) updated_count: usize,
+    pub(super) preview_mode: SearchPreviewMode,
 }
 
 struct SnapshotMetrics {
@@ -114,6 +115,7 @@ fn snapshot_metrics(prefix: &str) -> SnapshotMetrics {
         limit: 100,
         cursor: None,
         snapshot_revision: None,
+        snapshot_session_id: None,
     })
     .expect("bench snapshot export should succeed");
     SnapshotMetrics {
@@ -130,9 +132,13 @@ fn snapshot_json_bytes(snapshot: &ExportSnapshotResponse) -> usize {
 
 fn emit_metadata(case: BenchCase, metrics: &SnapshotMetrics) {
     ic_cdk::eprintln!(
-        "CANBENCH_META {{\"bench_name\":\"{}\",\"operation\":\"{}\",\"n\":{},\"node_count\":{},\"depth\":{},\"content_size\":{},\"updated_count\":{},\"snapshot_node_count\":{},\"snapshot_bytes\":{},\"shape\":\"{}\",\"certificate_generation\":\"{}\",\"stable_memory_touch_bytes\":null}}",
+        "CANBENCH_META {{\"bench_name\":\"{}\",\"operation\":\"{}\",\"preview_mode\":\"{}\",\"n\":{},\"node_count\":{},\"depth\":{},\"content_size\":{},\"updated_count\":{},\"snapshot_node_count\":{},\"snapshot_bytes\":{},\"shape\":\"{}\",\"certificate_generation\":\"{}\",\"stable_memory_touch_bytes\":null}}",
         case.bench_name,
         case.operation,
+        match case.preview_mode {
+            SearchPreviewMode::None => "none",
+            SearchPreviewMode::Light => "light",
+        },
         case.n,
         case.n,
         TREE_DEPTH,
@@ -225,6 +231,7 @@ pub(super) fn run_search(case: BenchCase) -> BenchResult {
                 query_text: BENCH_QUERY.to_string(),
                 prefix: Some(prefix.clone()),
                 top_k: SEARCH_TOP_K,
+                preview_mode: Some(case.preview_mode),
             })
             .expect("bench search should succeed"),
         );
@@ -244,6 +251,7 @@ pub(super) fn run_export_snapshot(case: BenchCase) -> BenchResult {
                 limit: 100,
                 cursor: None,
                 snapshot_revision: None,
+                snapshot_session_id: None,
             })
             .expect("bench export_snapshot should succeed"),
         );
@@ -258,6 +266,7 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
         limit: 100,
         cursor: None,
         snapshot_revision: None,
+        snapshot_session_id: None,
     })
     .expect("bench baseline export should succeed");
     for index in 0..case.updated_count {

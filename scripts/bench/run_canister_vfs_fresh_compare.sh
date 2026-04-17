@@ -105,6 +105,10 @@ trap stop_replica EXIT
 
 node -e '
   const fs = require("fs");
+  const workloadMatrix = [
+    "update_flat_n10_p10240_c1_preview_none",
+    "update_flat_n10_p102400_c1_preview_none"
+  ];
   fs.writeFileSync(process.argv[1], JSON.stringify({
     tool: "canister_vfs_fresh_compare",
     reset_mode: "clean_start",
@@ -115,10 +119,7 @@ node -e '
       "write_node_single_100k",
       "append_node_single_100k"
     ],
-    workload_matrix: [
-      "update_flat_n10_p10240_c1",
-      "update_flat_n10_p102400_c1"
-    ]
+    workload_matrix: workloadMatrix
   }, null, 2) + "\n");
 ' "${CONFIG_FILE}"
 
@@ -168,9 +169,16 @@ node -e '
     ["append_node_single_10k", baselineLatency, ftsLatency],
     ["write_node_single_100k", baselineLatency, ftsLatency],
     ["append_node_single_100k", baselineLatency, ftsLatency],
-    ["update_flat_n10_p10240_c1", baselineWorkload, ftsWorkload],
-    ["update_flat_n10_p102400_c1", baselineWorkload, ftsWorkload]
+    ["update_flat_n10_p10240_c1_preview_none", baselineWorkload, ftsWorkload],
+    ["update_flat_n10_p102400_c1_preview_none", baselineWorkload, ftsWorkload]
   ];
+  const requireScenario = (scenarioSet, name, label) => {
+    const scenario = scenarioSet[name];
+    if (!scenario) {
+      throw new Error(`missing ${label} scenario: ${name}`);
+    }
+    return scenario;
+  };
   const ratio = (base, compare) => {
     const b = BigInt(base);
     const c = BigInt(compare);
@@ -193,8 +201,8 @@ node -e '
     ""
   ];
   for (const [name, baselineSet, ftsSet] of scenarios) {
-    const baseline = baselineSet[name];
-    const fts = ftsSet[name];
+    const baseline = requireScenario(baselineSet, name, "baseline");
+    const fts = requireScenario(ftsSet, name, "fts_disabled_for_bench");
     lines.push(`scenario=${name}`);
     lines.push(`baseline_cycles_per_measured_request=${baseline.cycles_per_measured_request}`);
     lines.push(`fts_disabled_cycles_per_measured_request=${fts.cycles_per_measured_request}`);
