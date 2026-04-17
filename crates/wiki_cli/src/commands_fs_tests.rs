@@ -1,8 +1,10 @@
+use crate::cli::{Cli, Command, ConnectionArgs, NodeKindArg};
 use crate::client::WikiApi;
-use crate::commands::{pull, push};
+use crate::commands::{pull, push, run_command};
 use crate::mirror::{load_state, parse_managed_metadata};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::tempdir;
@@ -20,6 +22,8 @@ pub(crate) struct MockClient {
     pub(crate) nodes: Vec<Node>,
     pub(crate) fetch_nodes: Vec<Node>,
     pub(crate) search_hits: Vec<SearchNodeHit>,
+    pub(crate) delete_fail_paths: HashSet<String>,
+    pub(crate) lists: std::sync::Mutex<Vec<ListNodesRequest>>,
     pub(crate) writes: std::sync::Mutex<Vec<WriteNodeRequest>>,
     pub(crate) appends: std::sync::Mutex<Vec<AppendNodeRequest>>,
     pub(crate) edits: std::sync::Mutex<Vec<EditNodeRequest>>,
@@ -35,6 +39,8 @@ pub(crate) struct MockClient {
 struct SnapshotRestartClient {
     calls: Mutex<usize>,
 }
+
+const SNAPSHOT_REVISION_1: &str = "v5:1:2f57696b69";
 
 #[async_trait]
 impl WikiApi for MockClient {
@@ -61,6 +67,10 @@ impl WikiApi for MockClient {
     }
 
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        self.lists
+            .lock()
+            .expect("lists should lock")
+            .push(request.clone());
         let mut entries = Vec::new();
         for node in &self.nodes {
             if !node.path.starts_with(&request.prefix) {
@@ -129,6 +139,9 @@ impl WikiApi for MockClient {
     }
 
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+        if self.delete_fail_paths.contains(&request.path) {
+            return Err(anyhow!("delete failed: {}", request.path));
+        }
         self.deletes
             .lock()
             .expect("deletes should lock")
@@ -229,7 +242,7 @@ impl WikiApi for MockClient {
         _request: ExportSnapshotRequest,
     ) -> Result<ExportSnapshotResponse> {
         Ok(ExportSnapshotResponse {
-            snapshot_revision: "snap_1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             snapshot_session_id: None,
             nodes: self.nodes.clone(),
             next_cursor: None,
@@ -238,7 +251,7 @@ impl WikiApi for MockClient {
 
     async fn fetch_updates(&self, _request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
         Ok(FetchUpdatesResponse {
-            snapshot_revision: "snap_1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             changed_nodes: self.fetch_nodes.clone(),
             removed_paths: Vec::new(),
             next_cursor: None,
@@ -437,7 +450,7 @@ async fn push_uses_expected_etag_from_frontmatter() {
     crate::mirror::save_state(
         &root,
         &crate::mirror::MirrorState {
-            snapshot_revision: "snap-1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             last_synced_at: 0,
             tracked_nodes: crate::mirror::tracked_nodes_from_snapshot(std::slice::from_ref(
                 &initial,
@@ -485,6 +498,99 @@ async fn push_uses_expected_etag_from_frontmatter() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].expected_etag.as_deref(), Some("etag-1"));
     let state = load_state(&root).expect("state should load");
-    assert_eq!(state.snapshot_revision, "snap_1");
+    assert_eq!(state.snapshot_revision, SNAPSHOT_REVISION_1);
     assert_eq!(state.tracked_nodes[0].etag, "etag-2");
+}
+
+#[tokio::test]
+async fn write_node_accepts_canonical_source_paths_only() {
+    let dir = tempdir().expect("tempdir should create");
+    let input = dir.path().join("source.md");
+    std::fs::write(&input, "source").expect("input should write");
+    let client = MockClient::default();
+
+    for path in ["/Sources/raw/foo/foo.md", "/Sources/sessions/bar/bar.md"] {
+        run_command(
+            &client,
+            Cli {
+                connection: ConnectionArgs {
+                    local: false,
+                    canister_id: None,
+                },
+                command: Command::WriteNode {
+                    path: path.to_string(),
+                    kind: NodeKindArg::Source,
+                    input: input.clone(),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                    json: false,
+                },
+            },
+        )
+        .await
+        .expect("canonical source path should pass");
+    }
+
+    let writes = client.writes.lock().expect("writes should lock");
+    assert_eq!(writes.len(), 2);
+}
+
+#[tokio::test]
+async fn write_node_rejects_non_canonical_source_paths() {
+    let dir = tempdir().expect("tempdir should create");
+    let input = dir.path().join("source.md");
+    std::fs::write(&input, "source").expect("input should write");
+    let client = MockClient::default();
+
+    for path in [
+        "/Sources/raw-foo/a/a.md",
+        "/Sources/raw/x/y/y.md",
+        "/Sources/raw/x/x.txt",
+        "/Sources/raw/x/y.md",
+        "/Sources/raw/x/",
+    ] {
+        let error = run_command(
+            &client,
+            Cli {
+                connection: ConnectionArgs {
+                    local: false,
+                    canister_id: None,
+                },
+                command: Command::WriteNode {
+                    path: path.to_string(),
+                    kind: NodeKindArg::Source,
+                    input: input.clone(),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                    json: false,
+                },
+            },
+        )
+        .await
+        .expect_err("non-canonical source path should fail");
+        assert!(error.to_string().contains("source path must"));
+    }
+
+    let writes = client.writes.lock().expect("writes should lock");
+    assert!(writes.is_empty());
+}
+
+#[test]
+fn load_state_preserves_invalid_snapshot_revision() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    std::fs::create_dir_all(&root).expect("mirror root should exist");
+    std::fs::write(
+        root.join(".wiki-fs-state.json"),
+        r#"{
+  "snapshot_revision": "  snap-legacy  ",
+  "last_synced_at": 123,
+  "tracked_nodes": []
+}"#,
+    )
+    .expect("state should write");
+
+    let state = load_state(&root).expect("state should load");
+    assert_eq!(state.snapshot_revision, "  snap-legacy  ");
+    assert_eq!(state.last_synced_at, 123);
 }

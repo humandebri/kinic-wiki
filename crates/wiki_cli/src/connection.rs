@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const CANISTER_ID_ENV: &str = "WIKI_CANISTER_ID";
-const LOCAL_REPLICA_HOST: &str = "http://127.0.0.1:4943";
+const LOCAL_REPLICA_HOST: &str = "http://127.0.0.1:8000";
 const MAINNET_REPLICA_HOST: &str = "https://icp0.io";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

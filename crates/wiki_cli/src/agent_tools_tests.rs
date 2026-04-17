@@ -159,6 +159,7 @@ impl WikiApi for ToolMockClient {
             path: "/Wiki/nested/beta.md".to_string(),
             kind: NodeKind::File,
             snippet: Some("/Wiki/nested/beta.md".to_string()),
+            preview: None,
             score: 15.0,
             match_reasons: vec!["path_substring".to_string()],
         }])

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use clap::Parser;
 use tempfile::tempdir;
 
 use crate::cli::{Cli, Command, ConnectionArgs, GlobNodeTypeArg, NodeKindArg};
@@ -314,4 +315,159 @@ async fn search_path_command_calls_canister_path_search() {
     assert_eq!(searches[0].query_text, "nested");
     assert_eq!(searches[0].prefix.as_deref(), Some("/Wiki"));
     assert_eq!(searches[0].top_k, 7);
+}
+
+#[tokio::test]
+async fn delete_tree_command_lists_recursive_and_deletes_deepest_first() {
+    let client = MockClient {
+        nodes: vec![
+            wiki_types::Node {
+                path: "/Wiki/tree".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag-tree".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            wiki_types::Node {
+                path: "/Wiki/tree/leaf.md".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 2,
+                etag: "etag-leaf".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            wiki_types::Node {
+                path: "/Wiki/tree/branch/twig.md".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-twig".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        test_cli(Command::DeleteTree {
+            path: "/Wiki/tree".to_string(),
+            json: false,
+        }),
+    )
+    .await
+    .expect("delete tree command should succeed");
+
+    let lists = client.lists.lock().expect("lists should lock");
+    assert_eq!(lists.len(), 1);
+    assert_eq!(lists[0].prefix, "/Wiki/tree");
+    assert!(lists[0].recursive);
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    let deleted_paths = deletes
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deleted_paths,
+        vec![
+            "/Wiki/tree/branch/twig.md",
+            "/Wiki/tree/leaf.md",
+            "/Wiki/tree"
+        ]
+    );
+    let delete_etags = deletes
+        .iter()
+        .map(|request| request.expected_etag.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delete_etags,
+        vec![Some("etag-twig"), Some("etag-leaf"), Some("etag-tree")]
+    );
+}
+
+#[tokio::test]
+async fn delete_tree_command_succeeds_when_nothing_matches() {
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::DeleteTree {
+            path: "/Wiki/missing".to_string(),
+            json: false,
+        }),
+    )
+    .await
+    .expect("delete tree should allow empty matches");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn delete_tree_command_stops_after_first_delete_failure() {
+    let client = MockClient {
+        nodes: vec![
+            wiki_types::Node {
+                path: "/Wiki/tree/a.md".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag-a".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            wiki_types::Node {
+                path: "/Wiki/tree/deeper/b.md".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 2,
+                etag: "etag-b".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            wiki_types::Node {
+                path: "/Wiki/tree/z.md".to_string(),
+                kind: wiki_types::NodeKind::File,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-z".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+        ],
+        delete_fail_paths: ["/Wiki/tree/deeper/b.md".to_string()].into_iter().collect(),
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        test_cli(Command::DeleteTree {
+            path: "/Wiki/tree".to_string(),
+            json: false,
+        }),
+    )
+    .await
+    .expect_err("delete tree should fail fast");
+    assert!(error.to_string().contains("/Wiki/tree/deeper/b.md"));
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[test]
+fn delete_tree_command_parses_from_cli() {
+    let parsed = Cli::try_parse_from(["wiki-cli", "delete-tree", "--path", "/Wiki/tree"])
+        .expect("delete-tree should parse");
+    match parsed.command {
+        Command::DeleteTree { path, json } => {
+            assert_eq!(path, "/Wiki/tree");
+            assert!(!json);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
 }

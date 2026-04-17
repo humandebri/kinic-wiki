@@ -1,24 +1,21 @@
 // Where: crates/wiki_cli/src/commands.rs
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
-use crate::beam_bench::{
-    BeamBenchArgs, BeamBenchEvalMode, BeamBenchProvider, BeamQuestionClass, run_beam_bench,
-};
-use crate::cli::{BeamBenchEvalModeArg, BeamBenchProviderArg, BeamQuestionClassArg, Cli, Command};
+use crate::cli::{Cli, Command};
 use crate::client::WikiApi;
-use crate::connection::resolve_connection;
 use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::maintenance::rebuild_index;
 use crate::mirror::{
     MirrorState, collect_changed_nodes, collect_managed_nodes, deleted_tracked_nodes, load_state,
     merge_tracked_nodes, now_millis, read_managed_node_content, remove_mirror_paths,
-    remove_stale_managed_files, save_state, tracked_nodes_from_snapshot,
-    update_local_node_metadata, write_conflict_file, write_snapshot_mirror,
+    remove_stale_managed_files, save_state, snapshot_revision_is_valid,
+    tracked_nodes_from_snapshot, update_local_node_metadata, write_conflict_file,
+    write_snapshot_mirror,
 };
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
@@ -31,14 +28,12 @@ const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
 /// Must match `QUERY_RESULT_LIMIT_MAX` in `wiki_store` sync paging.
 const SYNC_PAGE_LIMIT: u32 = 100;
 const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
+const SNAPSHOT_INVALID_ERROR: &str = "known_snapshot_revision is invalid";
 const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_EXPIRED_ERROR: &str = "snapshot_session_id has expired";
 
 pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
-    let Cli {
-        connection,
-        command,
-    } = cli;
+    let Cli { command, .. } = cli;
     match command {
         Command::RebuildIndex => {
             rebuild_index(client).await?;
@@ -165,6 +160,23 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                 println!("{}", result.path);
             }
         }
+        Command::DeleteTree { path, json } => {
+            let deleted_paths = delete_tree(client, &path).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "deleted_paths": deleted_paths,
+                        "deleted_count": deleted_paths.len(),
+                    }))?
+                );
+            } else {
+                for deleted_path in &deleted_paths {
+                    println!("{deleted_path}");
+                }
+                println!("deleted {} node(s)", deleted_paths.len());
+            }
+        }
         Command::MkdirNode { path, json } => {
             let result = client.mkdir_node(MkdirNodeRequest { path }).await?;
             if json {
@@ -261,13 +273,20 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
                     query_text,
                     prefix: Some(prefix),
                     top_k,
+                    preview_mode: None,
                 })
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
                 for hit in hits {
-                    println!("{}\t{}", hit.path, hit.snippet.unwrap_or_default());
+                    let preview = hit
+                        .preview
+                        .as_ref()
+                        .and_then(|preview| preview.excerpt.clone())
+                        .or(hit.snippet.clone())
+                        .unwrap_or_default();
+                    println!("{}\t{}", hit.path, preview);
                 }
             }
         }
@@ -338,71 +357,35 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
         } => {
             push(client, &vault_path.join(mirror_root)).await?;
         }
-        Command::BeamBench {
-            dataset_path,
-            split,
-            model,
-            output_dir,
-            provider,
-            eval_mode,
-            limit,
-            parallelism,
-            top_k,
-            openai_base_url,
-            openai_api_key_env,
-            max_tool_roundtrips,
-            questions_per_conversation,
-            include_question_class,
-            namespace,
-            codex_bin,
-            codex_sandbox,
-        } => {
-            let resolved_connection =
-                resolve_connection(connection.local, connection.canister_id.clone())?;
-            run_beam_bench(
-                resolved_connection,
-                BeamBenchArgs {
-                    dataset_path,
-                    split,
-                    model,
-                    output_dir,
-                    provider: match provider {
-                        BeamBenchProviderArg::Codex => BeamBenchProvider::Codex,
-                        BeamBenchProviderArg::Openai => BeamBenchProvider::OpenAi,
-                    },
-                    eval_mode: match eval_mode {
-                        BeamBenchEvalModeArg::RetrievalOnly => BeamBenchEvalMode::RetrievalOnly,
-                        BeamBenchEvalModeArg::RetrieveAndExtract => {
-                            BeamBenchEvalMode::RetrieveAndExtract
-                        }
-                        BeamBenchEvalModeArg::LegacyAgentAnswer => {
-                            BeamBenchEvalMode::LegacyAgentAnswer
-                        }
-                    },
-                    limit,
-                    parallelism,
-                    top_k,
-                    openai_base_url,
-                    openai_api_key_env,
-                    max_tool_roundtrips,
-                    questions_per_conversation,
-                    include_question_classes: include_question_class
-                        .into_iter()
-                        .map(|value| match value {
-                            BeamQuestionClassArg::Factoid => BeamQuestionClass::Factoid,
-                            BeamQuestionClassArg::Reasoning => BeamQuestionClass::Reasoning,
-                            BeamQuestionClassArg::Abstention => BeamQuestionClass::Abstention,
-                        })
-                        .collect(),
-                    namespace,
-                    codex_bin,
-                    codex_sandbox,
-                },
-            )
-            .await?;
-        }
     }
     Ok(())
+}
+
+async fn delete_tree(client: &impl WikiApi, path: &str) -> Result<Vec<String>> {
+    let mut entries = client
+        .list_nodes(ListNodesRequest {
+            prefix: path.to_string(),
+            recursive: true,
+        })
+        .await?;
+    entries.sort_by(|left, right| {
+        right
+            .path
+            .len()
+            .cmp(&left.path.len())
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let mut deleted_paths = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let result = client
+            .delete_node(DeleteNodeRequest {
+                path: entry.path,
+                expected_etag: Some(entry.etag),
+            })
+            .await?;
+        deleted_paths.push(result.path);
+    }
+    Ok(deleted_paths)
 }
 
 fn validate_source_path_for_write(path: &str, kind: wiki_types::NodeKind) -> Result<()> {
@@ -418,14 +401,24 @@ fn validate_canonical_source_path(path: &str) -> Result<()> {
 }
 
 fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<()> {
-    if !path.starts_with(prefix) {
+    let path_buf = Path::new(path);
+    let prefix_buf = Path::new(prefix);
+    let Ok(relative) = path_buf.strip_prefix(prefix_buf) else {
         return Err(anyhow!("source path must stay under {prefix}: {path}"));
+    };
+    let segments = relative
+        .iter()
+        .map(|value| value.to_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    if segments.len() != 2 {
+        return Err(anyhow!(
+            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
+        ));
     }
-    let normalized = path.trim_end_matches('/');
-    let mut segments = normalized.rsplit('/');
-    let file_name = segments.next().unwrap_or_default();
-    let directory_name = segments.next().unwrap_or_default();
-    if directory_name.is_empty() || file_name != format!("{directory_name}.md") {
+    let [directory_name, file_name] = segments.as_slice() else {
+        unreachable!();
+    };
+    if directory_name.is_empty() || *file_name != format!("{directory_name}.md") {
         return Err(anyhow!(
             "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
         ));
@@ -435,6 +428,14 @@ fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<()> {
 
 pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Result<()> {
     let state = load_state(mirror_root)?;
+    if !resync
+        && !state.snapshot_revision.is_empty()
+        && !snapshot_revision_is_valid(&state.snapshot_revision)
+    {
+        return Err(anyhow!(
+            "mirror state snapshot_revision is invalid; run pull --resync"
+        ));
+    }
     if resync || state.snapshot_revision.is_empty() {
         let snapshot = collect_paged_snapshot(client)
             .await
@@ -496,7 +497,18 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Re
 pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
     let state = load_state(mirror_root)?;
     if state.snapshot_revision.is_empty() {
-        return Err(anyhow!("mirror state is missing; run pull first"));
+        let state_exists = mirror_state_exists(mirror_root);
+        let message = if state_exists {
+            "mirror state snapshot_revision is invalid; run pull --resync"
+        } else {
+            "mirror state is missing; run pull first"
+        };
+        return Err(anyhow!(message));
+    }
+    if !snapshot_revision_is_valid(&state.snapshot_revision) {
+        return Err(anyhow!(
+            "mirror state snapshot_revision is invalid; run pull --resync"
+        ));
     }
     let changed_nodes = collect_changed_nodes(mirror_root, state.last_synced_at)?;
     let deleted_nodes = deleted_tracked_nodes(mirror_root, &state.tracked_nodes)?;
@@ -644,8 +656,9 @@ async fn collect_paged_updates(
 }
 
 fn resync_required_error(error: anyhow::Error) -> anyhow::Error {
-    if error.to_string().contains(SNAPSHOT_UNAVAILABLE_ERROR) {
-        anyhow!("{SNAPSHOT_UNAVAILABLE_ERROR}; run pull --resync")
+    let message = error.to_string();
+    if message.contains(SNAPSHOT_UNAVAILABLE_ERROR) || message.contains(SNAPSHOT_INVALID_ERROR) {
+        anyhow!("{message}; run pull --resync")
     } else {
         error
     }
@@ -688,6 +701,12 @@ fn read_local_status(mirror_root: &Path) -> Result<(MirrorState, usize)> {
     let state = load_state(mirror_root)?;
     let tracked_count = collect_managed_nodes(mirror_root)?.len();
     Ok((state, tracked_count))
+}
+
+fn mirror_state_exists(mirror_root: &Path) -> bool {
+    let mut path = PathBuf::from(mirror_root);
+    path.push(".wiki-fs-state.json");
+    path.exists()
 }
 
 fn read_multi_edit_file(path: &Path) -> Result<Vec<MultiEdit>> {

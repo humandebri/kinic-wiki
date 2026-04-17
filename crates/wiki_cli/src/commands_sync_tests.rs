@@ -21,8 +21,14 @@ use wiki_types::{
 struct SyncMockClient {
     snapshot_nodes: Vec<Node>,
     fetch_response: Mutex<FetchUpdatesResponse>,
+    fetch_error: Option<String>,
     fail_write: bool,
+    writes: Mutex<Vec<String>>,
+    deletes: Mutex<Vec<String>>,
 }
+
+const SNAPSHOT_REVISION_1: &str = "v5:1:2f57696b69";
+const SNAPSHOT_REVISION_2: &str = "v5:2:2f57696b69";
 #[async_trait]
 impl WikiApi for SyncMockClient {
     async fn status(&self) -> Result<Status> {
@@ -69,6 +75,10 @@ impl WikiApi for SyncMockClient {
         Ok(Vec::new())
     }
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
+        self.writes
+            .lock()
+            .expect("writes should lock")
+            .push(request.path.clone());
         if self.fail_write {
             return Err(anyhow!(
                 "expected_etag does not match current etag: {}",
@@ -87,6 +97,10 @@ impl WikiApi for SyncMockClient {
     }
 
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+        self.deletes
+            .lock()
+            .expect("deletes should lock")
+            .push(request.path.clone());
         Ok(DeleteNodeResult { path: request.path })
     }
     async fn export_snapshot(
@@ -94,13 +108,16 @@ impl WikiApi for SyncMockClient {
         _request: ExportSnapshotRequest,
     ) -> Result<ExportSnapshotResponse> {
         Ok(ExportSnapshotResponse {
-            snapshot_revision: "snap-initial".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             snapshot_session_id: None,
             nodes: self.snapshot_nodes.clone(),
             next_cursor: None,
         })
     }
     async fn fetch_updates(&self, _request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
+        if let Some(message) = &self.fetch_error {
+            return Err(anyhow!(message.clone()));
+        }
         Ok(self
             .fetch_response
             .lock()
@@ -127,7 +144,7 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
     crate::mirror::save_state(
         &root,
         &MirrorState {
-            snapshot_revision: "snap-1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             last_synced_at: 0,
             tracked_nodes: tracked_nodes_from_snapshot(std::slice::from_ref(&initial)),
         },
@@ -151,12 +168,15 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
     let client = SyncMockClient {
         snapshot_nodes: vec![initial.clone()],
         fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: "snap-2".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: vec![initial],
             removed_paths: Vec::new(),
             next_cursor: None,
         }),
+        fetch_error: None,
         fail_write: true,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
     };
 
     push(&client, &root).await.expect("push should succeed");
@@ -167,7 +187,7 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
     .expect("conflict file should exist");
     assert!(conflict.contains("edited body"));
     let state = load_state(&root).expect("state should load");
-    assert_eq!(state.snapshot_revision, "snap-2");
+    assert_eq!(state.snapshot_revision, SNAPSHOT_REVISION_2);
 }
 
 #[tokio::test]
@@ -181,7 +201,7 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
     crate::mirror::save_state(
         &root,
         &MirrorState {
-            snapshot_revision: "snap-1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             last_synced_at: 0,
             tracked_nodes: tracked_nodes_from_snapshot(&[first.clone(), second.clone()]),
         },
@@ -219,12 +239,15 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
     let client = SyncMockClient {
         snapshot_nodes: vec![first.clone(), second.clone()],
         fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: "snap-2".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: vec![first, second],
             removed_paths: Vec::new(),
             next_cursor: None,
         }),
+        fetch_error: None,
         fail_write: true,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
     };
 
     push(&client, &root).await.expect("push should succeed");
@@ -239,6 +262,184 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
     .expect("second conflict file should exist");
     assert!(first_conflict.contains("edited a"));
     assert!(second_conflict.contains("edited b"));
+}
+
+#[tokio::test]
+async fn pull_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    std::fs::create_dir_all(&root).expect("mirror root should exist");
+    crate::mirror::save_state(
+        &root,
+        &MirrorState {
+            snapshot_revision: "snap-legacy".to_string(),
+            last_synced_at: 0,
+            tracked_nodes: Vec::new(),
+        },
+    )
+    .expect("state should save");
+    let client = SyncMockClient {
+        snapshot_nodes: vec![sync_node("/Wiki/foo.md", "# Foo", "etag-1")],
+        fetch_response: Mutex::new(FetchUpdatesResponse {
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+            changed_nodes: Vec::new(),
+            removed_paths: Vec::new(),
+            next_cursor: None,
+        }),
+        fetch_error: None,
+        fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
+    };
+
+    let error = pull(&client, &root, false)
+        .await
+        .expect_err("pull should reject invalid revision");
+    assert_eq!(
+        error.to_string(),
+        "mirror state snapshot_revision is invalid; run pull --resync"
+    );
+    let state = load_state(&root).expect("state should load");
+    assert_eq!(state.snapshot_revision, "snap-legacy");
+    assert!(state.tracked_nodes.is_empty());
+}
+
+#[tokio::test]
+async fn pull_reports_resync_for_invalid_known_snapshot_revision() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    std::fs::create_dir_all(&root).expect("mirror root should exist");
+    crate::mirror::save_state(
+        &root,
+        &MirrorState {
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
+            last_synced_at: 0,
+            tracked_nodes: Vec::new(),
+        },
+    )
+    .expect("state should save");
+    let client = SyncMockClient {
+        snapshot_nodes: Vec::new(),
+        fetch_response: Mutex::new(FetchUpdatesResponse {
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+            changed_nodes: Vec::new(),
+            removed_paths: Vec::new(),
+            next_cursor: None,
+        }),
+        fetch_error: Some("known_snapshot_revision is invalid".to_string()),
+        fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
+    };
+
+    let error = pull(&client, &root, false)
+        .await
+        .expect_err("pull should request resync");
+    assert_eq!(
+        error.to_string(),
+        "known_snapshot_revision is invalid; run pull --resync"
+    );
+}
+
+#[tokio::test]
+async fn push_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    let initial = sync_node("/Wiki/foo.md", "# Foo", "etag-1");
+    write_node_mirror(&root, &initial).expect("mirror write should succeed");
+    crate::mirror::save_state(
+        &root,
+        &MirrorState {
+            snapshot_revision: "snap-legacy".to_string(),
+            last_synced_at: 0,
+            tracked_nodes: tracked_nodes_from_snapshot(std::slice::from_ref(&initial)),
+        },
+    )
+    .expect("state should save");
+    std::fs::write(
+        root.join("foo.md"),
+        crate::mirror::serialize_mirror_file(
+            &crate::mirror::MirrorFrontmatter {
+                path: initial.path.clone(),
+                kind: initial.kind.clone(),
+                etag: initial.etag.clone(),
+                updated_at: initial.updated_at,
+                mirror: true,
+            },
+            "# Foo\n\nedited",
+        ),
+    )
+    .expect("edited file should write");
+    let client = SyncMockClient {
+        snapshot_nodes: Vec::new(),
+        fetch_response: Mutex::new(FetchUpdatesResponse {
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+            changed_nodes: Vec::new(),
+            removed_paths: Vec::new(),
+            next_cursor: None,
+        }),
+        fetch_error: None,
+        fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
+    };
+
+    let error = push(&client, &root)
+        .await
+        .expect_err("push should reject invalid revision");
+    assert_eq!(
+        error.to_string(),
+        "mirror state snapshot_revision is invalid; run pull --resync"
+    );
+    assert!(client.writes.lock().expect("writes should lock").is_empty());
+    assert!(
+        client
+            .deletes
+            .lock()
+            .expect("deletes should lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn push_reports_resync_for_invalid_known_snapshot_revision() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    let initial = sync_node("/Wiki/foo.md", "# Foo", "etag-1");
+    write_node_mirror(&root, &initial).expect("mirror write should succeed");
+    crate::mirror::save_state(
+        &root,
+        &MirrorState {
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
+            last_synced_at: 0,
+            tracked_nodes: tracked_nodes_from_snapshot(std::slice::from_ref(&initial)),
+        },
+    )
+    .expect("state should save");
+    std::fs::remove_file(root.join("foo.md")).expect("managed file should delete");
+    let client = SyncMockClient {
+        snapshot_nodes: Vec::new(),
+        fetch_response: Mutex::new(FetchUpdatesResponse {
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+            changed_nodes: Vec::new(),
+            removed_paths: Vec::new(),
+            next_cursor: None,
+        }),
+        fetch_error: Some("known_snapshot_revision is invalid".to_string()),
+        fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
+    };
+
+    let error = push(&client, &root)
+        .await
+        .expect_err("push should request resync");
+    assert_eq!(
+        error.to_string(),
+        "known_snapshot_revision is invalid; run pull --resync"
+    );
+    assert!(client.writes.lock().expect("writes should lock").is_empty());
+    assert_eq!(client.deletes.lock().expect("deletes should lock").len(), 1);
 }
 
 #[test]
@@ -306,7 +507,7 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
     crate::mirror::save_state(
         &root,
         &MirrorState {
-            snapshot_revision: "snap-1".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
             last_synced_at: 0,
             tracked_nodes: tracked_nodes_from_snapshot(std::slice::from_ref(&stale)),
         },
@@ -324,12 +525,15 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
     let client = SyncMockClient {
         snapshot_nodes: Vec::new(),
         fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: "snap-2".to_string(),
+            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: vec![fresh.clone()],
             removed_paths: vec!["/Wiki/stale.md".to_string()],
             next_cursor: None,
         }),
+        fetch_error: None,
         fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
     };
 
     pull(&client, &root, false)
@@ -342,7 +546,7 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
     let metadata = parse_managed_metadata(&fresh_content).expect("frontmatter should parse");
     assert_eq!(metadata.etag, "etag-fresh");
     let state = load_state(&root).expect("state should load");
-    assert_eq!(state.snapshot_revision, "snap-2");
+    assert_eq!(state.snapshot_revision, SNAPSHOT_REVISION_2);
     assert_eq!(state.tracked_nodes.len(), 1);
     assert_eq!(state.tracked_nodes[0].path, fresh.path);
 }

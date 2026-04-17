@@ -18,7 +18,7 @@ pub struct Cli {
 
 #[derive(Args, Debug, Clone)]
 pub struct ConnectionArgs {
-    #[arg(long, help = "Use the local replica host http://127.0.0.1:4943")]
+    #[arg(long, help = "Use the local replica host http://127.0.0.1:8000")]
     pub local: bool,
 
     #[arg(long, help = "Override WIKI_CANISTER_ID or user config")]
@@ -94,6 +94,12 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    DeleteTree {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     MkdirNode {
         #[arg(long)]
         path: String,
@@ -146,7 +152,7 @@ pub enum Command {
         #[arg(
             long,
             default_value_t = 10,
-            help = "Maximum 100; 0 is treated as 1 by the canister"
+            help = "Maximum 100; 0 is treated as 1 by the canister. Search preview defaults to light."
         )]
         top_k: u32,
         #[arg(long)]
@@ -195,42 +201,6 @@ pub enum Command {
         #[arg(long, default_value = "Wiki")]
         mirror_root: String,
     },
-    BeamBench {
-        #[arg(long)]
-        dataset_path: PathBuf,
-        #[arg(long, default_value = "100K")]
-        split: String,
-        #[arg(long, default_value = "")]
-        model: String,
-        #[arg(long)]
-        output_dir: PathBuf,
-        #[arg(long, value_enum, default_value_t = BeamBenchProviderArg::Codex)]
-        provider: BeamBenchProviderArg,
-        #[arg(long, value_enum, default_value_t = BeamBenchEvalModeArg::RetrieveAndExtract)]
-        eval_mode: BeamBenchEvalModeArg,
-        #[arg(long, default_value_t = 1)]
-        limit: usize,
-        #[arg(long, default_value_t = 1)]
-        parallelism: usize,
-        #[arg(long, default_value_t = 10)]
-        top_k: u32,
-        #[arg(long, default_value = "https://api.openai.com/v1")]
-        openai_base_url: String,
-        #[arg(long, default_value = "OPENAI_API_KEY")]
-        openai_api_key_env: String,
-        #[arg(long, default_value_t = 8)]
-        max_tool_roundtrips: usize,
-        #[arg(long)]
-        questions_per_conversation: Option<usize>,
-        #[arg(long, value_enum)]
-        include_question_class: Vec<BeamQuestionClassArg>,
-        #[arg(long)]
-        namespace: Option<String>,
-        #[arg(long, default_value = "codex")]
-        codex_bin: PathBuf,
-        #[arg(long, default_value = "danger-full-access")]
-        codex_sandbox: String,
-    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,26 +214,6 @@ pub enum GlobNodeTypeArg {
     File,
     Directory,
     Any,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BeamBenchProviderArg {
-    Codex,
-    Openai,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BeamBenchEvalModeArg {
-    RetrievalOnly,
-    RetrieveAndExtract,
-    LegacyAgentAnswer,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BeamQuestionClassArg {
-    Factoid,
-    Reasoning,
-    Abstention,
 }
 
 impl NodeKindArg {
@@ -282,5 +232,19 @@ impl GlobNodeTypeArg {
             Self::Directory => wiki_types::GlobNodeType::Directory,
             Self::Any => wiki_types::GlobNodeType::Any,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    #[test]
+    fn main_cli_help_does_not_list_beam_bench() {
+        let mut command = Cli::command();
+        let help = command.render_long_help().to_string();
+
+        assert!(!help.contains("beam-bench"));
     }
 }
