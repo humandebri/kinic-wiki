@@ -222,6 +222,71 @@ async fn move_node_command_calls_canister_move() {
 }
 
 #[tokio::test]
+async fn move_node_command_allows_canonical_source_target() {
+    let client = MockClient {
+        nodes: vec![wiki_types::Node {
+            path: "/Sources/raw/source/source.md".to_string(),
+            kind: wiki_types::NodeKind::Source,
+            content: "# Source".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag-1".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        test_cli(Command::MoveNode {
+            from_path: "/Sources/raw/source/source.md".to_string(),
+            to_path: "/Sources/raw/renamed/renamed.md".to_string(),
+            expected_etag: Some("etag-1".to_string()),
+            overwrite: false,
+            json: false,
+        }),
+    )
+    .await
+    .expect("source move should succeed");
+
+    let moves = client.moves.lock().expect("moves should lock");
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].to_path, "/Sources/raw/renamed/renamed.md");
+}
+
+#[tokio::test]
+async fn move_node_command_rejects_noncanonical_source_target() {
+    let client = MockClient {
+        nodes: vec![wiki_types::Node {
+            path: "/Sources/raw/source/source.md".to_string(),
+            kind: wiki_types::NodeKind::Source,
+            content: "# Source".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag-1".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        test_cli(Command::MoveNode {
+            from_path: "/Sources/raw/source/source.md".to_string(),
+            to_path: "/Sources/raw/renamed/wrong.md".to_string(),
+            expected_etag: Some("etag-1".to_string()),
+            overwrite: false,
+            json: false,
+        }),
+    )
+    .await
+    .expect_err("noncanonical source move should fail");
+
+    assert!(error.to_string().contains("canonical form"));
+    assert!(client.moves.lock().expect("moves should lock").is_empty());
+}
+
+#[tokio::test]
 async fn glob_node_command_calls_canister_glob() {
     let client = MockClient::default();
 

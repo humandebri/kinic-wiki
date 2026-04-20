@@ -9,4 +9,5 @@ mod glob_match;
 mod hashing;
 mod schema;
 
+pub use crate::fs_helpers::{validate_canonical_source_path, validate_source_path_for_kind};
 pub use crate::fs_store::FsStore;

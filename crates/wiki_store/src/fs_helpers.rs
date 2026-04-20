@@ -8,6 +8,9 @@ use wiki_types::{Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck};
 
 use crate::hashing::sha256_hex;
 
+const RAW_SOURCES_PREFIX: &str = "/Sources/raw";
+const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
+
 pub(crate) fn normalize_node_path(path: &str, allow_root: bool) -> Result<String, String> {
     if path.is_empty() {
         return Err("path must not be empty".to_string());
@@ -34,6 +37,49 @@ pub(crate) fn normalize_node_path(path: &str, allow_root: bool) -> Result<String
         }
     }
     Ok(path.to_string())
+}
+
+pub fn validate_source_path_for_kind(path: &str, kind: &NodeKind) -> Result<(), String> {
+    if *kind != NodeKind::Source {
+        return Ok(());
+    }
+    validate_canonical_source_path(path)
+}
+
+pub fn validate_canonical_source_path(path: &str) -> Result<(), String> {
+    if path.starts_with(RAW_SOURCES_PREFIX) {
+        return validate_source_path_under_prefix(path, RAW_SOURCES_PREFIX);
+    }
+    if path.starts_with(SESSION_SOURCES_PREFIX) {
+        return validate_source_path_under_prefix(path, SESSION_SOURCES_PREFIX);
+    }
+    Err(format!(
+        "source path must stay under {RAW_SOURCES_PREFIX} or {SESSION_SOURCES_PREFIX}: {path}"
+    ))
+}
+
+fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(prefix)
+        .ok_or_else(|| format!("source path must stay under {prefix}: {path}"))?;
+    let segments = relative
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() != 2 {
+        return Err(format!(
+            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
+        ));
+    }
+    let [directory_name, file_name] = segments.as_slice() else {
+        unreachable!();
+    };
+    if directory_name.is_empty() || *file_name != format!("{directory_name}.md") {
+        return Err(format!(
+            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn compute_node_etag(node: &Node) -> String {

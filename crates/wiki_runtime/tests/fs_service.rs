@@ -240,3 +240,34 @@ fn fs_service_exposes_extended_vfs_methods() {
         "after beta"
     );
 }
+
+#[test]
+fn fs_service_rejects_noncanonical_source_move_target() {
+    let service = new_service();
+    let created = service
+        .write_node(
+            WriteNodeRequest {
+                path: "/Sources/raw/source/source.md".to_string(),
+                kind: NodeKind::Source,
+                content: "alpha".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            40,
+        )
+        .expect("write should succeed");
+
+    let error = service
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Sources/raw/source/source.md".to_string(),
+                to_path: "/Sources/raw/renamed/wrong.md".to_string(),
+                expected_etag: Some(created.node.etag),
+                overwrite: false,
+            },
+            41,
+        )
+        .expect_err("move should fail");
+
+    assert!(error.contains("source path must"));
+}

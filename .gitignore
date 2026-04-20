@@ -21,6 +21,7 @@
 # Temp files
 /tmp/
 *.tmp
+*.tsbuildinfo
 __pycache__/
 *.pyc
 

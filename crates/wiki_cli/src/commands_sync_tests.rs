@@ -20,8 +20,8 @@ use wiki_types::{
 
 struct SyncMockClient {
     snapshot_nodes: Vec<Node>,
-    fetch_response: Mutex<FetchUpdatesResponse>,
-    fetch_error: Option<String>,
+    fetch_responses: Mutex<Vec<Result<FetchUpdatesResponse>>>,
+    fetch_requests: Mutex<Vec<FetchUpdatesRequest>>,
     fail_write: bool,
     writes: Mutex<Vec<String>>,
     deletes: Mutex<Vec<String>>,
@@ -29,6 +29,7 @@ struct SyncMockClient {
 
 const SNAPSHOT_REVISION_1: &str = "v5:1:2f57696b69";
 const SNAPSHOT_REVISION_2: &str = "v5:2:2f57696b69";
+const SNAPSHOT_REVISION_3: &str = "v5:3:2f57696b69";
 #[async_trait]
 impl WikiApi for SyncMockClient {
     async fn status(&self) -> Result<Status> {
@@ -38,8 +39,12 @@ impl WikiApi for SyncMockClient {
         })
     }
 
-    async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
-        Ok(None)
+    async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        Ok(self
+            .snapshot_nodes
+            .iter()
+            .find(|node| node.path == path)
+            .cloned())
     }
     async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
         Ok(Vec::new())
@@ -114,15 +119,24 @@ impl WikiApi for SyncMockClient {
             next_cursor: None,
         })
     }
-    async fn fetch_updates(&self, _request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
-        if let Some(message) = &self.fetch_error {
-            return Err(anyhow!(message.clone()));
-        }
-        Ok(self
-            .fetch_response
+    async fn fetch_updates(&self, request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse> {
+        self.fetch_requests
             .lock()
-            .expect("fetch response should lock")
-            .clone())
+            .expect("fetch requests should lock")
+            .push(request);
+        let mut responses = self
+            .fetch_responses
+            .lock()
+            .expect("fetch responses should lock");
+        if responses.is_empty() {
+            return Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
+                changed_nodes: Vec::new(),
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        responses.remove(0)
     }
 }
 
@@ -167,13 +181,21 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
 
     let client = SyncMockClient {
         snapshot_nodes: vec![initial.clone()],
-        fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
-            changed_nodes: vec![initial],
-            removed_paths: Vec::new(),
-            next_cursor: None,
-        }),
-        fetch_error: None,
+        fetch_responses: Mutex::new(vec![
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+                changed_nodes: vec![initial.clone()],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+                changed_nodes: vec![initial],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+        ]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: true,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -238,13 +260,21 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
 
     let client = SyncMockClient {
         snapshot_nodes: vec![first.clone(), second.clone()],
-        fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
-            changed_nodes: vec![first, second],
-            removed_paths: Vec::new(),
-            next_cursor: None,
-        }),
-        fetch_error: None,
+        fetch_responses: Mutex::new(vec![
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+                changed_nodes: vec![first.clone(), second.clone()],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+                changed_nodes: vec![first, second],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+        ]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: true,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -280,13 +310,13 @@ async fn pull_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
     .expect("state should save");
     let client = SyncMockClient {
         snapshot_nodes: vec![sync_node("/Wiki/foo.md", "# Foo", "etag-1")],
-        fetch_response: Mutex::new(FetchUpdatesResponse {
+        fetch_responses: Mutex::new(vec![Ok(FetchUpdatesResponse {
             snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: Vec::new(),
             removed_paths: Vec::new(),
             next_cursor: None,
-        }),
-        fetch_error: None,
+        })]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: false,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -320,13 +350,8 @@ async fn pull_reports_resync_for_invalid_known_snapshot_revision() {
     .expect("state should save");
     let client = SyncMockClient {
         snapshot_nodes: Vec::new(),
-        fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
-            changed_nodes: Vec::new(),
-            removed_paths: Vec::new(),
-            next_cursor: None,
-        }),
-        fetch_error: Some("known_snapshot_revision is invalid".to_string()),
+        fetch_responses: Mutex::new(vec![Err(anyhow!("known_snapshot_revision is invalid"))]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: false,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -372,13 +397,13 @@ async fn push_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
     .expect("edited file should write");
     let client = SyncMockClient {
         snapshot_nodes: Vec::new(),
-        fetch_response: Mutex::new(FetchUpdatesResponse {
+        fetch_responses: Mutex::new(vec![Ok(FetchUpdatesResponse {
             snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: Vec::new(),
             removed_paths: Vec::new(),
             next_cursor: None,
-        }),
-        fetch_error: None,
+        })]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: false,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -419,13 +444,8 @@ async fn push_reports_resync_for_invalid_known_snapshot_revision() {
     std::fs::remove_file(root.join("foo.md")).expect("managed file should delete");
     let client = SyncMockClient {
         snapshot_nodes: Vec::new(),
-        fetch_response: Mutex::new(FetchUpdatesResponse {
-            snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
-            changed_nodes: Vec::new(),
-            removed_paths: Vec::new(),
-            next_cursor: None,
-        }),
-        fetch_error: Some("known_snapshot_revision is invalid".to_string()),
+        fetch_responses: Mutex::new(vec![Err(anyhow!("known_snapshot_revision is invalid"))]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: false,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),
@@ -439,7 +459,121 @@ async fn push_reports_resync_for_invalid_known_snapshot_revision() {
         "known_snapshot_revision is invalid; run pull --resync"
     );
     assert!(client.writes.lock().expect("writes should lock").is_empty());
-    assert_eq!(client.deletes.lock().expect("deletes should lock").len(), 1);
+    assert!(
+        client
+            .deletes
+            .lock()
+            .expect("deletes should lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn push_uses_preflight_revision_for_postflight_refresh() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = PathBuf::from(dir.path()).join("Wiki");
+    let initial = sync_node("/Wiki/foo.md", "# Foo", "etag-1");
+    let remote = Node {
+        path: "/Wiki/bar.md".to_string(),
+        kind: NodeKind::File,
+        content: "# Bar".to_string(),
+        created_at: 1,
+        updated_at: 4,
+        etag: "etag-bar".to_string(),
+        metadata_json: "{}".to_string(),
+    };
+    write_node_mirror(&root, &initial).expect("mirror write should succeed");
+    crate::mirror::save_state(
+        &root,
+        &MirrorState {
+            snapshot_revision: SNAPSHOT_REVISION_1.to_string(),
+            last_synced_at: 0,
+            tracked_nodes: tracked_nodes_from_snapshot(std::slice::from_ref(&initial)),
+        },
+    )
+    .expect("state should save");
+    std::fs::write(
+        root.join("foo.md"),
+        crate::mirror::serialize_mirror_file(
+            &crate::mirror::MirrorFrontmatter {
+                path: initial.path.clone(),
+                kind: initial.kind.clone(),
+                etag: initial.etag.clone(),
+                updated_at: initial.updated_at,
+                mirror: true,
+            },
+            "# Foo\n\nedited",
+        ),
+    )
+    .expect("edited file should write");
+    let client = SyncMockClient {
+        snapshot_nodes: vec![
+            Node {
+                path: "/Wiki/foo.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Foo\n\nedited".to_string(),
+                created_at: 1,
+                updated_at: 5,
+                etag: "etag-2".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            remote.clone(),
+        ],
+        fetch_responses: Mutex::new(vec![
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
+                changed_nodes: vec![remote.clone()],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+            Ok(FetchUpdatesResponse {
+                snapshot_revision: SNAPSHOT_REVISION_3.to_string(),
+                changed_nodes: vec![
+                    Node {
+                        path: "/Wiki/foo.md".to_string(),
+                        kind: NodeKind::File,
+                        content: "# Foo\n\nedited".to_string(),
+                        created_at: 1,
+                        updated_at: 5,
+                        etag: "etag-2".to_string(),
+                        metadata_json: "{}".to_string(),
+                    },
+                    remote.clone(),
+                ],
+                removed_paths: Vec::new(),
+                next_cursor: None,
+            }),
+        ]),
+        fetch_requests: Mutex::new(Vec::new()),
+        fail_write: false,
+        writes: Mutex::new(Vec::new()),
+        deletes: Mutex::new(Vec::new()),
+    };
+
+    push(&client, &root).await.expect("push should succeed");
+
+    let state = load_state(&root).expect("state should load");
+    assert_eq!(state.snapshot_revision, SNAPSHOT_REVISION_3);
+    assert_eq!(state.tracked_nodes.len(), 2);
+    assert!(
+        state
+            .tracked_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/foo.md" && node.etag == "etag-2")
+    );
+    assert!(
+        state
+            .tracked_nodes
+            .iter()
+            .any(|node| node.path == remote.path && node.etag == remote.etag)
+    );
+    let requests = client
+        .fetch_requests
+        .lock()
+        .expect("fetch requests should lock");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].known_snapshot_revision, SNAPSHOT_REVISION_1);
+    assert_eq!(requests[1].known_snapshot_revision, SNAPSHOT_REVISION_2);
 }
 
 #[test]
@@ -524,13 +658,13 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
     };
     let client = SyncMockClient {
         snapshot_nodes: Vec::new(),
-        fetch_response: Mutex::new(FetchUpdatesResponse {
+        fetch_responses: Mutex::new(vec![Ok(FetchUpdatesResponse {
             snapshot_revision: SNAPSHOT_REVISION_2.to_string(),
             changed_nodes: vec![fresh.clone()],
             removed_paths: vec!["/Wiki/stale.md".to_string()],
             next_cursor: None,
-        }),
-        fetch_error: None,
+        })]),
+        fetch_requests: Mutex::new(Vec::new()),
         fail_write: false,
         writes: Mutex::new(Vec::new()),
         deletes: Mutex::new(Vec::new()),

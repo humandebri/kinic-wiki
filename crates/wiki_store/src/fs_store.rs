@@ -28,6 +28,7 @@ use crate::{
         file_search_title, load_node, load_scoped_entry_rows, load_stored_node, node_ack,
         node_kind_from_db, node_kind_to_db, normalize_node_path, prefix_filter_sql,
         prefix_filter_sql_for_column, relative_to_prefix, snapshot_revision_token,
+        validate_source_path_for_kind,
     },
     fs_search::{
         build_light_previews_for_hits, build_search_query_plan, finalize_hits,
@@ -122,6 +123,7 @@ impl FsStore {
             Some(current) => update_existing_node(current.node.clone(), request, now)?,
             None => create_new_node(path, request, now)?,
         };
+        validate_source_path_for_kind(&node.path, &node.kind)?;
         let revision = record_change(&tx, &node)?;
         update_path_state(&tx, &node.path, revision)?;
         node.etag = compute_node_etag(&node);
@@ -148,6 +150,7 @@ impl FsStore {
             Some(current) => append_existing_node(current.node.clone(), request, now)?,
             None => create_appended_node(path, request, now)?,
         };
+        validate_source_path_for_kind(&node.path, &node.kind)?;
         let revision = record_change(&tx, &node)?;
         update_path_state(&tx, &node.path, revision)?;
         node.etag = compute_node_etag(&node);
@@ -216,6 +219,7 @@ impl FsStore {
                 "expected_etag does not match current etag: {from_path}"
             ));
         }
+        validate_source_path_for_kind(&to_path, &current.node.kind)?;
         let target = load_stored_node(&tx, &to_path)?;
         let overwrote = target.is_some();
         if overwrote && !request.overwrite {

@@ -16,6 +16,7 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use wiki_store::validate_source_path_for_kind;
 use wiki_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
@@ -23,8 +24,6 @@ use wiki_types::{
     RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 const REMOTE_PREFIX: &str = "/Wiki";
-const RAW_SOURCES_PREFIX: &str = "/Sources/raw";
-const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
 /// Must match `QUERY_RESULT_LIMIT_MAX` in `wiki_store` sync paging.
 const SYNC_PAGE_LIMIT: u32 = 100;
 const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
@@ -192,6 +191,10 @@ pub async fn run_command(client: &impl WikiApi, cli: Cli) -> Result<()> {
             overwrite,
             json,
         } => {
+            if let Some(current) = client.read_node(&from_path).await? {
+                validate_source_path_for_kind(&to_path, &current.kind)
+                    .map_err(anyhow::Error::msg)?;
+            }
             let result = client
                 .move_node(MoveNodeRequest {
                     from_path,
@@ -389,41 +392,7 @@ async fn delete_tree(client: &impl WikiApi, path: &str) -> Result<Vec<String>> {
 }
 
 fn validate_source_path_for_write(path: &str, kind: wiki_types::NodeKind) -> Result<()> {
-    if kind != wiki_types::NodeKind::Source {
-        return Ok(());
-    }
-    validate_canonical_source_path(path)
-}
-
-fn validate_canonical_source_path(path: &str) -> Result<()> {
-    validate_source_path_under_prefix(path, RAW_SOURCES_PREFIX)
-        .or_else(|_| validate_source_path_under_prefix(path, SESSION_SOURCES_PREFIX))
-}
-
-fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<()> {
-    let path_buf = Path::new(path);
-    let prefix_buf = Path::new(prefix);
-    let Ok(relative) = path_buf.strip_prefix(prefix_buf) else {
-        return Err(anyhow!("source path must stay under {prefix}: {path}"));
-    };
-    let segments = relative
-        .iter()
-        .map(|value| value.to_str().unwrap_or_default())
-        .collect::<Vec<_>>();
-    if segments.len() != 2 {
-        return Err(anyhow!(
-            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
-        ));
-    }
-    let [directory_name, file_name] = segments.as_slice() else {
-        unreachable!();
-    };
-    if directory_name.is_empty() || *file_name != format!("{directory_name}.md") {
-        return Err(anyhow!(
-            "source path must use canonical form {prefix}/<id>/<id>.md: {path}"
-        ));
-    }
-    Ok(())
+    validate_source_path_for_kind(path, &kind).map_err(anyhow::Error::msg)
 }
 
 pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Result<()> {
@@ -440,7 +409,7 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Re
         let snapshot = collect_paged_snapshot(client)
             .await
             .map_err(snapshot_restart_required_error)?;
-        let updates = collect_paged_updates(client, &snapshot.snapshot_revision).await?;
+        let updates = collect_paged_updates(client, &snapshot.snapshot_revision, None).await?;
         let nodes = merge_snapshot_and_updates(
             snapshot.nodes,
             updates.changed_nodes,
@@ -467,7 +436,7 @@ pub async fn pull(client: &impl WikiApi, mirror_root: &Path, resync: bool) -> Re
         return Ok(());
     }
 
-    let updates = collect_paged_updates(client, &state.snapshot_revision)
+    let updates = collect_paged_updates(client, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let changed_nodes = updates.changed_nodes;
@@ -516,6 +485,10 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         println!("push skipped: no changed wiki files");
         return Ok(());
     }
+    let preflight = collect_paged_updates(client, &state.snapshot_revision, None)
+        .await
+        .map_err(resync_required_error)?;
+    let preflight_snapshot_revision = preflight.snapshot_revision;
     let mut conflicts = 0usize;
     let mut writes = 0usize;
     for node in &changed_nodes {
@@ -566,7 +539,7 @@ pub async fn push(client: &impl WikiApi, mirror_root: &Path) -> Result<()> {
         }
     }
 
-    let updates = collect_paged_updates(client, &state.snapshot_revision)
+    let updates = collect_paged_updates(client, &preflight_snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let changed_nodes = updates.changed_nodes;
@@ -625,9 +598,10 @@ async fn collect_paged_snapshot(client: &impl WikiApi) -> Result<ExportSnapshotR
 async fn collect_paged_updates(
     client: &impl WikiApi,
     known_snapshot_revision: &str,
+    target_snapshot_revision: Option<String>,
 ) -> Result<FetchUpdatesResponse> {
     let mut cursor = None;
-    let mut target_snapshot_revision = None;
+    let mut target_snapshot_revision = target_snapshot_revision;
     let mut changed_nodes = Vec::new();
     let mut removed_paths = Vec::new();
     loop {

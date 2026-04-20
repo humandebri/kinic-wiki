@@ -1176,6 +1176,73 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
 }
 
 #[test]
+fn move_node_rejects_noncanonical_target_for_source_nodes() {
+    let (_dir, store) = new_store();
+    let created = store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Sources/raw/source/source.md".to_string(),
+                kind: NodeKind::Source,
+                content: "source body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            1_910,
+        )
+        .expect("write should succeed");
+
+    let error = store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Sources/raw/source/source.md".to_string(),
+                to_path: "/Sources/raw/renamed/wrong.md".to_string(),
+                expected_etag: Some(created.node.etag),
+                overwrite: false,
+            },
+            1_911,
+        )
+        .expect_err("move should fail");
+
+    assert!(error.contains("source path must"));
+}
+
+#[test]
+fn move_node_accepts_canonical_target_for_source_nodes() {
+    let (_dir, store) = new_store();
+    let created = store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Sources/raw/source/source.md".to_string(),
+                kind: NodeKind::Source,
+                content: "source body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            1_920,
+        )
+        .expect("write should succeed");
+
+    let moved = store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Sources/raw/source/source.md".to_string(),
+                to_path: "/Sources/sessions/renamed/renamed.md".to_string(),
+                expected_etag: Some(created.node.etag),
+                overwrite: false,
+            },
+            1_921,
+        )
+        .expect("move should succeed");
+
+    assert_eq!(moved.node.path, "/Sources/sessions/renamed/renamed.md");
+    let current = store
+        .read_node("/Sources/sessions/renamed/renamed.md")
+        .expect("read should succeed")
+        .expect("moved source should exist");
+    assert_eq!(current.kind, NodeKind::Source);
+}
+
+#[test]
 fn query_limits_are_capped_at_one_hundred() {
     let (_dir, store) = new_store();
     for index in 0..150 {
