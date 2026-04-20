@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
+use super::question_types::question_type_tags;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeamConversation {
     pub conversation_id: String,
@@ -46,6 +48,7 @@ pub struct BeamQuestion {
     pub gold_spans: Vec<String>,
     pub expects_abstention: bool,
     pub tags: Vec<String>,
+    pub rubric_items: Vec<String>,
     pub raw: Value,
 }
 
@@ -92,6 +95,7 @@ pub fn extract_questions(conversation: &BeamConversation) -> Result<Vec<BeamQues
             };
             let question_class = extract_question_class(question_type, item);
             let gold_answers = extract_gold_answers(item);
+            let rubric_items = extract_string_list(item, &["rubric"]);
             let as_of = extract_optional_string(item, &["as_of"]);
             if is_temporal_question(question_type) && as_of.is_none() {
                 return Err(anyhow!(
@@ -116,6 +120,7 @@ pub fn extract_questions(conversation: &BeamConversation) -> Result<Vec<BeamQues
                 ),
                 expects_abstention: extract_expects_abstention(question_type, item, question_class),
                 tags: extract_tags(question_type, item, question_class),
+                rubric_items,
                 raw: item.clone(),
             });
         }
@@ -126,6 +131,8 @@ pub fn extract_questions(conversation: &BeamConversation) -> Result<Vec<BeamQues
 fn extract_reference_answer(item: &Value) -> Option<String> {
     [
         "answer",
+        "ideal_answer",
+        "ideal_summary",
         "ideal_response",
         "expected_answer",
         "reference_answer",
@@ -158,7 +165,16 @@ fn extract_gold_answers(item: &Value) -> Vec<String> {
     if !explicit.is_empty() {
         return explicit;
     }
-    extract_reference_answer(item).into_iter().collect()
+    let mut answers = extract_reference_answer(item).into_iter().collect::<Vec<_>>();
+    answers.extend(
+        extract_string_list(item, &["rubric"])
+            .into_iter()
+            .map(|item| clean_rubric_item(&item))
+            .filter(|item| !item.is_empty()),
+    );
+    answers.sort();
+    answers.dedup();
+    answers
 }
 
 fn extract_question_class(question_type: &str, item: &Value) -> BeamQuestionClass {
@@ -220,13 +236,14 @@ fn extract_tags(
     question_class: BeamQuestionClass,
 ) -> Vec<String> {
     let explicit = extract_string_list(item, &["tags"]);
-    if !explicit.is_empty() {
-        return explicit;
-    }
-    let mut tags = vec![question_type.trim().to_ascii_lowercase()];
+    let mut tags = if explicit.is_empty() {
+        question_type_tags(question_type)
+    } else {
+        explicit
+    };
     match question_class {
         BeamQuestionClass::Factoid => tags.push("factoid".to_string()),
-        BeamQuestionClass::Reasoning => tags.push("temporal".to_string()),
+        BeamQuestionClass::Reasoning => tags.push("reasoning".to_string()),
         BeamQuestionClass::Abstention => tags.push("abstention".to_string()),
     }
     tags.sort();
@@ -244,6 +261,21 @@ fn extract_optional_string(item: &Value, keys: &[&str]) -> Option<String> {
 
 fn normalize_marker(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn clean_rubric_item(value: &str) -> String {
+    [
+        "LLM response should state:",
+        "LLM response should mention:",
+        "LLM response should contain:",
+        "Response should include:",
+        "Response should contain:",
+    ]
+    .iter()
+    .find_map(|prefix| value.strip_prefix(prefix))
+    .unwrap_or(value)
+    .trim()
+    .to_string()
 }
 
 fn extract_string_list(item: &Value, keys: &[&str]) -> Vec<String> {

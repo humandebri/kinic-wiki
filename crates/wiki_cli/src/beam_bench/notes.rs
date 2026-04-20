@@ -2,9 +2,13 @@
 // What: Render BEAM conversations into conversation plus structured wiki notes.
 // Why: The benchmark needs stable note roles, narrower facts, and stronger conversation identifiers.
 use super::dataset::BeamConversation;
+use super::note_extract::render_turn_reference;
 use super::note_support::{
     append_json_section, append_related_section, append_text_section, extract_fact_lines,
     extract_identifier_lines, flatten_chat,
+};
+use super::note_views::{
+    instructions_markdown, preferences_markdown, summary_markdown, updates_markdown,
 };
 
 pub fn build_documents(conversation: &BeamConversation, base_path: &str) -> Vec<(String, String)> {
@@ -33,6 +37,22 @@ pub fn build_documents(conversation: &BeamConversation, base_path: &str) -> Vec<
             format!("{base_path}/events.md"),
             events_markdown(conversation, base_path),
         ),
+        (
+            format!("{base_path}/preferences.md"),
+            preferences_markdown(conversation, base_path),
+        ),
+        (
+            format!("{base_path}/instructions.md"),
+            instructions_markdown(conversation, base_path),
+        ),
+        (
+            format!("{base_path}/updates.md"),
+            updates_markdown(conversation, base_path),
+        ),
+        (
+            format!("{base_path}/summary.md"),
+            summary_markdown(conversation, base_path),
+        ),
     ]
 }
 
@@ -57,6 +77,18 @@ fn conversation_index_markdown(conversation: &BeamConversation, base_path: &str)
         "- [profile.md]({base_path}/profile.md) - seed and user profile details\n"
     ));
     out.push_str(&format!(
+        "- [preferences.md]({base_path}/preferences.md) - stable preferences and decision criteria\n"
+    ));
+    out.push_str(&format!(
+        "- [instructions.md]({base_path}/instructions.md) - explicit directives, constraints, and obligations\n"
+    ));
+    out.push_str(&format!(
+        "- [updates.md]({base_path}/updates.md) - previous values, latest values, and update history\n"
+    ));
+    out.push_str(&format!(
+        "- [summary.md]({base_path}/summary.md) - higher-level synthesis across multiple turns\n"
+    ));
+    out.push_str(&format!(
         "- [conversation.md]({base_path}/conversation.md) - raw transcript and surrounding context\n"
     ));
     out
@@ -73,7 +105,16 @@ fn conversation_markdown(conversation: &BeamConversation, base_path: &str) -> St
     append_related_section(
         &mut out,
         base_path,
-        &["facts.md", "plan.md", "events.md", "profile.md"],
+        &[
+            "facts.md",
+            "plan.md",
+            "events.md",
+            "profile.md",
+            "preferences.md",
+            "instructions.md",
+            "updates.md",
+            "summary.md",
+        ],
     );
     append_json_section(&mut out, "Seed", &conversation.conversation_seed);
     append_text_section(&mut out, "Plan", &conversation.conversation_plan);
@@ -82,8 +123,8 @@ fn conversation_markdown(conversation: &BeamConversation, base_path: &str) -> St
     out.push_str("## Chat\n\n");
     for (index, turn) in turns.iter().enumerate() {
         out.push_str(&format!(
-            "### Turn {:04}\n\n- role: {}\n\n{}\n\n",
-            index + 1,
+            "### {}\n\n- role: {}\n\n{}\n\n",
+            render_turn_reference(turn, index + 1),
             turn.label(),
             turn.content.trim()
         ));
@@ -119,7 +160,7 @@ fn plan_markdown(conversation: &BeamConversation, base_path: &str) -> String {
     append_related_section(
         &mut out,
         base_path,
-        &["index.md", "conversation.md", "facts.md"],
+        &["index.md", "conversation.md", "facts.md", "instructions.md"],
     );
     append_text_section(
         &mut out,
@@ -139,7 +180,7 @@ fn facts_markdown(conversation: &BeamConversation, base_path: &str) -> String {
     append_related_section(
         &mut out,
         base_path,
-        &["index.md", "conversation.md", "events.md"],
+        &["index.md", "conversation.md", "events.md", "updates.md"],
     );
     out.push_str("## Extracted Facts\n\n");
     for line in extract_fact_lines(conversation) {
@@ -156,13 +197,13 @@ fn events_markdown(conversation: &BeamConversation, base_path: &str) -> String {
     append_related_section(
         &mut out,
         base_path,
-        &["index.md", "conversation.md", "facts.md"],
+        &["index.md", "conversation.md", "facts.md", "summary.md"],
     );
     out.push_str("## Timeline\n\n");
     for (index, turn) in flatten_chat(&conversation.chat).iter().enumerate() {
         out.push_str(&format!(
-            "- Turn {:04} {}: {}\n",
-            index + 1,
+            "- {} {}: {}\n",
+            render_turn_reference(turn, index + 1),
             turn.label(),
             turn.content.trim()
         ));
@@ -220,18 +261,29 @@ mod tests {
                 "/Wiki/run/conv-1/profile.md".to_string(),
                 "/Wiki/run/conv-1/plan.md".to_string(),
                 "/Wiki/run/conv-1/facts.md".to_string(),
-                "/Wiki/run/conv-1/events.md".to_string()
+                "/Wiki/run/conv-1/events.md".to_string(),
+                "/Wiki/run/conv-1/preferences.md".to_string(),
+                "/Wiki/run/conv-1/instructions.md".to_string(),
+                "/Wiki/run/conv-1/updates.md".to_string(),
+                "/Wiki/run/conv-1/summary.md".to_string()
             ]
         );
         assert!(documents[0].1.contains("## Identifiers"));
         assert!(documents[0].1.contains("title: Calendar planning"));
+        assert!(documents[0].1.contains("preferences.md"));
+        assert!(documents[0].1.contains("instructions.md"));
         assert!(documents[1].1.contains("conversation_id"));
         assert!(documents[1].1.contains("March 15, 2024"));
         assert!(documents[1].1.contains("## Related"));
         assert!(documents[4].1.contains("conversation_plan"));
-        assert!(documents[4].1.contains("March 15, 2024"));
+        assert!(documents[4].1.contains("meeting date: March 15, 2024"));
         assert!(!documents[4].1.contains("Understood. I will remember"));
         assert!(documents[5].1.contains("Turn 0001"));
+        assert!(documents[5].1.contains("March 15, 2024"));
+        assert!(documents[6].1.contains("# Preferences"));
+        assert!(documents[7].1.contains("# Instructions"));
+        assert!(documents[8].1.contains("# Updates"));
+        assert!(documents[9].1.contains("# Summary"));
         assert!(
             documents
                 .iter()

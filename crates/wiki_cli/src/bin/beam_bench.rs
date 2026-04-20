@@ -10,7 +10,7 @@ use wiki_cli::connection::resolve_connection;
 
 #[derive(Parser, Debug)]
 #[command(name = "beam-bench")]
-#[command(about = "Run the BEAM-derived wiki retrieval benchmark harness")]
+#[command(about = "Run the read-only BEAM-derived wiki retrieval benchmark harness")]
 struct Cli {
     #[command(flatten)]
     connection: ConnectionArgs,
@@ -33,8 +33,14 @@ struct Cli {
     top_k: u32,
     #[arg(long)]
     questions_per_conversation: Option<usize>,
+    #[arg(long)]
+    question_id: Option<String>,
     #[arg(long, value_enum)]
     include_question_class: Vec<QuestionClassArg>,
+    #[arg(long)]
+    include_tag: Vec<String>,
+    #[arg(long)]
+    include_question_type: Vec<String>,
     #[arg(long)]
     namespace: Option<String>,
     #[arg(long, default_value = "codex")]
@@ -75,6 +81,7 @@ async fn main() -> Result<()> {
             parallelism: cli.parallelism,
             top_k: cli.top_k,
             questions_per_conversation: cli.questions_per_conversation,
+            question_id: cli.question_id,
             include_question_classes: cli
                 .include_question_class
                 .into_iter()
@@ -84,6 +91,8 @@ async fn main() -> Result<()> {
                     QuestionClassArg::Abstention => BeamQuestionClass::Abstention,
                 })
                 .collect(),
+            include_tags: cli.include_tag,
+            include_question_types: cli.include_question_type,
             namespace: cli.namespace,
             codex_bin: cli.codex_bin,
             codex_sandbox: cli.codex_sandbox,
@@ -103,7 +112,7 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(help.contains("beam-bench"));
-        assert!(help.contains("Run the BEAM-derived wiki retrieval benchmark harness"));
+        assert!(help.contains("Run the read-only BEAM-derived wiki retrieval benchmark harness"));
         assert!(!help.contains("legacy-agent-answer"));
         assert!(!help.contains("--provider"));
         assert!(!help.contains("OPENAI_API_KEY"));

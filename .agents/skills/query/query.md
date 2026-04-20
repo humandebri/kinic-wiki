@@ -19,18 +19,27 @@ Answer questions against the current wiki using CLI read and search commands, wi
 
 - Prefer scope-first exploration.
 - Once you open a conversation index or a note under one conversation path, try to finish inside that same conversation first.
-- Within one conversation, prefer this narrowing order: `index.md` -> `facts.md` / `plan.md` / `events.md` / `profile.md` -> `conversation.md`.
+- Within one conversation, start from `index.md`, then choose the structured note whose role best matches the question shape.
+- If the question shape is still unclear after reading `index.md`, prefer this default narrowing order: `facts.md` / `plan.md` / `events.md` / `profile.md` -> `conversation.md`.
 - Return to broader search only after you fail to find direct evidence inside the current conversation scope.
 - Treat note roles as part of the search strategy:
   - `events.md` for ordered events, dates, times, and timelines
   - `facts.md` for stable facts and concise summaries
   - `plan.md` for explicit plans, goals, and intended next steps
   - `profile.md` for attributes, background, and seed details
+  - `preferences.md` for stable preferences, likes, dislikes, and decision criteria
+  - `instructions.md` for directives, constraints, promises, and obligations
+  - `updates.md` for previous values, latest values, and contradictions
+  - `summary.md` for broad recap, multi-turn synthesis, and cross-session summaries
 - Preserve exact value formatting for dates, times, places, person names, and other explicit attribute values.
 - Do not paraphrase, normalize, or complete an exact value when the wiki already states it directly.
 - If the question is about order or time, for example `first`, `last`, `earliest`, `latest`, `when`, `before`, `after`, `at that time`, or a specific turn, do not answer from the index alone.
 - Read `events.md` at least once before answering order, time, or turn-local questions.
 - Use `events.md` to resolve order, timestamps, and turn-local events. Use `facts.md` as secondary support for stable attributes or compressed summaries.
+- Use `preferences.md` first for preference questions.
+- Use `instructions.md` first for directive, promise, or obligation questions.
+- Use `updates.md` first for latest-value, change, contradiction, or superseded-fact questions.
+- Use `summary.md` first for broad recap or multi-turn synthesis questions.
 - When the question asks for a single turn, a single timestamp, or a single attribute value, prefer extraction over summarization.
 - Return the smallest answer span that directly matches the evidence.
 - Value questions should return the exact value.
@@ -38,6 +47,10 @@ Answer questions against the current wiki using CLI read and search commands, wi
 - Ordered event questions should return the selected event's exact time, value, or event text, whichever matches the question.
 - Do not paraphrase dates, times, identifiers, quoted text, or the content of the referenced turn when the question is asking for that exact item.
 - Use normal synthesis only for open-ended, comparative, or multi-fact explanation questions.
+- Do not answer from an index, list, or search result alone.
+- Before the final answer, read at least one note that directly supports the answer.
+- Treat the final answer as invalid until it is anchored to a note you actually read.
+- Apply the same rule to `yes` / `no`, exact values, dates, times, places, identifiers, and short factual answers.
 - If the requested attribute or value is not directly supported by the wiki pages you read, answer exactly `insufficient evidence`.
 - When writing back, prefer `comparison`, `query_note`, or synthesis pages only when they add durable value.
 - Avoid turning every answer into content churn.

@@ -17,12 +17,20 @@ pub fn conversation_base_path(namespace: &str, conversation_id: &str) -> String 
     )
 }
 
+pub fn conversation_index_path(namespace: &str, conversation_id: &str) -> String {
+    format!("{}/index.md", conversation_base_path(namespace, conversation_id))
+}
+
 pub fn namespace_base_path(namespace: &str) -> String {
     format!("{}/{}", WIKI_ROOT_PREFIX, sanitize_segment(namespace))
 }
 
 pub fn namespace_index_path(namespace: &str) -> String {
     format!("{}/index.md", namespace_base_path(namespace))
+}
+
+pub fn manifest_path(namespace: &str) -> String {
+    format!("{}/_beam_prepare_manifest.json", namespace_base_path(namespace))
 }
 
 pub async fn sync_beam_indexes(client: &impl WikiApi, namespace: &str) -> Result<()> {
@@ -245,8 +253,9 @@ mod tests {
     use crate::client::WikiApi;
 
     use super::{
-        BeamIndexRow, conversation_base_path, extract_identifier_summary, namespace_base_path,
-        namespace_index_path, render_beam_index, sync_beam_indexes, upsert_list_entry,
+        BeamIndexRow, conversation_base_path, conversation_index_path,
+        extract_identifier_summary, manifest_path, namespace_base_path, namespace_index_path,
+        render_beam_index, sync_beam_indexes, upsert_list_entry,
         upsert_section,
     };
 
@@ -258,6 +267,14 @@ mod tests {
         );
         assert_eq!(namespace_base_path("Run A"), "/Wiki/run-a");
         assert_eq!(namespace_index_path("Run A"), "/Wiki/run-a/index.md");
+        assert_eq!(
+            manifest_path("Run A"),
+            "/Wiki/run-a/_beam_prepare_manifest.json"
+        );
+        assert_eq!(
+            conversation_index_path("Run A", "Beam Sample 1"),
+            "/Wiki/run-a/beam-sample-1/index.md"
+        );
         assert_ne!(
             conversation_base_path("run-a", "same-conv"),
             conversation_base_path("run-b", "same-conv")

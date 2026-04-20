@@ -3,6 +3,7 @@
 // Why: Deterministic and agent scoring must not drift on transcript/index note eligibility.
 use super::dataset::BeamQuestion;
 use super::import::{ImportedConversation, ImportedNote};
+use super::question_types::canonical_note_candidates;
 
 pub(crate) fn resolve_gold_paths(
     imported: &ImportedConversation,
@@ -22,7 +23,17 @@ pub(crate) fn resolve_gold_paths(
             .filter(|path| note_exists(path, &imported.notes))
             .collect();
     }
-    imported
+    let mut paths = canonical_note_candidates(&question.question_type)
+        .iter()
+        .filter_map(|note_type| {
+            imported
+                .notes
+                .iter()
+                .find(|note| note_type_matches(&note.note_type, note_type))
+                .map(|note| note.path.clone())
+        })
+        .collect::<Vec<_>>();
+    for path in imported
         .notes
         .iter()
         .filter(|note| is_structured_note(&note.path, &imported.notes))
@@ -33,7 +44,59 @@ pub(crate) fn resolve_gold_paths(
                 .any(|answer| note.content.contains(answer))
         })
         .map(|note| note.path.clone())
-        .collect()
+    {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn note_type_matches(actual: &str, expected: &str) -> bool {
+    actual == expected || actual.trim_end_matches(".md") == expected.trim_end_matches(".md")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_gold_paths;
+    use crate::beam_bench::dataset::{BeamQuestion, BeamQuestionClass};
+    use crate::beam_bench::import::{ImportedConversation, ImportedNote};
+    use serde_json::json;
+
+    #[test]
+    fn instruction_questions_resolve_to_instructions_note_without_span_match() {
+        let imported = ImportedConversation {
+            conversation_id: "conv-1".to_string(),
+            namespace_path: "/Wiki/run".to_string(),
+            namespace_index_path: "/Wiki/run/index.md".to_string(),
+            base_path: "/Wiki/run/conv-1".to_string(),
+            note_paths: vec!["/Wiki/run/conv-1/instructions.md".to_string()],
+            notes: vec![ImportedNote {
+                path: "/Wiki/run/conv-1/instructions.md".to_string(),
+                content: "# Instructions\n\n- Always use syntax highlighting.\n".to_string(),
+                note_type: "instructions.md".to_string(),
+            }],
+        };
+        let question = BeamQuestion {
+            question_id: "instruction_following-000".to_string(),
+            question_type: "instruction_following".to_string(),
+            question_class: BeamQuestionClass::Factoid,
+            query: "Which libraries are used in this project?".to_string(),
+            as_of: None,
+            reference_answer: None,
+            gold_answers: vec!["explicit version details for each dependency".to_string()],
+            gold_paths: Vec::new(),
+            gold_spans: Vec::new(),
+            expects_abstention: false,
+            tags: vec!["instruction_following".to_string()],
+            rubric_items: vec!["LLM response should contain: explicit version details for each dependency".to_string()],
+            raw: json!({}),
+        };
+        assert_eq!(
+            resolve_gold_paths(&imported, &question),
+            vec!["/Wiki/run/conv-1/instructions.md".to_string()]
+        );
+    }
 }
 
 pub(crate) fn note_counts_as_retrieved(

@@ -27,11 +27,10 @@ pub struct ImportedNote {
     pub note_type: String,
 }
 
-pub async fn import_conversation(
-    client: &impl WikiApi,
+pub fn plan_imported_conversation(
     namespace: &str,
     conversation: &BeamConversation,
-) -> Result<ImportedConversation> {
+) -> ImportedConversation {
     let namespace_path = namespace_base_path(namespace);
     let namespace_index_path = namespace_index_path(namespace);
     let base_path = conversation_base_path(namespace, &conversation.conversation_id);
@@ -39,32 +38,43 @@ pub async fn import_conversation(
     let mut note_paths = Vec::with_capacity(documents.len());
     let mut notes = Vec::with_capacity(documents.len());
     for (path, content) in documents {
-        let expected_etag = client.read_node(&path).await?.map(|node| node.etag);
-        client
-            .write_node(WriteNodeRequest {
-                path: path.clone(),
-                kind: NodeKind::File,
-                content: content.clone(),
-                metadata_json: "{}".to_string(),
-                expected_etag,
-            })
-            .await?;
         let note_type = note_type_for_path(&path, &base_path);
-        note_paths.push(path);
+        note_paths.push(path.clone());
         notes.push(ImportedNote {
-            path: note_paths.last().cloned().expect("path should exist"),
+            path,
             content,
             note_type,
         });
     }
-    Ok(ImportedConversation {
+    ImportedConversation {
         conversation_id: conversation.conversation_id.clone(),
         namespace_path,
         namespace_index_path,
         base_path,
         note_paths,
         notes,
-    })
+    }
+}
+
+pub async fn import_conversation(
+    client: &impl WikiApi,
+    namespace: &str,
+    conversation: &BeamConversation,
+) -> Result<ImportedConversation> {
+    let imported = plan_imported_conversation(namespace, conversation);
+    for note in &imported.notes {
+        let expected_etag = client.read_node(&note.path).await?.map(|node| node.etag);
+        client
+            .write_node(WriteNodeRequest {
+                path: note.path.clone(),
+                kind: NodeKind::File,
+                content: note.content.clone(),
+                metadata_json: "{}".to_string(),
+                expected_etag,
+            })
+            .await?;
+    }
+    Ok(imported)
 }
 
 fn note_type_for_path(path: &str, base_path: &str) -> String {
@@ -82,7 +92,7 @@ fn note_type_for_path(path: &str, base_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::import_conversation;
+    use super::{import_conversation, plan_imported_conversation};
     use crate::beam_bench::dataset::BeamConversation;
     use crate::client::WikiApi;
     use anyhow::Result;
@@ -216,5 +226,19 @@ mod tests {
                 .iter()
                 .all(|request| { request.path.starts_with("/Wiki/run-a/conv-1/") })
         );
+    }
+
+    #[test]
+    fn planning_conversation_keeps_note_metadata_without_writes() {
+        let imported = plan_imported_conversation("Run A", &sample_conversation());
+
+        assert_eq!(imported.namespace_path, "/Wiki/run-a");
+        assert_eq!(imported.namespace_index_path, "/Wiki/run-a/index.md");
+        assert_eq!(imported.base_path, "/Wiki/run-a/conv-1");
+        assert_eq!(imported.note_paths.len(), imported.notes.len());
+        assert!(imported
+            .notes
+            .iter()
+            .all(|note| note.path.starts_with("/Wiki/run-a/conv-1/")));
     }
 }

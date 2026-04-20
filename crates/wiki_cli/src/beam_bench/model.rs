@@ -8,10 +8,11 @@ use std::fs;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
-use tokio::io::AsyncWriteExt;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+use super::dataset::BeamQuestionClass;
 use crate::connection::ResolvedConnection;
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,14 +31,28 @@ pub struct ModelRun {
     pub total_tokens: Option<u64>,
     pub latency_ms: u128,
     pub raw_events: Vec<Value>,
+    pub spawned_at_ms: u64,
+    pub pid: Option<u32>,
+    pub exit_status: Option<i32>,
+    pub timed_out: bool,
+    pub failure_message: Option<String>,
+    pub stderr: String,
+    pub schema_path: String,
+    pub last_tool_name: Option<String>,
+    pub last_tool_arguments: Option<String>,
 }
 
 static CODEX_SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
+const CODEX_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) struct CodexQuestionContext<'a> {
     pub namespace_path: &'a str,
     pub namespace_index_path: &'a str,
     pub base_path: &'a str,
+    pub conversation_id: &'a str,
+    pub question_id: &'a str,
+    pub question_type: &'a str,
+    pub question_class: BeamQuestionClass,
     pub question: &'a str,
     pub codex_sandbox: &'a str,
 }
@@ -50,6 +65,7 @@ pub(crate) async fn run_codex_question(
 ) -> Result<ModelRun> {
     let started_at = Instant::now();
     let schema_path = next_codex_schema_path();
+    let spawned_at_ms = unix_timestamp_ms();
     tokio::fs::write(&schema_path, codex_answer_schema().to_string())
         .await
         .with_context(|| "failed to write Codex output schema")?;
@@ -57,6 +73,10 @@ pub(crate) async fn run_codex_question(
         context.namespace_path,
         context.namespace_index_path,
         context.base_path,
+        context.conversation_id,
+        context.question_id,
+        context.question_type,
+        context.question_class,
         context.question,
         connection,
     );
@@ -80,6 +100,7 @@ pub(crate) async fn run_codex_question(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| "failed to spawn Codex CLI")?;
+    let pid = child.id();
     {
         let stdin = child
             .stdin
@@ -90,22 +111,76 @@ pub(crate) async fn run_codex_question(
             .await
             .with_context(|| "failed to write Codex prompt")?;
     }
-    let output = child
-        .wait_with_output()
-        .await
-        .with_context(|| "failed to wait for Codex CLI")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture Codex stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture Codex stderr"))?;
+    let stdout_task = tokio::spawn(read_pipe(stdout));
+    let stderr_task = tokio::spawn(read_pipe(stderr));
+    let (status, timed_out) = match tokio::time::timeout(CODEX_TIMEOUT, child.wait()).await {
+        Ok(status) => (
+            status.with_context(|| "failed to wait for Codex CLI")?,
+            false,
+        ),
+        Err(_) => {
+            let _ = child.start_kill();
+            let status = child
+                .wait()
+                .await
+                .with_context(|| "failed to reap timed out Codex CLI")?;
+            (status, true)
+        }
+    };
+    let stdout = join_pipe(stdout_task).await?;
+    let stderr = join_pipe(stderr_task).await?;
     let _ = tokio::fs::remove_file(&schema_path).await;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "Codex CLI failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let raw_events = parse_jsonl_events(&stdout);
-    let answer = parse_codex_answer(&raw_events)?;
-    let usage = parse_codex_usage(&raw_events);
+    let stderr_text = String::from_utf8_lossy(&stderr).into_owned();
+    let stdout_text = String::from_utf8_lossy(&stdout);
+    let raw_events = parse_jsonl_events(&stdout_text);
     let tool_calls = parse_codex_tool_calls(&raw_events);
+    let usage = parse_codex_usage(&raw_events);
+    let (last_tool_name, last_tool_arguments) = last_tool_call(&tool_calls);
+    let failure_message = if timed_out {
+        Some(format!(
+            "Codex CLI timed out after {}s",
+            CODEX_TIMEOUT.as_secs()
+        ))
+    } else if !status.success() {
+        Some(format!("Codex CLI failed: {}", stderr_text))
+    } else {
+        None
+    };
+    let answer = if failure_message.is_none() {
+        match parse_codex_answer(&raw_events) {
+            Ok(answer) => answer,
+            Err(error) => {
+                return Ok(ModelRun {
+                    answer: String::new(),
+                    tool_calls,
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    total_tokens: usage.total_tokens,
+                    latency_ms: started_at.elapsed().as_millis(),
+                    raw_events,
+                    spawned_at_ms,
+                    pid,
+                    exit_status: status.code(),
+                    timed_out,
+                    failure_message: Some(error.to_string()),
+                    stderr: stderr_text,
+                    schema_path: schema_path.display().to_string(),
+                    last_tool_name,
+                    last_tool_arguments,
+                });
+            }
+        }
+    } else {
+        String::new()
+    };
     Ok(ModelRun {
         answer,
         tool_calls,
@@ -114,7 +189,38 @@ pub(crate) async fn run_codex_question(
         total_tokens: usage.total_tokens,
         latency_ms: started_at.elapsed().as_millis(),
         raw_events,
+        spawned_at_ms,
+        pid,
+        exit_status: status.code(),
+        timed_out,
+        failure_message,
+        stderr: stderr_text,
+        schema_path: schema_path.display().to_string(),
+        last_tool_name,
+        last_tool_arguments,
     })
+}
+
+async fn read_pipe<R>(mut pipe: R) -> std::io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut buffer = Vec::new();
+    pipe.read_to_end(&mut buffer).await?;
+    Ok(buffer)
+}
+
+async fn join_pipe(task: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>> {
+    task.await
+        .with_context(|| "failed to join Codex pipe reader")?
+        .with_context(|| "failed to read Codex pipe")
+}
+
+fn unix_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn next_codex_schema_path() -> std::path::PathBuf {
@@ -133,6 +239,10 @@ fn codex_prompt(
     namespace_path: &str,
     namespace_index_path: &str,
     base_path: &str,
+    conversation_id: &str,
+    question_id: &str,
+    question_type: &str,
+    question_class: BeamQuestionClass,
     question: &str,
     connection: &ResolvedConnection,
 ) -> String {
@@ -179,11 +289,15 @@ Connection:
 - canister id: {canister_id}
 - wiki namespace: {namespace_path}
 - wiki prefix: {base_path}
+- conversation id: {conversation_id}
+- question id: {question_id}
+- question type: {question_type}
+- question class: {question_class}
 
 Question:
 {question}
 
-Answer with JSON matching the provided output schema. The `answer` field must be the shortest complete answer grounded in the wiki notes. If there is not enough evidence, set `answer` to exactly `insufficient evidence`.
+Answer with JSON matching the provided output schema. The `answer` field must match the question shape and stay grounded in the wiki notes. Use extractive answers for exact values and turn-local questions. Use concise synthesis only for recap, preference, instruction, contradiction, update, or multi-session reasoning questions. If there is not enough evidence, set `answer` to exactly `insufficient evidence`.
 "#,
         skill = skill,
         connection_args = connection_args,
@@ -192,6 +306,11 @@ Answer with JSON matching the provided output schema. The `answer` field must be
         namespace_path = namespace_path,
         namespace_index_path = namespace_index_path,
         base_path = base_path,
+        conversation_id = conversation_id,
+        question_id = question_id,
+        question_type = question_type,
+        question_class =
+            serde_json::to_string(&question_class).unwrap_or_else(|_| "\"unknown\"".to_string()),
         question = question
     )
 }
@@ -279,6 +398,13 @@ fn parse_codex_tool_calls(events: &[Value]) -> Vec<ToolCallRecord> {
         .collect()
 }
 
+fn last_tool_call(tool_calls: &[ToolCallRecord]) -> (Option<String>, Option<String>) {
+    tool_calls
+        .last()
+        .map(|call| (Some(call.name.clone()), Some(call.arguments.clone())))
+        .unwrap_or((None, None))
+}
+
 fn load_query_skill_contract() -> Result<String> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -346,6 +472,7 @@ fn sum_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{codex_prompt, next_codex_schema_path};
+    use crate::beam_bench::dataset::BeamQuestionClass;
     use crate::connection::ResolvedConnection;
     use std::collections::HashSet;
 
@@ -364,6 +491,10 @@ mod tests {
             "/Wiki/run-a",
             "/Wiki/run-a/index.md",
             "/Wiki/run-a/conv-1",
+            "conv-1",
+            "factoid-000",
+            "information_extraction",
+            BeamQuestionClass::Factoid,
             "When is the meeting?",
             &ResolvedConnection {
                 replica_host: "http://127.0.0.1:8000".to_string(),
@@ -386,6 +517,10 @@ mod tests {
             "/Wiki/run-a",
             "/Wiki/run-a/index.md",
             "/Wiki/run-a/conv-1",
+            "conv-1",
+            "factoid-000",
+            "information_extraction",
+            BeamQuestionClass::Factoid,
             "When is the meeting?",
             &ResolvedConnection {
                 replica_host: "http://127.0.0.1:8000".to_string(),
@@ -394,11 +529,23 @@ mod tests {
         );
         assert!(prompt.contains("Prefer scope-first exploration."));
         assert!(prompt.contains("Preserve exact value formatting"));
+        assert!(prompt.contains("Do not answer from an index, list, or search result alone."));
+        assert!(
+            prompt.contains("Before the final answer, read at least one note that directly supports the answer.")
+        );
+        assert!(
+            prompt.contains("Treat the final answer as invalid until it is anchored to a note you actually read.")
+        );
         assert!(prompt.contains("answer exactly `insufficient evidence`"));
         assert!(prompt.contains("do not answer from the index alone"));
         assert!(prompt.contains("Read `events.md` at least once before answering"));
         assert!(prompt.contains("prefer extraction over summarization"));
         assert!(prompt.contains("smallest answer span"));
+        assert!(prompt.contains("Use `preferences.md` first for preference questions."));
+        assert!(prompt.contains("Use `instructions.md` first for directive, promise, or obligation questions."));
+        assert!(prompt.contains("Use `updates.md` first for latest-value, change, contradiction, or superseded-fact questions."));
+        assert!(prompt.contains("Use `summary.md` first for broad recap or multi-turn synthesis questions."));
+        assert!(prompt.contains("- question type: information_extraction"));
         assert!(!prompt.contains("facts.md を先に読め"));
     }
 }

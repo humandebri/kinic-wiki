@@ -7,6 +7,10 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 use wiki_types::SearchNodesRequest;
 
+use super::answer_match::{
+    answer_exact_match as matches_exact_answer,
+    answer_normalized_match as matches_normalized_answer,
+};
 use super::dataset::BeamQuestion;
 use super::gold_paths::resolve_gold_paths;
 use super::import::{ImportedConversation, ImportedNote};
@@ -91,17 +95,9 @@ pub async fn run_question(
     let gold_span_hit_at_3 = span_hit_within_rank(imported, &retrieved_paths, &gold.gold_spans, 3);
     let matched_gold_path = first_matching_path(&retrieved_paths, &gold.gold_paths);
     let matched_gold_span = first_matching_span(imported, &retrieved_paths, &gold.gold_spans, 3);
-    let answer_exact_match = question
-        .reference_answer
-        .as_deref()
-        .zip(predicted_answer.as_deref())
-        .map(|(expected, actual)| expected.trim() == actual.trim())
-        .unwrap_or(false);
-    let answer_normalized_match = question.gold_answers.iter().any(|expected| {
-        predicted_answer
-            .as_deref()
-            .is_some_and(|actual| normalize_text(expected) == normalize_text(actual))
-    });
+    let answer_exact_match = matches_exact_answer(&question, predicted_answer.as_deref());
+    let answer_normalized_match =
+        matches_normalized_answer(&question, predicted_answer.as_deref());
     let answer_match_given_span_hit = gold_span_hit_at_3 && answer_normalized_match;
     let abstention_correct = question.expects_abstention && answer_normalized_match;
     let failure_reason = determine_failure_reason(
@@ -111,6 +107,8 @@ pub async fn run_question(
         predicted_answer.as_deref(),
         answer_normalized_match,
     );
+    let answered = predicted_answer.is_some();
+    let retrieved_paths_nonempty = !retrieved_paths.is_empty();
 
     Ok(QuestionResult {
         conversation_id: conversation_id.to_string(),
@@ -132,6 +130,11 @@ pub async fn run_question(
         source_note_type: matched_gold_path
             .as_deref()
             .map(|path| note_type_for_path(path, &imported.notes)),
+        answered,
+        grounded: answered && retrieved_paths_nonempty,
+        answered_without_grounding: answered && !retrieved_paths_nonempty,
+        retrieved_paths_nonempty,
+        read_before_answer: answered && docs_read_count > 0,
         included_in_primary_metrics: include_in_primary_metrics && !question.expects_abstention,
         retrieval_evaluable: !question.expects_abstention,
         retrieval_hit: gold_path_hit_at_3,
@@ -150,6 +153,14 @@ pub async fn run_question(
         output_tokens: Some(0),
         total_tokens: Some(0),
         latency_ms: started_at.elapsed().as_millis(),
+        spawned_at_ms: None,
+        pid: None,
+        exit_status: None,
+        timed_out: false,
+        stderr: None,
+        schema_path: None,
+        last_tool_name: None,
+        last_tool_arguments: None,
         failure_reason,
         tool_calls,
         raw_events: Vec::new(),
@@ -370,6 +381,11 @@ fn build_precheck_failure(
         matched_gold_path: None,
         matched_gold_span: None,
         source_note_type: imported.notes.first().map(|note| note.note_type.clone()),
+        answered: false,
+        grounded: false,
+        answered_without_grounding: false,
+        retrieved_paths_nonempty: false,
+        read_before_answer: false,
         included_in_primary_metrics: include_in_primary_metrics && !question.expects_abstention,
         retrieval_evaluable: !question.expects_abstention,
         retrieval_hit: false,
@@ -388,27 +404,18 @@ fn build_precheck_failure(
         output_tokens: Some(0),
         total_tokens: Some(0),
         latency_ms,
+        spawned_at_ms: None,
+        pid: None,
+        exit_status: None,
+        timed_out: false,
+        stderr: None,
+        schema_path: None,
+        last_tool_name: None,
+        last_tool_arguments: None,
         failure_reason: Some(failure_reason),
         tool_calls: Vec::new(),
         raw_events: Vec::new(),
     }
-}
-
-fn normalize_text(value: &str) -> String {
-    let mut normalized = String::new();
-    let mut last_was_space = false;
-    for character in value.trim().chars().flat_map(char::to_lowercase) {
-        if character.is_alphanumeric() {
-            normalized.push(character);
-            last_was_space = false;
-            continue;
-        }
-        if !last_was_space {
-            normalized.push(' ');
-            last_was_space = true;
-        }
-    }
-    normalized.trim().to_string()
 }
 
 #[cfg(test)]
@@ -534,6 +541,7 @@ mod tests {
                 gold_spans: vec!["March 15, 2024".to_string()],
                 expects_abstention: false,
                 tags: vec!["factoid".to_string(), "facts".to_string()],
+                rubric_items: Vec::new(),
                 raw: serde_json::json!({}),
             },
             3,
@@ -601,6 +609,7 @@ mod tests {
                 gold_spans: vec!["March 15, 2024".to_string()],
                 expects_abstention: false,
                 tags: vec!["factoid".to_string(), "facts".to_string()],
+                rubric_items: Vec::new(),
                 raw: serde_json::json!({}),
             },
             3,
@@ -648,6 +657,7 @@ mod tests {
                 gold_spans: vec!["March 15, 2024".to_string()],
                 expects_abstention: false,
                 tags: vec!["factoid".to_string()],
+                rubric_items: Vec::new(),
                 raw: serde_json::json!({}),
             },
             3,
@@ -713,6 +723,7 @@ mod tests {
                 gold_spans: vec!["March 15, 2024".to_string()],
                 expects_abstention: false,
                 tags: vec!["factoid".to_string()],
+                rubric_items: Vec::new(),
                 raw: serde_json::json!({}),
             },
             3,

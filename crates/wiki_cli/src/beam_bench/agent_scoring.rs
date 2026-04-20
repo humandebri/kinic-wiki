@@ -5,6 +5,10 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use super::answer_match::{
+    answer_exact_match as matches_exact_answer,
+    answer_normalized_match as matches_normalized_answer,
+};
 use super::dataset::BeamQuestion;
 use super::gold_paths::{has_explicit_gold_paths, note_counts_as_retrieved, resolve_gold_paths};
 use super::import::{ImportedConversation, ImportedNote};
@@ -17,6 +21,9 @@ pub fn score_question(
     question: BeamQuestion,
     run: ModelRun,
 ) -> QuestionResult {
+    if let Some(failure_reason) = runtime_failure_reason(&run) {
+        return build_runtime_failure(conversation_id, question, run, failure_reason);
+    }
     let gold = materialize_gold(imported, &question);
     if let Some(failure_reason) = gold.failure_reason {
         return build_precheck_failure(conversation_id, question, run, gold, failure_reason);
@@ -27,21 +34,16 @@ pub fn score_question(
     let matched_gold_path = first_matching_path(&retrieved_paths, &gold.gold_paths);
     let matched_gold_span = first_matching_span(imported, &retrieved_paths, &gold.gold_spans, 3);
     let predicted_answer = (!run.answer.trim().is_empty()).then_some(run.answer.clone());
+    let answered = predicted_answer.is_some();
+    let retrieved_paths_nonempty = !retrieved_paths.is_empty();
+    let grounded = answered && retrieved_paths_nonempty;
     let gold_path_hit_at_1 = hit_within_rank(&retrieved_paths, &gold.gold_paths, 1);
     let gold_path_hit_at_3 = hit_within_rank(&retrieved_paths, &gold.gold_paths, 3);
     let gold_span_hit_at_1 = span_hit_within_rank(imported, &retrieved_paths, &gold.gold_spans, 1);
     let gold_span_hit_at_3 = span_hit_within_rank(imported, &retrieved_paths, &gold.gold_spans, 3);
-    let answer_exact_match = question
-        .reference_answer
-        .as_deref()
-        .zip(predicted_answer.as_deref())
-        .map(|(expected, actual)| expected.trim() == actual.trim())
-        .unwrap_or(false);
-    let answer_normalized_match = question.gold_answers.iter().any(|expected| {
-        predicted_answer
-            .as_deref()
-            .is_some_and(|actual| normalize_text(expected) == normalize_text(actual))
-    });
+    let answer_exact_match = matches_exact_answer(&question, predicted_answer.as_deref());
+    let answer_normalized_match =
+        matches_normalized_answer(&question, predicted_answer.as_deref());
     let answer_match_given_span_hit = gold_span_hit_at_3 && answer_normalized_match;
     let abstention_correct = question.expects_abstention && answer_normalized_match;
     let tool_error_count = run.tool_calls.iter().filter(|call| call.is_error).count();
@@ -50,6 +52,7 @@ pub fn score_question(
         .iter()
         .filter(|call| is_read_tool_name(&call.name))
         .count();
+    let read_before_answer = answered && docs_read_count > 0;
     let failure_reason = determine_failure_reason(
         &question,
         tool_error_count,
@@ -79,6 +82,11 @@ pub fn score_question(
         source_note_type: matched_gold_path
             .as_deref()
             .map(|path| note_type_for_path(path, &imported.notes)),
+        answered,
+        grounded,
+        answered_without_grounding: answered && !retrieved_paths_nonempty,
+        retrieved_paths_nonempty,
+        read_before_answer,
         included_in_primary_metrics: !question.expects_abstention,
         retrieval_evaluable: !question.expects_abstention,
         retrieval_hit: gold_path_hit_at_3,
@@ -97,6 +105,14 @@ pub fn score_question(
         output_tokens: run.output_tokens,
         total_tokens: run.total_tokens,
         latency_ms: run.latency_ms,
+        spawned_at_ms: Some(run.spawned_at_ms),
+        pid: run.pid,
+        exit_status: run.exit_status,
+        timed_out: run.timed_out,
+        stderr: (!run.stderr.is_empty()).then_some(run.stderr),
+        schema_path: Some(run.schema_path),
+        last_tool_name: run.last_tool_name,
+        last_tool_arguments: run.last_tool_arguments,
         failure_reason,
         tool_calls: run.tool_calls,
         raw_events: run.raw_events,
@@ -285,6 +301,9 @@ fn build_precheck_failure(
     gold: MaterializedGold,
     failure_reason: FailureReason,
 ) -> QuestionResult {
+    let answered = !run.answer.trim().is_empty();
+    let read_before_answer =
+        answered && run.tool_calls.iter().any(|call| is_read_tool_name(&call.name));
     QuestionResult {
         conversation_id,
         question_id: question.question_id,
@@ -294,7 +313,7 @@ fn build_precheck_failure(
         as_of: question.as_of,
         reference_answer: question.reference_answer,
         gold_answers: gold.gold_answers,
-        predicted_answer: (!run.answer.trim().is_empty()).then_some(run.answer),
+        predicted_answer: answered.then_some(run.answer),
         gold_paths: gold.gold_paths,
         gold_spans: gold.gold_spans,
         expects_abstention: question.expects_abstention,
@@ -303,6 +322,11 @@ fn build_precheck_failure(
         matched_gold_path: None,
         matched_gold_span: None,
         source_note_type: None,
+        answered,
+        grounded: false,
+        answered_without_grounding: answered,
+        retrieved_paths_nonempty: false,
+        read_before_answer,
         included_in_primary_metrics: !question.expects_abstention,
         retrieval_evaluable: !question.expects_abstention,
         retrieval_hit: false,
@@ -325,6 +349,82 @@ fn build_precheck_failure(
         output_tokens: run.output_tokens,
         total_tokens: run.total_tokens,
         latency_ms: run.latency_ms,
+        spawned_at_ms: Some(run.spawned_at_ms),
+        pid: run.pid,
+        exit_status: run.exit_status,
+        timed_out: run.timed_out,
+        stderr: (!run.stderr.is_empty()).then_some(run.stderr),
+        schema_path: Some(run.schema_path),
+        last_tool_name: run.last_tool_name,
+        last_tool_arguments: run.last_tool_arguments,
+        failure_reason: Some(failure_reason),
+        tool_calls: run.tool_calls,
+        raw_events: run.raw_events,
+    }
+}
+
+fn build_runtime_failure(
+    conversation_id: String,
+    question: BeamQuestion,
+    run: ModelRun,
+    failure_reason: FailureReason,
+) -> QuestionResult {
+    let answered = !run.answer.trim().is_empty();
+    let read_before_answer =
+        answered && run.tool_calls.iter().any(|call| is_read_tool_name(&call.name));
+    QuestionResult {
+        conversation_id,
+        question_id: question.question_id,
+        question_type: question.question_type,
+        question_class: question.question_class,
+        query: question.query,
+        as_of: question.as_of,
+        reference_answer: question.reference_answer,
+        gold_answers: question.gold_answers,
+        predicted_answer: answered.then_some(run.answer),
+        gold_paths: question.gold_paths,
+        gold_spans: question.gold_spans,
+        expects_abstention: question.expects_abstention,
+        tags: question.tags,
+        retrieved_paths: Vec::new(),
+        matched_gold_path: None,
+        matched_gold_span: None,
+        source_note_type: None,
+        answered,
+        grounded: false,
+        answered_without_grounding: answered,
+        retrieved_paths_nonempty: false,
+        read_before_answer,
+        included_in_primary_metrics: !question.expects_abstention,
+        retrieval_evaluable: false,
+        retrieval_hit: false,
+        gold_path_hit_at_1: false,
+        gold_path_hit_at_3: false,
+        gold_span_hit_at_1: false,
+        gold_span_hit_at_3: false,
+        answer_exact_match: false,
+        answer_normalized_match: false,
+        answer_match_given_span_hit: false,
+        abstention_correct: false,
+        tool_call_count: run.tool_calls.len(),
+        tool_error_count: usize::from(!run.timed_out),
+        docs_read_count: run
+            .tool_calls
+            .iter()
+            .filter(|call| is_read_tool_name(&call.name))
+            .count(),
+        input_tokens: run.input_tokens,
+        output_tokens: run.output_tokens,
+        total_tokens: run.total_tokens,
+        latency_ms: run.latency_ms,
+        spawned_at_ms: Some(run.spawned_at_ms),
+        pid: run.pid,
+        exit_status: run.exit_status,
+        timed_out: run.timed_out,
+        stderr: (!run.stderr.is_empty()).then_some(run.stderr),
+        schema_path: Some(run.schema_path),
+        last_tool_name: run.last_tool_name,
+        last_tool_arguments: run.last_tool_arguments,
         failure_reason: Some(failure_reason),
         tool_calls: run.tool_calls,
         raw_events: run.raw_events,
@@ -396,11 +496,11 @@ fn determine_failure_reason(
     predicted_answer: Option<&str>,
     answer_normalized_match: bool,
 ) -> Option<FailureReason> {
-    if tool_error_count > 0 {
-        return Some(FailureReason::ToolError);
-    }
     if question.expects_abstention {
         return (!answer_normalized_match).then_some(FailureReason::ShouldAbstainButAnswered);
+    }
+    if tool_error_count > 0 {
+        return Some(FailureReason::ToolError);
     }
     if !gold_path_hit_at_3 {
         return Some(FailureReason::MissedGoldPath);
@@ -414,25 +514,18 @@ fn determine_failure_reason(
     None
 }
 
-fn normalize_text(value: &str) -> String {
-    let mut normalized = String::new();
-    let mut last_was_space = false;
-    for character in value.trim().chars().flat_map(char::to_lowercase) {
-        if character.is_alphanumeric() {
-            normalized.push(character);
-            last_was_space = false;
-            continue;
-        }
-        if !last_was_space {
-            normalized.push(' ');
-            last_was_space = true;
-        }
+fn runtime_failure_reason(run: &ModelRun) -> Option<FailureReason> {
+    if run.timed_out {
+        return Some(FailureReason::Timeout);
     }
-    normalized.trim().to_string()
+    run.failure_message
+        .as_ref()
+        .map(|_| FailureReason::ToolError)
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use serde_json::json;
 
     use super::score_question;
@@ -486,7 +579,33 @@ mod tests {
             gold_spans: vec!["March 15, 2024".to_string()],
             expects_abstention: false,
             tags: vec!["factoid".to_string(), "facts".to_string()],
+            rubric_items: Vec::new(),
             raw: json!({}),
+        }
+    }
+
+    fn model_run(
+        answer: &str,
+        tool_calls: Vec<ToolCallRecord>,
+        raw_events: Vec<Value>,
+    ) -> ModelRun {
+        ModelRun {
+            answer: answer.to_string(),
+            tool_calls,
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            total_tokens: Some(2),
+            latency_ms: 5,
+            raw_events,
+            spawned_at_ms: 1,
+            pid: Some(42),
+            exit_status: Some(0),
+            timed_out: false,
+            failure_message: None,
+            stderr: String::new(),
+            schema_path: "/tmp/schema.json".to_string(),
+            last_tool_name: None,
+            last_tool_arguments: None,
         }
     }
 
@@ -496,25 +615,21 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             fact_question(),
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: vec![ToolCallRecord {
+            model_run(
+                "March 15, 2024",
+                vec![ToolCallRecord {
                     name: "read-node".to_string(),
                     arguments: "cargo run -p wiki-cli --bin wiki-cli -- --local read-node --path /Wiki/run/conv-1/facts.md --json".to_string(),
                     is_error: false,
                 }],
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: vec![json!({
+                vec![json!({
                     "type": "item.completed",
                     "item": {
                         "command": "cargo run -p wiki-cli --bin wiki-cli -- --local search-path-remote meeting --prefix /Wiki/run/conv-1 --json",
                         "stdout": "[{\"path\":\"/Wiki/run/conv-1/facts.md\"}]"
                     }
                 })],
-            },
+            ),
         );
         assert!(result.gold_path_hit_at_1);
         assert_eq!(
@@ -529,19 +644,15 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             fact_question(),
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: vec![ToolCallRecord {
+            model_run(
+                "March 15, 2024",
+                vec![ToolCallRecord {
                     name: "read".to_string(),
                     arguments: r#"{"path":"/Wiki/run/conv-1/facts.md"}"#.to_string(),
                     is_error: false,
                 }],
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: Vec::new(),
-            },
+                Vec::new(),
+            ),
         );
 
         assert_eq!(
@@ -559,19 +670,15 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             fact_question(),
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: vec![ToolCallRecord {
+            model_run(
+                "March 15, 2024",
+                vec![ToolCallRecord {
                     name: "read-node".to_string(),
                     arguments: "cargo run -p wiki-cli --bin wiki-cli -- --local read-node --path /Wiki/run/conv-1/conversation.md --json".to_string(),
                     is_error: false,
                 }],
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: Vec::new(),
-            },
+                Vec::new(),
+            ),
         );
         assert!(!result.gold_path_hit_at_3);
         assert_eq!(result.failure_reason, Some(FailureReason::MissedGoldPath));
@@ -591,15 +698,7 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             question,
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: Vec::new(),
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: Vec::new(),
-            },
+            model_run("March 15, 2024", Vec::new(), Vec::new()),
         );
         assert_eq!(
             result.failure_reason,
@@ -616,15 +715,7 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             question,
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: Vec::new(),
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: Vec::new(),
-            },
+            model_run("March 15, 2024", Vec::new(), Vec::new()),
         );
         assert_eq!(
             result.gold_paths,
@@ -642,19 +733,15 @@ mod tests {
             "conv-1".to_string(),
             &imported(),
             question,
-            ModelRun {
-                answer: "March 15, 2024".to_string(),
-                tool_calls: vec![ToolCallRecord {
+            model_run(
+                "March 15, 2024",
+                vec![ToolCallRecord {
                     name: "read-node".to_string(),
                     arguments: "cargo run -p wiki-cli --bin wiki-cli -- --local read-node --path /Wiki/run/conv-1/conversation.md --json".to_string(),
                     is_error: false,
                 }],
-                input_tokens: Some(1),
-                output_tokens: Some(1),
-                total_tokens: Some(2),
-                latency_ms: 5,
-                raw_events: Vec::new(),
-            },
+                Vec::new(),
+            ),
         );
         assert_eq!(
             result.retrieved_paths,

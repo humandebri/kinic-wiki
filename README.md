@@ -174,23 +174,53 @@ The validation split is:
 
 ## BEAM Benchmark Harness
 
-`scripts/bench/run_beam_bench.sh` is a development benchmark harness, separate from both `wiki-cli` and `canbench`.
+`scripts/bench/run_beam_bench.sh` is a read-only eval harness, separate from both `wiki-cli` and `canbench`.
 
 - `canbench` measures canister-side API scale and instructions
-- `beam-bench` measures retrieval quality after importing long conversations into `/Wiki/<namespace>/...`
+- `beam_prepare` writes long conversations into `/Wiki/<namespace>/...` and updates benchmark indexes
+- `beam-bench` measures retrieval quality against an already prepared namespace
 - Codex CLI e2e over `wiki-cli` read-only commands
 - read-only tool/command access only
 - artifacts: `summary.json`, `results.jsonl`, `failures.jsonl`, `report.md`
 
 Default evaluation mode is now `retrieve-and-extract`.
 
-- primary metrics focus on factoid questions only
+- full BEAM question-type coverage now uses structured notes:
+  - `facts.md`
+  - `events.md`
+  - `plan.md`
+  - `profile.md`
+  - `preferences.md`
+  - `instructions.md`
+  - `updates.md`
+  - `summary.md`
+- report headline includes operational grounding metrics plus `by_question_type`
 - `--questions-per-conversation` applies after primary question-class filtering
 - retrieval hit rate and short-answer match rate are reported separately
 
-Example:
+Typical test usage:
 
 ```bash
+bash scripts/bench/run_beam_grounded_slice.sh facts \
+  aaaaa-aa \
+  fixtures/beam/beam_sample.json \
+  artifacts/beam-sample \
+  beam-sample \
+  --limit 1 \
+  --questions-per-conversation 1
+```
+
+Manual debug usage keeps prepare and eval separate:
+
+```bash
+bash scripts/bench/run_beam_prepare.sh \
+  --local \
+  --canister-id aaaaa-aa \
+  --dataset-path fixtures/beam/beam_sample.json \
+  --split 100K \
+  --namespace beam-sample \
+  --limit 1 \
+
 bash scripts/bench/run_beam_bench.sh \
   --local \
   --canister-id aaaaa-aa \
@@ -201,15 +231,24 @@ bash scripts/bench/run_beam_bench.sh \
   --top-k 5 \
   --limit 1 \
   --questions-per-conversation 1 \
-  --parallelism 1
+  --parallelism 1 \
+  --namespace beam-sample
 ```
 
-The example above uses the local replica.
+The examples above use the local replica.
 Normal mainnet usage can omit host flags.
 Local usage can use `--local`.
 Only `canister_id` still needs `--canister-id`, `WIKI_CANISTER_ID`, or user config.
 
-The harness imports each conversation under a normal wiki path such as `/Wiki/bench-run-<timestamp>/<conversation_id>/` and keeps probing answers out of the wiki notes. Codex defaults to `danger-full-access` so the child process can reach the local PocketIC gateway. This command is intended for manual or dedicated benchmark runs rather than normal CI.
+Parquet snapshots need one conversion step first:
+
+```bash
+cargo run -p wiki-cli --bin beam_dataset_convert -- \
+  --input-path .benchmarks/beam/beam-100k.parquet \
+  --output-path /tmp/beam-100k.jsonl
+```
+
+`beam_prepare` imports each conversation under a normal wiki path such as `/Wiki/<namespace>/<conversation_id>/` and keeps probing answers out of the wiki notes. `beam_bench` is read-only and validates a prepare manifest before eval. If the namespace is stale or the dataset does not match, eval fails immediately instead of rewriting the wiki. Codex defaults to `danger-full-access` so the child process can reach the local PocketIC gateway. These commands are intended for manual or dedicated benchmark runs rather than normal CI.
 
 Manual deployed canister benchmarks:
 

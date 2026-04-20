@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Where: scripts/bench/run_beam_bench.sh
-# What: Run the BEAM-derived retrieval benchmark binary.
-# Why: Benchmark execution should stay outside the normal wiki-cli command surface.
+# What: Run the read-only BEAM-derived retrieval benchmark binary.
+# Why: Eval must stay separate from namespace preparation and canister writes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
