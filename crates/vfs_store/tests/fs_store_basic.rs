@@ -304,6 +304,98 @@ fn fs_migrations_reject_legacy_schema_history() {
 }
 
 #[test]
+fn fs_migrations_reject_old_fs_schema_shape_even_with_current_version() {
+    let dir = tempdir().expect("temp dir should exist");
+    let store = FsStore::new(dir.path().join("wiki.sqlite3"));
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute_batch(
+        "
+        CREATE TABLE schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at INTEGER NOT NULL
+        );
+        CREATE TABLE fs_nodes (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            etag TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE VIRTUAL TABLE fs_nodes_fts USING fts5(
+            content,
+            content='fs_nodes',
+            content_rowid='id'
+        );
+        CREATE TABLE fs_change_log (
+            revision INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL,
+            change_kind TEXT NOT NULL
+                CHECK (change_kind IN ('upsert', 'path_removal'))
+        );
+        CREATE INDEX fs_nodes_path_covering_idx
+        ON fs_nodes (path, kind, updated_at, etag);
+        CREATE INDEX fs_nodes_recent_covering_idx
+        ON fs_nodes (updated_at DESC, path ASC, kind, etag);
+        ",
+    )
+    .expect("legacy schema should create");
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+        ["wiki_store:000_fs_schema"],
+    )
+    .expect("current version stamp should insert");
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("old 000 schema shape should be rejected");
+    assert!(error.contains("legacy wiki_store schema is unsupported"));
+}
+
+#[test]
+fn search_nodes_returns_error_for_invalid_stored_kind() {
+    let (_dir, store) = new_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute(
+        "INSERT INTO fs_nodes (id, path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            1_i64,
+            "/Wiki/broken.md",
+            "broken",
+            "searchable broken content",
+            10_i64,
+            10_i64,
+            "etag-broken",
+            "{}",
+        ],
+    )
+    .expect("invalid kind row should insert");
+    conn.execute(
+        "INSERT INTO fs_nodes_fts (rowid, path, title, content) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            1_i64,
+            "/Wiki/broken.md",
+            "broken",
+            "searchable broken content"
+        ],
+    )
+    .expect("fts row should insert");
+
+    let error = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "searchable".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 10,
+            preview_mode: None,
+        })
+        .expect_err("invalid kind should return error");
+    assert!(error.contains("Invalid column type"));
+}
+
+#[test]
 fn fs_nodes_fts_stores_title_using_current_basename_rule() {
     let (_dir, store) = new_store();
     store

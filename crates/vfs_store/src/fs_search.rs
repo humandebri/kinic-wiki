@@ -128,10 +128,11 @@ pub(crate) fn load_ranked_fts_candidates(
                 .map_err(|error| error.to_string())?;
             for row in rows {
                 let (row_id, path, kind, rank) = row.map_err(|error| error.to_string())?;
+                let kind = node_kind_from_db(&kind).map_err(|error| error.to_string())?;
                 candidates.entry(row_id).or_insert_with(|| SearchCandidate {
                     row_id,
                     path,
-                    kind: node_kind_from_db(&kind).expect("validated kind"),
+                    kind,
                     score: rank * FTS_RANK_SCALE,
                     snippet: None,
                     preview: None,
@@ -153,10 +154,11 @@ pub(crate) fn load_ranked_fts_candidates(
             .map_err(|error| error.to_string())?;
         for row in rows {
             let (row_id, path, kind, rank) = row.map_err(|error| error.to_string())?;
+            let kind = node_kind_from_db(&kind).map_err(|error| error.to_string())?;
             candidates.entry(row_id).or_insert_with(|| SearchCandidate {
                 row_id,
                 path,
-                kind: node_kind_from_db(&kind).expect("validated kind"),
+                kind,
                 score: rank * FTS_RANK_SCALE,
                 snippet: None,
                 preview: None,

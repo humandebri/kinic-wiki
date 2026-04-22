@@ -46,7 +46,10 @@ fn reject_legacy_schema(conn: &Connection) -> Result<(), String> {
         }
         return Ok(());
     }
-    if versions.len() == 1 && versions[0] == CURRENT_SCHEMA_VERSION {
+    if versions.len() == 1
+        && versions[0] == CURRENT_SCHEMA_VERSION
+        && current_schema_shape_is_present(conn)?
+    {
         return Ok(());
     }
     Err(format!(
@@ -75,6 +78,57 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     .optional()
     .map(|row| row.is_some())
     .map_err(|error| error.to_string())
+}
+
+fn index_exists(conn: &Connection, index: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
+        params![index],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
+}
+
+fn current_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
+    for table in [
+        "fs_nodes",
+        "fs_nodes_fts",
+        "fs_change_log",
+        "fs_path_state",
+        "fs_snapshot_sessions",
+        "fs_snapshot_session_paths",
+    ] {
+        if !table_exists(conn, table)? {
+            return Ok(false);
+        }
+    }
+    for index in [
+        "fs_nodes_path_covering_idx",
+        "fs_nodes_recent_covering_idx",
+        "fs_snapshot_sessions_expires_at_idx",
+    ] {
+        if !index_exists(conn, index)? {
+            return Ok(false);
+        }
+    }
+    fts_shape_is_current(conn)
+}
+
+fn fts_shape_is_current(conn: &Connection) -> Result<bool, String> {
+    let sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fs_nodes_fts'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some(sql) = sql else {
+        return Ok(false);
+    };
+    Ok(sql.contains("path") && sql.contains("title") && sql.contains("content"))
 }
 
 fn applied_versions(conn: &Connection) -> Result<Vec<String>, String> {

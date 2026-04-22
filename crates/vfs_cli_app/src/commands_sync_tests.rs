@@ -469,7 +469,7 @@ async fn push_reports_resync_for_invalid_known_snapshot_revision() {
 }
 
 #[tokio::test]
-async fn push_uses_preflight_revision_for_postflight_refresh() {
+async fn push_keeps_preflight_remote_delta_in_postflight_refresh() {
     let dir = tempdir().expect("tempdir should create");
     let root = PathBuf::from(dir.path()).join("Wiki");
     let initial = sync_node("/Wiki/foo.md", "# Foo", "etag-1");
@@ -529,6 +529,7 @@ async fn push_uses_preflight_revision_for_postflight_refresh() {
             Ok(FetchUpdatesResponse {
                 snapshot_revision: SNAPSHOT_REVISION_3.to_string(),
                 changed_nodes: vec![
+                    remote.clone(),
                     Node {
                         path: "/Wiki/foo.md".to_string(),
                         kind: NodeKind::File,
@@ -538,7 +539,6 @@ async fn push_uses_preflight_revision_for_postflight_refresh() {
                         etag: "etag-2".to_string(),
                         metadata_json: "{}".to_string(),
                     },
-                    remote.clone(),
                 ],
                 removed_paths: Vec::new(),
                 next_cursor: None,
@@ -573,7 +573,7 @@ async fn push_uses_preflight_revision_for_postflight_refresh() {
         .expect("fetch requests should lock");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].known_snapshot_revision, SNAPSHOT_REVISION_1);
-    assert_eq!(requests[1].known_snapshot_revision, SNAPSHOT_REVISION_2);
+    assert_eq!(requests[1].known_snapshot_revision, SNAPSHOT_REVISION_1);
 }
 
 #[test]

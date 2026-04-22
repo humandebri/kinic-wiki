@@ -176,10 +176,9 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         println!("push skipped: no changed wiki files");
         return Ok(());
     }
-    let preflight = collect_paged_updates(client, &state.snapshot_revision, None)
+    collect_paged_updates(client, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
-    let preflight_snapshot_revision = preflight.snapshot_revision;
     let mut conflicts = 0usize;
     let mut writes = 0usize;
     for node in &changed_nodes {
@@ -230,7 +229,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         }
     }
 
-    let updates = collect_paged_updates(client, &preflight_snapshot_revision, None)
+    let updates = collect_paged_updates(client, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let changed_nodes = updates.changed_nodes;
