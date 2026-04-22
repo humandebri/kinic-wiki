@@ -192,7 +192,7 @@ fn render_scope_index(
             continue;
         };
         match relative_path.split_once('/') {
-            Some((child_scope, rest)) if rest == "index.md" => {
+            Some((child_scope, "index.md")) => {
                 child_scope_names.insert(child_scope.to_string());
             }
             None => note_paths.push(entry.path.clone()),
