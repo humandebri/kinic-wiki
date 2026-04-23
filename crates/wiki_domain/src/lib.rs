@@ -33,9 +33,10 @@ pub fn validate_canonical_source_path(path: &str) -> Result<(), String> {
 }
 
 pub fn wiki_relative_path(path: &str) -> Result<&str, String> {
+    if path == WIKI_ROOT_PATH {
+        return Ok("");
+    }
     path.strip_prefix(&format!("{WIKI_ROOT_PATH}/"))
-        .or_else(|| path.strip_prefix(WIKI_ROOT_PATH))
-        .map(|value| value.trim_start_matches('/'))
         .ok_or_else(|| format!("unsupported remote path outside {WIKI_ROOT_PATH}: {path}"))
 }
 
@@ -124,6 +125,19 @@ mod tests {
             wiki_relative_path(WIKI_ROOT_PATH).expect("root should strip"),
             ""
         );
+    }
+
+    #[test]
+    fn wiki_relative_path_rejects_prefix_lookalikes() {
+        for path in [
+            "/Wikix/foo.md",
+            "/Wikifoo/bar.md",
+            "Wiki/foo.md",
+            "/Sources/raw/foo.md",
+        ] {
+            let error = wiki_relative_path(path).expect_err("lookalike path should fail");
+            assert!(error.contains(WIKI_ROOT_PATH));
+        }
     }
 
     #[test]

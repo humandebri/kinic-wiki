@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/beam_prepare.rs
+// Where: crates/vfs_cli_app/src/bin/beam_prepare.rs
 // What: Dedicated BEAM namespace preparation binary that writes notes before eval.
 // Why: Eval must stay read-only, so preparation needs its own explicit entrypoint.
 use anyhow::Result;

@@ -1,4 +1,4 @@
-// Where: crates/vfs_cli/src/agent_tools.rs
+// Where: crates/vfs_cli_core/src/agent_tools.rs
 // What: Shared agent tool schema and dispatch for VFS operations.
 // Why: Generic tool wiring should sit with the reusable VFS CLI crate rather than wiki workflow code.
 use anyhow::Result;

@@ -1,6 +1,6 @@
 // Where: crates/vfs_store/src/fs_store.rs
 // What: FS-first node store over SQLite for phase-2 persistence and search.
-// Why: The new agent-facing model needs file-like CRUD and sync without changing the old wiki store yet.
+// Why: The VFS layer needs one SQLite-backed store for file-like CRUD, search, and sync.
 //
 // Search keeps ranking and preview generation separate.
 // That prevents SQLite `snippet()` cost from scaling with all matched rows.

@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/mirror.rs
+// Where: crates/vfs_cli_app/src/mirror.rs
 // What: Local mirror file operations shared by CLI pull and push.
 // Why: The CLI mirrors remote node paths directly and tracks etags for optimistic concurrency.
 #[path = "mirror_frontmatter.rs"]
@@ -291,7 +291,8 @@ pub fn read_managed_node_content(node: &ManagedNode) -> Result<String> {
 }
 
 pub fn local_path_for_remote(mirror_root: &Path, remote_path: &str) -> Result<PathBuf> {
-    let relative = wiki_relative_path(remote_path).map_err(anyhow::Error::msg)?;
+    let normalized = normalize_wiki_remote_path(remote_path).map_err(anyhow::Error::msg)?;
+    let relative = wiki_relative_path(&normalized).map_err(anyhow::Error::msg)?;
     Ok(mirror_root.join(relative))
 }
 

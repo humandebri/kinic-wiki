@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/mirror_frontmatter.rs
+// Where: crates/vfs_cli_app/src/mirror_frontmatter.rs
 // What: Frontmatter parsing for managed FS-first mirror files.
 // Why: The local mirror must track remote path and etag without page-specific metadata.
 use vfs_types::NodeKind;

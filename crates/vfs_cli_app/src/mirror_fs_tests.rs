@@ -31,6 +31,15 @@ fn remote_paths_map_directly_under_mirror_root() {
 }
 
 #[test]
+fn remote_paths_reject_non_wiki_lookalikes() {
+    for remote_path in ["/Wikix/bar.md", "/Sources/raw/foo/foo.md"] {
+        let error = local_path_for_remote(std::path::Path::new("/tmp/Wiki"), remote_path)
+            .expect_err("non-wiki path should fail");
+        assert!(error.to_string().contains("/Wiki"));
+    }
+}
+
+#[test]
 fn deleted_tracked_nodes_helper_keeps_existing_files_even_without_frontmatter() {
     let tracked = vec![TrackedNodeState {
         path: "/Wiki/foo.md".to_string(),

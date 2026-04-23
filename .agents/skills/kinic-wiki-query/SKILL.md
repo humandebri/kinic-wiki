@@ -21,6 +21,7 @@ Core rules:
 
 - Default to answer-only behavior.
 - Read the minimum note set needed to support the answer.
+- For exact extraction, prefer direct canonical-note reads over broad search.
 - Cite the wiki pages actually used.
 - Keep the read set narrow and intentional.
 

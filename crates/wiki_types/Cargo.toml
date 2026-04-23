@@ -1,7 +1,0 @@
-[package]
-name = "wiki-types"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-vfs-types = { path = "../vfs_types" }

@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/import.rs
+// Where: crates/vfs_cli_app/src/beam_bench/import.rs
 // What: Write BEAM conversation pages and their structured wiki notes to the canister.
 // Why: The harness needs a stable import boundary while note rendering stays in a dedicated module.
 use anyhow::Result;

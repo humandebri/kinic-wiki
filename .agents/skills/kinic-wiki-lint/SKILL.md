@@ -25,6 +25,8 @@ Core rules:
 - Do not silently fix pages.
 - Prefer concrete findings over vague style commentary.
 - Keep local lint and remote inspection conceptually separate.
+- Check note-role boundary violations as well as missing pages.
+- Treat exact-value drift in `facts.md` as a real canonicality problem, not a style nit.
 - Treat `WIKI_CANONICALITY.md` as the schema authority.
 
 Read [lint.md](lint.md) before doing substantive Kinic Wiki lint work.

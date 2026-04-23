@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/prepare.rs
+// Where: crates/vfs_cli_app/src/beam_bench/prepare.rs
 // What: BEAM benchmark namespace preparation that writes notes and indexes before eval.
 // Why: Eval must stay read-only while prepare owns the canister mutation lifecycle.
 use anyhow::Result;

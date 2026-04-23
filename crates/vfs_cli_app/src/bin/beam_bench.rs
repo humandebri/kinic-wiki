@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/beam_bench.rs
+// Where: crates/vfs_cli_app/src/bin/beam_bench.rs
 // What: Dedicated BEAM-derived retrieval benchmark binary.
 // Why: Benchmark harness concerns should stay outside the normal wiki operation CLI.
 use anyhow::Result;

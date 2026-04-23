@@ -22,8 +22,12 @@ Do not use this skill for:
 Core rules:
 
 - Treat the canister wiki as the source of truth.
-- Stop at review-ready unless the user explicitly asks for push.
+- Stop at review-ready unless the user explicitly asks for push. `review-ready` means edits and `log.md` updates are complete, but no push or publish step has run.
 - Keep source persistence separate from wiki synthesis.
+- Read current canonical notes before editing them.
+- Preserve settled exact fact spans in `facts.md` instead of paraphrasing or normalizing them away.
+- Do not rewrite exact values such as dates, money, fractions, spellings, product names, or role labels when a settled source span already exists.
+- `facts.md` is not a transcript dump. Exclude gratitude, acknowledgements, question phrasing, tentative future plans, scheduled meetings, deadlines, and dated event lines unless they are being routed to their canonical note.
 - When pages are created, deleted, or edited, update `log.md`.
 - Keep `log.md` append-only and easy to inspect with `tail -n 5`.
 - PDF handling stays inside kinic-wiki-ingest as source normalization.

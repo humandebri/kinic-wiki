@@ -29,7 +29,7 @@ __pycache__/
 /plugins/kinic-wiki/node_modules/
 /plugins/kinic-wiki/main.js
 
-# icp-cli ephemeral cache
+# icp-cli local state
 /.icp/cache/
 /.canbench/
 /.canbench-tools/

@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/plan_extract.rs
+// Where: crates/vfs_cli_app/src/beam_bench/plan_extract.rs
 // What: Reduce raw conversation-plan dossiers into short plan signals for plans.md.
 // Why: plans.md should expose active plan state, not mirror the full BEAM batch dossier.
 pub fn extract_plan_lines(text: &str) -> Vec<String> {

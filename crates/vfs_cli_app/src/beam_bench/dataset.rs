@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/dataset.rs
+// Where: crates/vfs_cli_app/src/beam_bench/dataset.rs
 // What: BEAM dataset loading plus question normalization for deterministic RAG evaluation.
 // Why: The benchmark needs stable question classes and optional gold evidence without depending on one raw dataset shape.
 use anyhow::{Context, Result, anyhow};

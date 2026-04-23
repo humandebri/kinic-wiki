@@ -3,6 +3,8 @@
 // Why: The repo now has one node-based schema, so migration history only tracks FS tables.
 use rusqlite::{Connection, OptionalExtension, params};
 
+// Keep the persisted version token stable so existing local databases do not
+// require a forced migration just because the crate naming moved from wiki_* to vfs_*.
 const CURRENT_SCHEMA_VERSION: &str = "wiki_store:000_fs_schema";
 const MIGRATIONS: &[(&str, &str)] = &[(
     CURRENT_SCHEMA_VERSION,

@@ -1,4 +1,4 @@
-// Where: crates/vfs_cli/src/commands.rs
+// Where: crates/vfs_cli_core/src/commands.rs
 // What: Generic VFS command execution and sync paging helpers.
 // Why: The app-facing CLI package should delegate shared VFS command behavior instead of owning it.
 use std::fs;

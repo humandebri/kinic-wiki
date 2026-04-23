@@ -1,6 +1,6 @@
-// Where: crates/wiki_cli/src/beam_bench/note_support.rs
-// What: Shared note helpers plus lightweight fact and identifier extraction.
-// Why: BEAM notes need stable role-specific rendering without growing one renderer file indefinitely.
+// Where: crates/vfs_cli_app/src/beam_bench/note_support.rs
+// What: Shared note rendering helpers and chat flattening for BEAM note generation.
+// Why: Rendering concerns should stay separate from canonical `facts.md` classification policy.
 use super::dataset::BeamConversation;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -29,20 +29,6 @@ pub fn flatten_chat(value: &Value) -> Vec<ChatTurn> {
     let mut turns = Vec::new();
     collect_chat_messages(value, &mut turns);
     turns
-}
-
-pub fn extract_fact_lines(conversation: &BeamConversation) -> Vec<String> {
-    let mut lines = Vec::new();
-    for turn in flatten_chat(&conversation.chat) {
-        if turn.label() == "assistant" {
-            continue;
-        }
-        let trimmed = turn.content.trim();
-        if let Some(line) = extract_stable_statement_fact(trimmed) {
-            lines.push(line);
-        }
-    }
-    dedupe_lines(lines)
 }
 
 pub fn extract_identifier_lines(conversation: &BeamConversation) -> Vec<String> {
@@ -150,57 +136,6 @@ fn dedupe_lines(lines: Vec<String>) -> Vec<String> {
     out
 }
 
-fn extract_stable_statement_fact(text: &str) -> Option<String> {
-    let normalized = text
-        .trim()
-        .trim_end_matches('.')
-        .trim_start_matches("Please remember that ")
-        .trim_start_matches("please remember that ");
-    let lowered = normalized.to_ascii_lowercase();
-    if let Some((subject, value)) = split_once_insensitive(normalized, " is on ") {
-        let subject = normalize_subject(subject);
-        return Some(format!("{subject} date: {}", value.trim()));
-    }
-    if let Some((subject, value)) = split_once_insensitive(normalized, " is at ") {
-        let subject = normalize_subject(subject);
-        return Some(format!("{subject} time: {}", value.trim()));
-    }
-    if let Some((subject, value)) = split_once_insensitive(normalized, " is in ") {
-        let subject = normalize_subject(subject);
-        return Some(format!("{subject} location: {}", value.trim()));
-    }
-    if let Some((subject, value)) = split_once_insensitive(normalized, " has ") {
-        let subject = normalize_subject(subject);
-        let value = value.trim();
-        if value
-            .chars()
-            .next()
-            .is_some_and(|char| char.is_ascii_digit())
-        {
-            return Some(format!("{subject} detail: {value}"));
-        }
-    }
-    if lowered.starts_with("my ") && lowered.contains(" preference is ") {
-        return Some(format!("preference: {normalized}"));
-    }
-    None
-}
-
-fn split_once_insensitive<'a>(text: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
-    let lowered = text.to_ascii_lowercase();
-    let index = lowered.find(needle)?;
-    Some((&text[..index], &text[index + needle.len()..]))
-}
-
-fn normalize_subject(subject: &str) -> String {
-    let lowered = subject.trim().to_ascii_lowercase();
-    lowered
-        .trim_start_matches("the ")
-        .trim_start_matches("my ")
-        .trim()
-        .to_string()
-}
-
 fn fenced_json(value: &Value) -> String {
     format!(
         "```json\n{}\n```",
@@ -212,61 +147,5 @@ fn scalar_value(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         _ => value.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::extract_fact_lines;
-    use crate::beam_bench::dataset::BeamConversation;
-    use serde_json::json;
-
-    fn conversation_with_chat(text: &str) -> BeamConversation {
-        BeamConversation {
-            conversation_id: "Conv 1".to_string(),
-            conversation_seed: json!({"title":"Sample","category":"General"}),
-            narratives: String::new(),
-            user_profile: json!({}),
-            conversation_plan: String::new(),
-            user_questions: json!([]),
-            chat: json!([[{"role":"user","content":text}]]),
-            probing_questions: "{}".to_string(),
-        }
-    }
-
-    #[test]
-    fn extract_fact_lines_keeps_numeric_non_temporal_statements() {
-        let conversation = conversation_with_chat("The order has 3 items.");
-        let lines = extract_fact_lines(&conversation);
-        assert!(lines.contains(&"order detail: 3 items".to_string()));
-    }
-
-    #[test]
-    fn extract_fact_lines_still_skips_temporal_ordered_statements() {
-        let conversation = conversation_with_chat("The first delivery arrives after the second.");
-        let lines = extract_fact_lines(&conversation);
-        assert!(!lines.iter().any(|line| line.contains("delivery")));
-    }
-
-    #[test]
-    fn extract_fact_lines_drops_topic_only_requests() {
-        let conversation =
-            conversation_with_chat("Can you help me improve the UI/UX before the public launch?");
-        let lines = extract_fact_lines(&conversation);
-        assert!(!lines.iter().any(|line| line.contains("UI/UX")));
-    }
-
-    #[test]
-    fn extract_fact_lines_do_not_dump_seed_or_plan_text() {
-        let mut conversation =
-            conversation_with_chat("Please remember that the meeting is on March 15, 2024.");
-        conversation.conversation_plan =
-            "BATCH 1 PLAN\n• **Current Situation:** drafting the memo".to_string();
-        conversation.narratives = "Label dump".to_string();
-        let lines = extract_fact_lines(&conversation);
-        assert!(!lines.iter().any(|line| line.contains("conversation_seed")));
-        assert!(!lines.iter().any(|line| line.contains("conversation_plan")));
-        assert!(!lines.iter().any(|line| line.contains("narratives")));
-        assert!(lines.contains(&"meeting date: March 15, 2024".to_string()));
     }
 }

@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/note_views.rs
+// Where: crates/vfs_cli_app/src/beam_bench/note_views.rs
 // What: Additional BEAM note renderers beyond the core facts/events/plans notes.
 // Why: Keep note-role renderers small while matching the repo-local wiki schema.
 use super::dataset::BeamConversation;

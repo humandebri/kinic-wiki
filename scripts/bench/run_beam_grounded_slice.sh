@@ -18,18 +18,16 @@ NAMESPACE="$5"
 shift 5
 
 SPLIT="100K"
-LIMIT_ARGS=()
+LIMIT_ARGS=(--limit 20)
 PASSTHROUGH_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --split)
       SPLIT="$2"
-      PASSTHROUGH_ARGS+=("$1" "$2")
       shift 2
       ;;
     --limit)
       LIMIT_ARGS=("$1" "$2")
-      PASSTHROUGH_ARGS+=("$1" "$2")
       shift 2
       ;;
     *)
@@ -50,6 +48,7 @@ ARGS=(
   --parallelism 1
   --namespace "$NAMESPACE"
 )
+ARGS+=("${LIMIT_ARGS[@]}")
 
 case "$SLICE" in
   information-extraction)
@@ -98,11 +97,20 @@ case "$SLICE" in
 esac
 
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
-bash "${BENCH_DIR}/run_beam_prepare.sh" \
-  --local \
-  --canister-id "$CANISTER_ID" \
-  --dataset-path "$DATASET_PATH" \
-  --split "$SPLIT" \
-  --namespace "$NAMESPACE" \
-  "${LIMIT_ARGS[@]}"
-bash "${BENCH_DIR}/run_beam_bench.sh" "${ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
+PREPARE_ARGS=(
+  --local
+  --canister-id "$CANISTER_ID"
+  --dataset-path "$DATASET_PATH"
+  --split "$SPLIT"
+  --namespace "$NAMESPACE"
+)
+if [[ ${#LIMIT_ARGS[@]} -gt 0 ]]; then
+  PREPARE_ARGS+=("${LIMIT_ARGS[@]}")
+fi
+BENCH_ARGS=("${ARGS[@]}")
+if [[ ${#PASSTHROUGH_ARGS[@]} -gt 0 ]]; then
+  BENCH_ARGS+=("${PASSTHROUGH_ARGS[@]}")
+fi
+
+bash "${BENCH_DIR}/run_beam_prepare.sh" "${PREPARE_ARGS[@]}"
+bash "${BENCH_DIR}/run_beam_bench.sh" "${BENCH_ARGS[@]}"

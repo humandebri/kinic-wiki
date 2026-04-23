@@ -12,6 +12,10 @@ flowchart LR
     C --> D["SQLite store + FTS"]
 ```
 
+Detailed structure map:
+
+![llm-wiki structure](docs/internal/llm-wiki-structure.svg)
+
 - Source of truth: remote `/Wiki/...` and `/Sources/...` nodes
 - Conflict control: file-level `etag`
 - Search: SQLite FTS on current node content
@@ -42,10 +46,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 ### Local canister
 
 ```bash
-rustup target add wasm32-unknown-unknown
+bash scripts/build-vfs-canister.sh
 icp network start -d
 icp deploy -e local
 ```
+
+If you need to install the Rust target manually first, use `rustup target add wasm32-wasip1`.
 
 Resolve the target canister with one of:
 
@@ -68,20 +74,77 @@ Use `--local` to target the local replica. Otherwise the default host is `https:
 
 Use `vfs-cli` when working from a shell or script.
 
-Representative commands:
+Main commands:
 
+- `rebuild-index`
+- `rebuild-scope-index`
 - `read-node`
+- `list-nodes`
 - `write-node`
 - `append-node`
 - `edit-node`
-- `list-nodes`
-- `move-node`
 - `delete-node`
+- `delete-tree`
+- `mkdir-node`
+- `move-node`
+- `glob-nodes`
+- `recent-nodes`
+- `multi-edit-node`
 - `search-remote`
 - `search-path-remote`
+- `lint-local`
+- `status`
 - `pull`
 - `push`
-- `rebuild-index`
+
+### Library Tool Calling
+
+Use the shared Rust library when embedding VFS tool calling into an OpenAI-compatible client.
+This is not shelling out to the CLI. It uses the same canister-backed VFS through the shared client and tool dispatcher.
+
+```rust
+use anyhow::Result;
+use vfs_cli::agent_tools::{create_openai_tools, handle_openai_tool_call};
+use vfs_client::CanisterVfsClient;
+
+async fn run() -> Result<()> {
+    let client = CanisterVfsClient::new(
+        "http://127.0.0.1:8000",
+        "aaaaa-aa",
+    )
+    .await?;
+
+    let tools = create_openai_tools();
+
+    // Pass `tools` into your OpenAI-compatible SDK request.
+    // When the model returns a tool call:
+    let result = handle_openai_tool_call(
+        &client,
+        "append",
+        r#"{"path":"/Wiki/memory.md","content":"remember this"}"#,
+    )
+    .await?;
+
+    println!("{}", result.text);
+    Ok(())
+}
+```
+
+Current tool names:
+
+- `read`
+- `write`
+- `append`
+- `edit`
+- `ls`
+- `mkdir`
+- `mv`
+- `glob`
+- `recent`
+- `multi_edit`
+- `rm`
+- `search`
+- `search_paths`
 
 ## Validation
 

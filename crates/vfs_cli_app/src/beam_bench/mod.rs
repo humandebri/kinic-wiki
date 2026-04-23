@@ -1,9 +1,9 @@
-// Where: crates/wiki_cli/src/beam_bench/mod.rs
+// Where: crates/vfs_cli_app/src/beam_bench/mod.rs
 // What: End-to-end BEAM harness for deterministic retrieval and extraction evaluation.
 // Why: Retrieval quality must be measurable without coupling the headline metric to model reasoning variance.
 mod agent_scoring;
 mod answer_match;
-mod dataset;
+pub(crate) mod dataset;
 mod deterministic;
 mod gold_paths;
 mod import;
@@ -11,7 +11,7 @@ mod manifest;
 mod model;
 mod navigation;
 mod note_extract;
-mod note_support;
+pub(crate) mod note_support;
 mod note_views;
 mod notes;
 mod plan_extract;

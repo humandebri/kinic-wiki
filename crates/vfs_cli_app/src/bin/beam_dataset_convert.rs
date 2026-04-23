@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/beam_dataset_convert.rs
+// Where: crates/vfs_cli_app/src/bin/beam_dataset_convert.rs
 // What: Convert BEAM parquet exports into JSONL rows consumable by the current beam_bench loader.
 // Why: The benchmark loader accepts JSON/JSONL only, while full BEAM snapshots are kept as parquet.
 use anyhow::{Context, Result, anyhow};

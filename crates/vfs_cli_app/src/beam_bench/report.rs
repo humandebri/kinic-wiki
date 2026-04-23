@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/report.rs
+// Where: crates/vfs_cli_app/src/beam_bench/report.rs
 // What: Machine-readable BEAM RAG results plus compact summary/report rendering.
 // Why: The benchmark must separate retrieval and answer failures so regressions are attributable.
 use anyhow::{Context, Result};
@@ -93,6 +93,7 @@ pub struct BenchmarkSummary {
     pub total_questions: usize,
     pub primary_questions: usize,
     pub retrieval_questions: usize,
+    pub gold_span_questions: usize,
     pub retrieval_hits: usize,
     pub gold_path_hits_at_1: usize,
     pub gold_path_hits_at_3: usize,
@@ -208,6 +209,10 @@ pub fn summarize(results: &[QuestionResult], top_k: u32) -> BenchmarkSummary {
         .copied()
         .filter(|item| item.retrieval_evaluable)
         .collect();
+    let gold_span_questions = retrieval
+        .iter()
+        .filter(|item| !item.gold_spans.is_empty())
+        .count();
     let retrieval_hits = retrieval.iter().filter(|item| item.retrieval_hit).count();
     let gold_path_hits_at_1 = retrieval
         .iter()
@@ -317,6 +322,7 @@ pub fn summarize(results: &[QuestionResult], top_k: u32) -> BenchmarkSummary {
         total_questions: results.len(),
         primary_questions: primary.len(),
         retrieval_questions: retrieval.len(),
+        gold_span_questions,
         retrieval_hits,
         gold_path_hits_at_1,
         gold_path_hits_at_3,
@@ -337,8 +343,8 @@ pub fn summarize(results: &[QuestionResult], top_k: u32) -> BenchmarkSummary {
         retrieval_hit_rate: ratio(retrieval_hits, retrieval.len()),
         gold_path_hit_rate_at_1: ratio(gold_path_hits_at_1, retrieval.len()),
         gold_path_hit_rate_at_3: ratio(gold_path_hits_at_3, retrieval.len()),
-        gold_span_hit_rate_at_1: ratio(gold_span_hits_at_1, retrieval.len()),
-        gold_span_hit_rate_at_3: ratio(gold_span_hits_at_3, retrieval.len()),
+        gold_span_hit_rate_at_1: ratio(gold_span_hits_at_1, gold_span_questions),
+        gold_span_hit_rate_at_3: ratio(gold_span_hits_at_3, gold_span_questions),
         answer_exact_match_rate: ratio(answer_exact_matches, primary.len()),
         answer_normalized_match_rate: ratio(answer_normalized_matches, primary.len()),
         answer_match_rate: ratio(answer_normalized_matches, primary.len()),
@@ -959,6 +965,11 @@ fn render_report(summary: &BenchmarkSummary) -> String {
     );
     let _ = writeln!(
         out,
+        "- gold span questions: {}",
+        summary.gold_span_questions
+    );
+    let _ = writeln!(
+        out,
         "- gold span hit rate @1: {:.4}",
         summary.gold_span_hit_rate_at_1
     );
@@ -1225,7 +1236,27 @@ mod tests {
         let summary = summarize(&[legacy], 3);
         assert_eq!(summary.primary_questions, 1);
         assert_eq!(summary.retrieval_questions, 0);
+        assert_eq!(summary.gold_span_questions, 0);
         assert_eq!(summary.retrieval_hit_rate, 0.0);
+    }
+
+    #[test]
+    fn summarize_uses_only_span_defined_questions_for_span_hit_rate() {
+        let with_span = result("with-span", BeamQuestionClass::Factoid);
+        let mut without_span = result("without-span", BeamQuestionClass::Factoid);
+        without_span.gold_spans.clear();
+        without_span.gold_span_hit_at_1 = false;
+        without_span.gold_span_hit_at_3 = false;
+        without_span.matched_gold_span = None;
+
+        let summary = summarize(&[with_span, without_span], 3);
+
+        assert_eq!(summary.retrieval_questions, 2);
+        assert_eq!(summary.gold_span_questions, 1);
+        assert_eq!(summary.gold_span_hits_at_1, 1);
+        assert_eq!(summary.gold_span_hits_at_3, 1);
+        assert_eq!(summary.gold_span_hit_rate_at_1, 1.0);
+        assert_eq!(summary.gold_span_hit_rate_at_3, 1.0);
     }
 
     #[test]

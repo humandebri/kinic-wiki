@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/vfs_bench/latency.rs
+// Where: crates/vfs_cli_app/src/bin/vfs_bench/latency.rs
 // What: Run deployed-canister mutation latency benchmarks with optional isolated setup/measure phases.
 // Why: We need to separate seed cost from measured request cost when reading cycles per request.
 use std::sync::Arc;

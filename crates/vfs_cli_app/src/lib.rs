@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/lib.rs
+// Where: crates/vfs_cli_app/src/lib.rs
 // What: Agent-facing CLI library for FS-first remote operations and local mirrors.
 // Why: The CLI now talks to the canister using node-oriented APIs and mirrors paths directly.
 pub mod agent_tools;
@@ -16,6 +16,7 @@ mod commands_sync_tests;
 #[cfg(test)]
 mod commands_vfs_tests;
 pub mod connection;
+mod facts_policy;
 pub mod lint_local;
 pub mod maintenance;
 pub mod mirror;

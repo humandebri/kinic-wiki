@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/model.rs
+// Where: crates/vfs_cli_app/src/beam_bench/model.rs
 // What: Codex CLI integration for BEAM benchmark runs.
 // Why: The harness now executes only the Codex-based read-only retrieval flow.
 use anyhow::{Context, Result, anyhow};
@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use super::dataset::BeamQuestionClass;
+use super::question_types::{canonical_note_candidates, normalize_question_type};
 use crate::connection::ResolvedConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,12 +234,20 @@ fn codex_prompt(context: &CodexQuestionContext<'_>, connection: &ResolvedConnect
     };
     let skill = load_query_skill_contract()
         .unwrap_or_else(|error| format!("Query skill contract could not be loaded: {error}"));
+    let benchmark_workflow = benchmark_workflow_rules(context);
+    let answer_shape = benchmark_answer_shape_rules(context.question_type);
     format!(
         r#"You are answering a BEAM-derived wiki benchmark question using llm-wiki.
 
 Follow the embedded query skill contract. This run is stateless. Do not rely on prior turns.
 
 {skill}
+
+Benchmark-specific workflow overrides:
+{benchmark_workflow}
+
+Benchmark-specific answer-shape rules:
+{answer_shape}
 
 Runtime constraints:
 - Use shell commands only through `cargo run -p vfs-cli --bin vfs-cli -- ...`
@@ -281,6 +290,8 @@ Answer with JSON matching the provided output schema.
 The `answer` field must match the question shape and stay grounded in the wiki notes.
 "#,
         skill = skill,
+        benchmark_workflow = benchmark_workflow,
+        answer_shape = answer_shape,
         connection_args = connection_args,
         replica_host = connection.replica_host,
         canister_id = connection.canister_id,
@@ -294,6 +305,59 @@ The `answer` field must match the question shape and stay grounded in the wiki n
             .unwrap_or_else(|_| "\"unknown\"".to_string()),
         question = context.question
     )
+}
+
+fn benchmark_workflow_rules(context: &CodexQuestionContext<'_>) -> String {
+    let canonical = canonical_note_candidates(context.question_type)
+        .iter()
+        .map(|note| format!("{}/{}", context.base_path, note))
+        .collect::<Vec<_>>();
+    let primary = canonical
+        .first()
+        .cloned()
+        .unwrap_or_else(|| format!("{}/{}", context.base_path, "facts.md"));
+    format!(
+        "- Read `{}` first after the namespace and conversation index.
+- Treat that canonical note as the primary evidence target for question type `{}`.
+- Do not run broad `search-path-remote` or `search-remote` before reading the canonical note.
+- Use search only if the canonical note is missing, ambiguous, or clearly insufficient.
+- Keep the read set narrow. For summary-like questions, expand only to the minimum supporting notes after reading `summary.md`.
+- `summary.md` is a recap note, not the source of exact extraction for attribute or single-fact questions.
+- `facts.md` is for stable facts, `events.md` is for chronology, `plans.md` is for directives and plans, `preferences.md` is for preferences, and `open_questions.md` is for contradictions and unresolved state.
+- If you need extra support, prefer these canonical notes in order: {}.",
+        primary,
+        normalize_question_type(context.question_type),
+        canonical.join(", "),
+    )
+}
+
+fn benchmark_answer_shape_rules(question_type: &str) -> &'static str {
+    match normalize_question_type(question_type).as_str() {
+        "contradiction_resolution" => {
+            "- If the notes show conflicting statements, do not pick one side as settled fact.\n- Explicitly say there is contradictory information and ask which statement is correct.\n- Do not answer with a flat yes/no unless the contradiction is explicitly resolved in the notes."
+        }
+        "temporal_reasoning" => {
+            "- Extract the relevant dates, times, or sequence anchors from the notes before answering.\n- Compute the ordering or time difference from those explicit anchors.\n- Return the final temporal answer directly, without a recap paragraph."
+        }
+        "event_ordering" => {
+            "- Return only the ordered events.\n- Keep the answer brief and sequence-focused.\n- Do not replace the order with a thematic summary."
+        }
+        "summarization" | "multi_session_reasoning" => {
+            "- Use `summary.md` as the base note and add only the minimum supporting notes needed to complete the answer.\n- Compress the answer into 2-4 short points or sentences.\n- Prefer cross-session synthesis over single-event detail dumps."
+        }
+        "preference_following" | "instruction_following" => {
+            "- Return a short recommendation or instruction that directly follows the note guidance.\n- Prefer concrete action wording over explanation-heavy summaries.\n- Keep the answer practical and immediately usable."
+        }
+        "information_extraction" => {
+            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- Return only the smallest answer span that preserves the supported value; do not add recap or explanation unless the question explicitly asks for it.\n- For single-attribute questions such as `when`, `where`, `how many`, `which`, or `what profession`, prefer answer-only output.\n- For multi-value extraction questions, return the requested values in the same order as the question instead of collapsing them into a generic summary.\n- For paired slot questions such as `when and where`, `age and role`, or several named dates, answer every requested slot in one short answer."
+        }
+        "knowledge_update" => {
+            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- For updates, prefer the current value stated in the notes over older conflicting context."
+        }
+        _ => {
+            "- Return the shortest grounded answer that matches the question shape.\n- Avoid unnecessary recap or speculation."
+        }
+    }
 }
 
 fn codex_answer_schema() -> Value {
@@ -461,13 +525,17 @@ mod tests {
     use std::collections::HashSet;
 
     fn test_context<'a>() -> CodexQuestionContext<'a> {
+        test_context_with_type("information_extraction")
+    }
+
+    fn test_context_with_type<'a>(question_type: &'a str) -> CodexQuestionContext<'a> {
         CodexQuestionContext {
             namespace_path: "/Wiki/run-a",
             namespace_index_path: "/Wiki/run-a/index.md",
             base_path: "/Wiki/run-a/conv-1",
             conversation_id: "conv-1",
             question_id: "factoid-000",
-            question_type: "information_extraction",
+            question_type,
             question_class: BeamQuestionClass::Factoid,
             question: "When is the meeting?",
             codex_sandbox: "workspace-write",
@@ -484,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_prompt_excludes_benchmark_specific_guidance() {
+    fn codex_prompt_includes_benchmark_routing_guidance() {
         let prompt = codex_prompt(
             &test_context(),
             &ResolvedConnection {
@@ -500,6 +568,11 @@ mod tests {
         assert!(!prompt.contains("Query skill contract could not be loaded"));
         assert!(!prompt.contains(&format!("{}/beam", "/Wiki")));
         assert!(prompt.contains("read-node --path /Wiki/run-a/index.md --json"));
+        assert!(prompt.contains("Benchmark-specific workflow overrides:"));
+        assert!(prompt.contains(
+            "Read `/Wiki/run-a/conv-1/facts.md` first after the namespace and conversation index."
+        ));
+        assert!(prompt.contains("Do not run broad `search-path-remote` or `search-remote` before reading the canonical note."));
     }
 
     #[test]
@@ -533,6 +606,62 @@ mod tests {
         assert!(prompt.contains(
             "For abstention questions, do not treat recap notes or cross-note synthesis as direct evidence"
         ));
-        assert!(!prompt.contains("facts.md を先に読め"));
+        assert!(
+            prompt.contains(
+                "Return only the smallest answer span that preserves the supported value;"
+            )
+        );
+        assert!(prompt.contains(
+            "Do not return `insufficient evidence` while a higher-priority canonical note remains unread."
+        ));
+        assert!(prompt.contains(
+            "For single-attribute questions such as `when`, `where`, `how many`, `which`, or `what profession`, prefer answer-only output."
+        ));
+        assert!(prompt.contains(
+            "For multi-value extraction questions, return the requested values in the same order as the question instead of collapsing them into a generic summary."
+        ));
+        assert!(prompt.contains(
+            "For paired slot questions such as `when and where`, `age and role`, or several named dates, answer every requested slot in one short answer."
+        ));
+        assert!(!prompt.contains("Benchmark-specific extraction exemplars:"));
+    }
+
+    #[test]
+    fn codex_prompt_includes_question_type_specific_answer_shapes() {
+        let contradiction_prompt = codex_prompt(
+            &test_context_with_type("contradiction_resolution"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(contradiction_prompt.contains(
+            "Explicitly say there is contradictory information and ask which statement is correct."
+        ));
+        assert!(contradiction_prompt.contains("/Wiki/run-a/conv-1/open_questions.md"));
+
+        let temporal_prompt = codex_prompt(
+            &test_context_with_type("temporal_reasoning"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(temporal_prompt.contains(
+            "Extract the relevant dates, times, or sequence anchors from the notes before answering."
+        ));
+        assert!(temporal_prompt.contains("/Wiki/run-a/conv-1/events.md"));
+
+        let summary_prompt = codex_prompt(
+            &test_context_with_type("multi_session_reasoning"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(summary_prompt.contains(
+            "Use `summary.md` as the base note and add only the minimum supporting notes needed to complete the answer."
+        ));
+        assert!(summary_prompt.contains("/Wiki/run-a/conv-1/summary.md"));
     }
 }

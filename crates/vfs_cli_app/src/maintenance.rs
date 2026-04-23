@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/maintenance.rs
+// Where: crates/vfs_cli_app/src/maintenance.rs
 // What: Deterministic wiki maintenance helper for index rebuild.
 // Why: VFS-first CLI keeps system-file updates explicit without reintroducing workflow commands.
 use anyhow::{Result, anyhow, bail};

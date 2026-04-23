@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/question_types.rs
+// Where: crates/vfs_cli_app/src/beam_bench/question_types.rs
 // What: Shared BEAM question-type routing and reporting helpers.
 // Why: Note generation, gold materialization, and reporting must agree on canonical note roles.
 pub fn normalize_question_type(question_type: &str) -> String {

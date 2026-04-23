@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/cli.rs
+// Where: crates/vfs_cli_app/src/cli.rs
 // What: clap definitions for the FS-first CLI surface.
 // Why: Agents need direct node operations and path-based mirror sync commands.
 use clap::{Parser, Subcommand};

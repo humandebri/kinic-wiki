@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/main.rs
+// Where: crates/vfs_cli_app/src/main.rs
 // What: Binary entrypoint for the agent-facing wiki CLI.
 // Why: Agents need one executable that can read remote pages and sync the local mirror.
 use anyhow::Result;

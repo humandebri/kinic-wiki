@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/lint_local.rs
+// Where: crates/vfs_cli_app/src/lint_local.rs
 // What: Report-only lint checks for the local FS-first mirror.
 // Why: Agents still need deterministic local structure checks before pushing mirror changes.
 use crate::mirror::{collect_managed_nodes, parse_managed_metadata, strip_frontmatter};

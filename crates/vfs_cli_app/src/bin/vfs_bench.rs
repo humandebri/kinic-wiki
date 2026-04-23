@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/vfs_bench.rs
+// Where: crates/vfs_cli_app/src/bin/vfs_bench.rs
 // What: Entry point for deployed-canister workload and latency benchmarks.
 // Why: We need one typed Rust client binary that shell wrappers can drive into JSON artifacts.
 mod vfs_bench {

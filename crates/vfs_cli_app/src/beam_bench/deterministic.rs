@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/deterministic.rs
+// Where: crates/vfs_cli_app/src/beam_bench/deterministic.rs
 // What: Deterministic retrieval and short-answer scoring for the BEAM-derived wiki benchmark.
 // Why: Retrieval, transformation, and abstention failures need separate signals.
 use anyhow::Result;

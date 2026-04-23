@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/manifest.rs
+// Where: crates/vfs_cli_app/src/beam_bench/manifest.rs
 // What: Deterministic BEAM prepare manifest generation and validation helpers.
 // Why: Read-only eval must prove the prepared namespace matches the current dataset exactly.
 use anyhow::{Result, anyhow};

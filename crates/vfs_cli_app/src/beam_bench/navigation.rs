@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/navigation.rs
+// Where: crates/vfs_cli_app/src/beam_bench/navigation.rs
 // What: Canonical BEAM wiki paths plus index maintenance for benchmark imports.
 // Why: BEAM notes should live on the normal wiki path and remain discoverable from `/Wiki/index.md`.
 use anyhow::Result;

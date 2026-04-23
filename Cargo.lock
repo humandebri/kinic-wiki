@@ -3644,28 +3644,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wiki-agent-schema"
-version = "0.1.0"
-
-[[package]]
 name = "wiki-domain"
-version = "0.1.0"
-dependencies = [
- "vfs-types",
-]
-
-[[package]]
-name = "wiki-runtime"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "tempfile",
- "vfs-runtime",
- "wiki-types",
-]
-
-[[package]]
-name = "wiki-types"
 version = "0.1.0"
 dependencies = [
  "vfs-types",

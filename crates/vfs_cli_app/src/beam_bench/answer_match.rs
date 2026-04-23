@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/answer_match.rs
+// Where: crates/vfs_cli_app/src/beam_bench/answer_match.rs
 // What: Question-type-aware BEAM answer matching helpers.
 // Why: Full BEAM coverage includes open-ended, directive, and update questions that exceed exact-value matching.
 use super::dataset::BeamQuestion;

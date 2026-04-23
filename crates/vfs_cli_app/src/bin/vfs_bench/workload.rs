@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/vfs_bench/workload.rs
+// Where: crates/vfs_cli_app/src/bin/vfs_bench/workload.rs
 // What: Run API-centric deployed-canister benchmark scenarios over the real wiki methods.
 // Why: The benchmark must honor the configured file set, concurrency, and warmup requests.
 use std::future::Future;

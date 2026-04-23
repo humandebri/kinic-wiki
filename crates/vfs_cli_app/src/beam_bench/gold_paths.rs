@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/gold_paths.rs
+// Where: crates/vfs_cli_app/src/beam_bench/gold_paths.rs
 // What: Shared helpers for explicit and inferred BEAM gold-path handling.
 // Why: Deterministic and agent scoring must not drift on transcript/index note eligibility.
 use super::dataset::BeamQuestion;

@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/agent_scoring.rs
+// Where: crates/vfs_cli_app/src/beam_bench/agent_scoring.rs
 // What: Score agent tool-use runs for the BEAM-derived wiki benchmark.
 // Why: The benchmark should grade the agent's skill-driven retrieval path, not a fixed Rust query.
 use std::collections::BTreeSet;

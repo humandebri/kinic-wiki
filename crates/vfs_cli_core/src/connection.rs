@@ -1,4 +1,4 @@
-// Where: crates/vfs_cli/src/connection.rs
+// Where: crates/vfs_cli_core/src/connection.rs
 // What: Shared connection resolution for VFS consumers.
 // Why: Generic VFS crates should not depend on the app-facing CLI package for host and canister selection.
 use anyhow::{Result, anyhow, bail};

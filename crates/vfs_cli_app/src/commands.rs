@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/commands.rs
+// Where: crates/vfs_cli_app/src/commands.rs
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
 use crate::cli::{Cli, Command};

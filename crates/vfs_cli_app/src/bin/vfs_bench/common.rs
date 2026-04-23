@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/bin/vfs_bench/common.rs
+// Where: crates/vfs_cli_app/src/bin/vfs_bench/common.rs
 // What: Shared benchmark args, path helpers, and latency aggregation for deployed canister benches.
 // Why: The workload and latency runners should share one source of truth for scenario labels and metrics.
 use clap::ValueEnum;

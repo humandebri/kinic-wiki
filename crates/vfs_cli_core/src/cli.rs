@@ -1,4 +1,4 @@
-// Where: crates/vfs_cli/src/cli.rs
+// Where: crates/vfs_cli_core/src/cli.rs
 // What: Generic clap-facing VFS CLI definitions.
 // Why: The app-facing CLI package should reuse these shared command shapes without owning the VFS surface.
 use clap::{Args, Parser, Subcommand, ValueEnum};

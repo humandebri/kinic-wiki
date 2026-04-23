@@ -6,10 +6,7 @@ members = [
     "crates/vfs_runtime",
     "crates/vfs_types",
     "crates/wiki_domain",
-    "crates/wiki_agent_schema",
     "crates/vfs_canister",
-    "crates/wiki_types",
     "crates/vfs_store",
-    "crates/wiki_runtime",
 ]
 resolver = "2"

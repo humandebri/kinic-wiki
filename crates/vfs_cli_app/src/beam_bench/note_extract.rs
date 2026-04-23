@@ -1,4 +1,4 @@
-// Where: crates/wiki_cli/src/beam_bench/note_extract.rs
+// Where: crates/vfs_cli_app/src/beam_bench/note_extract.rs
 // What: Role-specific extraction for BEAM structured notes beyond facts/events/plans.
 // Why: Keep unresolved state and recap separate from stable knowledge notes.
 use super::dataset::BeamConversation;

@@ -1,16 +1,17 @@
-// Where: crates/wiki_cli/src/beam_bench/notes.rs
+// Where: crates/vfs_cli_app/src/beam_bench/notes.rs
 // What: Render BEAM conversations into structured wiki notes plus raw-source provenance.
 // Why: Raw transcript belongs in `/Sources/raw/...`, while `/Wiki/...` keeps only organized knowledge notes.
 use super::dataset::BeamConversation;
 use super::note_extract::{extract_instruction_lines, render_turn_reference};
 use super::note_support::{
-    append_json_section, append_related_section, append_text_section, extract_fact_lines,
-    extract_identifier_lines, flatten_chat,
+    append_json_section, append_related_section, append_text_section, extract_identifier_lines,
+    flatten_chat,
 };
 use super::note_views::{
     open_questions_markdown, preferences_markdown, provenance_markdown, summary_markdown,
 };
 use super::plan_extract::extract_plan_lines;
+use crate::facts_policy::extract_fact_lines;
 
 pub fn build_documents(
     conversation: &BeamConversation,
