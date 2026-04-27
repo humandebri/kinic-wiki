@@ -28,7 +28,8 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 - Prefer fewer stronger pages over many shallow stubs.
 - Reuse existing pages when possible instead of minting near-duplicates.
 - Preserve note-role boundaries from `WIKI_CANONICALITY.md` before adding new lines to any structured note.
-- Put settled stable attributes and exact resolved values in `facts.md`; use `events.md` for chronology-only event entries.
+- Put settled stable attributes, exact resolved values, current values, selected options, and stable relationship-duration in `facts.md`.
+- Use `events.md` for chronology-only completed event entries, `plans.md` for future / pending / next action, and `summary.md` for recap only.
 - Treat `facts.md` as an exact stable fact note, not a conversation residue note.
 - Do not copy question-shaped lines such as `I'm trying to...`, `Can you help...`, or `what should I do...` into `facts.md`.
 - Do not copy gratitude, acknowledgements, backchannels, or self-encouragement such as `Thanks...`, `Got it`, `Sounds good`, or `Yeah, ...` into any structured note unless they encode a real preference.
@@ -39,6 +40,10 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 - When a source line already contains the settled answer span, keep that span nearly verbatim in `facts.md` instead of rewriting it into a looser summary.
 - Do not normalize exact settled values across equivalent forms such as `4/52 -> 1/13`, `colour -> color`, `$1,200 per month -> $1,200/month`, or `Adidas Ultraboost -> running shoes`.
 - Prefer one short fact clause per settled value when possible so later query workflows can extract the value without scanning a long recap paragraph.
+- When old and new values both appear in source material, make the current value explicit in `facts.md` instead of leaving only the historical progression in `events.md` or `plans.md`.
+- When ingesting PRs, diffs, review comments, or implementation notes, compress them into decisions, rationale, verification, follow-up, and open questions instead of copying code bodies.
+- Treat repo file paths as `Source of Truth` pointers for code notes. Do not turn wiki pages into copied implementation references.
+- Do not persist long diffs, generated docs, schema dumps, or code blocks as wiki knowledge unless the user explicitly asks for a short illustrative example.
 - Keep `log.md` in sync with every page mutation.
 - Keep `log.md` append-only so recent context can be read with `tail -n 5`.
 - Do not hide push behind kinic-wiki-ingest.
@@ -49,6 +54,7 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 ## Routing Examples
 
 - `I'm Craig, a 44-year-old colour technologist...` → keep `44-year-old colour technologist` in `facts.md`
+- `The filing fee used to be $5,000, but now the current budget is $8,000` → keep the current value in `facts.md`; historical progression stays in `events.md` if needed
 - `I'm trying to decide if saving $600 is worth it` → not `facts.md`; usually omit or keep in `plans.md` only if it is an active decision
 - `Thanks for the detailed guide!` → omit
 - `I have a meeting with Ashlee at 3 PM on May 14, 2024` → `plans.md` if upcoming, `events.md` if completed
@@ -56,6 +62,8 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 - `I check in every Wednesday` or `I'll check in every Wednesday` → `plans.md`
 - `I chose Adidas Ultraboost after trying both` → keep `Adidas Ultraboost` in `facts.md` if it is the settled selection
 - `My parents live 12 miles away` → keep in `facts.md`
+- `I summarized everything in one paragraph` → summary content belongs in `summary.md`, not `facts.md`
+- `diff --git ...` or a pasted function body → do not copy; summarize the decision, source path, verification, and follow-up
 
 ## Repo Contract
 

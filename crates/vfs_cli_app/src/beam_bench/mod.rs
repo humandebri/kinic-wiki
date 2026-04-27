@@ -29,10 +29,7 @@ use manifest::{
 use model::{CodexQuestionContext, run_codex_question};
 use navigation::{conversation_index_path, namespace_index_path};
 pub use prepare::{BeamPrepareArgs, run_beam_prepare};
-use report::{
-    BenchmarkSummary, FailureReason, QuestionResult, append_result_artifacts,
-    init_streaming_artifacts, load_existing_results, summarize, write_artifacts,
-};
+use report::{append_result_artifacts, init_streaming_artifacts, load_existing_results};
 use serde_json::json;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -44,6 +41,7 @@ use vfs_cli::connection::ResolvedConnection;
 use vfs_client::{CanisterVfsClient, VfsApi};
 
 pub use dataset::BeamQuestionClass;
+pub use report::{BenchmarkSummary, FailureReason, QuestionResult, summarize, write_artifacts};
 
 #[derive(Debug, Clone)]
 pub struct BeamBenchArgs {

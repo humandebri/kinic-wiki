@@ -74,8 +74,8 @@
   <text class="label" x="1262" y="336">scripts/</text>
   <text class="body" x="1262" y="361">build, canbench, beam, env helpers</text>
   <rect class="box" x="1242" y="402" width="276" height="86" fill="#ffffff"/>
-  <text class="label" x="1262" y="432">plugins and skills</text>
-  <text class="body" x="1262" y="457">Obsidian plugin + agent skills</text>
+  <text class="label" x="1262" y="432">agent skills</text>
+  <text class="body" x="1262" y="457">repo-local workflow skills</text>
   <text class="small" x="1262" y="480">kinic-wiki-ingest / lint / query</text>
 
   <path class="line" d="M 338 452 L 420 452" marker-end="url(#arrow)"/>

@@ -28,6 +28,7 @@ Core rules:
 - Check note-role boundary violations as well as missing pages.
 - Treat exact-value drift in `facts.md` as a real canonicality problem, not a style nit.
 - Treat `WIKI_CANONICALITY.md` as the schema authority.
+- For day-to-day usage boundaries, follow [../../../docs/internal/KINIC_WIKI_OPERATIONS.md](../../../docs/internal/KINIC_WIKI_OPERATIONS.md).
 
 Read [lint.md](lint.md) before doing substantive Kinic Wiki lint work.
 

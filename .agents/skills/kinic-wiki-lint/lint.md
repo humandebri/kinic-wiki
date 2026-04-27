@@ -29,10 +29,20 @@ Inspect local and remote wiki health, report concrete findings, and propose the 
 - Keep local lint separate from remote content review.
 - Treat note role violations from `WIKI_CANONICALITY.md` as first-class findings.
 - Flag exact-value evidence leaking into `summary.md` or unresolved conflict leaking into settled notes as canonicality findings, not style notes.
-- For target-note guidance, prefer `facts.md` for settled stable attributes and `events.md` for chronology-only event entries.
-- Flag stable exact facts that appear only in `events.md` or long recap prose but are missing from `facts.md`.
+- For target-note guidance, treat `facts.md` as the canonical note for exact stable fact, current value, selected option, and stable relationship-duration.
+- Treat `events.md` as the canonical note for chronology-only completed events, `plans.md` for future / pending / next action, and `summary.md` for recap only.
+- Flag stable exact facts that appear only in `events.md`, `plans.md`, or long recap prose but are missing from `facts.md`.
+- Flag current value gaps where `old value` and `new value` are scattered across notes but `facts.md` does not state the current value explicitly.
+- Flag chronology-only event lines inside `facts.md`.
+- Flag future / pending lines inside `facts.md`.
+- Flag recap prose inside `facts.md`.
 - Flag normalized or paraphrased `facts.md` values when the settled source span is materially more exact, for example `1/13` instead of `4/52`, `color` instead of `colour`, or shortened money/date formats.
+- Flag long code blocks, long diffs, generated docs, or schema dumps copied into wiki notes.
+- Flag implementation snippets inside `facts.md`; code notes should point to repo source paths and record decisions, not copy code bodies.
+- Flag `summary.md` pages that are mostly README or generated-doc copies instead of recap.
+- Flag code notes that list file paths but omit the decision, rationale, verification, or follow-up that makes the note useful.
 - Prefer reporting the exact offending lines and the target canonical note, not generic prose.
+- When possible, phrase findings as `offending line -> target note` rather than broad page-level commentary.
 
 ## Repo Contract
 
@@ -54,6 +64,10 @@ Optionally include:
 - recommendation to rebuild `index.md`, usually with `rebuild-scope-index --scope <scope>` first
 - candidate canonicality repairs such as:
   - move exact settled values into the canonical fact note
+  - move current value into `facts.md`
+  - move chronology-only event lines out of `facts.md` into `events.md`
+  - move future / pending lines out of `facts.md` into `plans.md`
   - move unresolved state into the canonical open-question note
   - remove exact-evidence lines from the summary note
   - restore the source-faithful exact span inside `facts.md`
+  - replace copied code or diffs with source-path pointers plus decision, rationale, verification, and follow-up

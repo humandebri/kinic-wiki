@@ -32,6 +32,7 @@ Core rules:
 - Keep `log.md` append-only and easy to inspect with `tail -n 5`.
 - PDF handling stays inside kinic-wiki-ingest as source normalization.
 - Treat `WIKI_CANONICALITY.md` as the schema authority.
+- For day-to-day usage boundaries, follow [../../../docs/internal/KINIC_WIKI_OPERATIONS.md](../../../docs/internal/KINIC_WIKI_OPERATIONS.md).
 
 Read [ingest.md](ingest.md) before doing substantive Kinic Wiki ingest work.
 

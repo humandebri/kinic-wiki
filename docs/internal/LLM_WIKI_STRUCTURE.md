@@ -37,7 +37,6 @@ flowchart LR
 | `scripts/` | build / bench / canbench 補助 | Bash と Python 混在 |
 | `fixtures/` | テスト・比較用固定入力 | mirror spec, beam sample |
 | `artifacts/` | 生成物・測定結果保管 | 大容量データを含む |
-| `plugins/kinic-wiki/` | Obsidian plugin | `main.js` と `node_modules` 同梱 |
 | `.agents/skills/` | Codex/agent 向け skill | ingest / lint / query |
 | `.benchmarks/`, `.canbench*` | bench 関連補助 | 実行補助と結果置き場 |
 | `.wiki/` | repo-local wiki 領域 | 現状調査対象外、補助用途 |
@@ -214,12 +213,7 @@ sequenceDiagram
 | `kinic-wiki-lint` | wiki health 点検 |
 | `kinic-wiki-query` | knowledge base query |
 
-### 9.2 `plugins/kinic-wiki/`
-
-- Obsidian plugin 実装
-- `main.js` から replica host, canister ID, mirror root, auto pull を設定
-- vault を canister-backed wiki mirror と同期する用途
-- `node_modules/` 同梱のためディレクトリ規模は大きい
+日常運用の入口は `KINIC_WIKI_OPERATIONS.md` に置く。構造説明と query / ingest / lint の使い分けは分離する。
 
 ## 10. 現行ビルド対象外
 
@@ -249,6 +243,6 @@ sequenceDiagram
 - 利用面中核: `vfs_client` + `vfs_cli_core` + `vfs_cli_app`
 - wiki 固有規約: `wiki_domain` + `docs/internal/WIKI_CANONICALITY.md`
 - 品質担保: `tests`, `docs/validation`, `scripts/canbench`, `scripts/bench`
-- 周辺連携: `.agents/skills`, `plugins/kinic-wiki`
+- 周辺連携: `.agents/skills`
 
 現状の repo は「wiki アプリ」より「wiki 用 VFS 基盤 + 運用補助一式」と読むのが最も正確。

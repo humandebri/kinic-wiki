@@ -259,6 +259,7 @@ Runtime constraints:
   - recent-nodes
 - Do not use write-node, append-node, edit-node, multi-edit-node, delete-node, delete-tree, rebuild-index, pull, or push
 - If evidence is insufficient, answer exactly `insufficient evidence`
+- Return the final answer in the same language and terminology as the supporting note span. Do not translate note content into Japanese or another language unless the note itself uses that language.
 
 Use this exact argument order. Do not put connection flags after the subcommand. Always request JSON output:
 
@@ -333,6 +334,9 @@ fn benchmark_workflow_rules(context: &CodexQuestionContext<'_>) -> String {
 
 fn benchmark_answer_shape_rules(question_type: &str) -> &'static str {
     match normalize_question_type(question_type).as_str() {
+        "abstention" => {
+            "- Only an explicit note statement that directly answers the requested detail counts as evidence.\n- If the notes mention the topic, entity, meeting, event, project, or person but do not state the requested detail, answer exactly `insufficient evidence`.\n- Do not infer discussion contents, rationale, criteria, advice, feedback, background, or prior projects from adjacent context.\n- Do not relabel a generic habit, plan, or reminder as a named technique unless the note explicitly does so."
+        }
         "contradiction_resolution" => {
             "- If the notes show conflicting statements, do not pick one side as settled fact.\n- Explicitly say there is contradictory information and ask which statement is correct.\n- Do not answer with a flat yes/no unless the contradiction is explicitly resolved in the notes."
         }
@@ -349,10 +353,10 @@ fn benchmark_answer_shape_rules(question_type: &str) -> &'static str {
             "- Return a short recommendation or instruction that directly follows the note guidance.\n- Prefer concrete action wording over explanation-heavy summaries.\n- Keep the answer practical and immediately usable."
         }
         "information_extraction" => {
-            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- Return only the smallest answer span that preserves the supported value; do not add recap or explanation unless the question explicitly asks for it.\n- For single-attribute questions such as `when`, `where`, `how many`, `which`, or `what profession`, prefer answer-only output.\n- For multi-value extraction questions, return the requested values in the same order as the question instead of collapsing them into a generic summary.\n- For paired slot questions such as `when and where`, `age and role`, or several named dates, answer every requested slot in one short answer."
+            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- Preserve the source-note language, wording, and value formatting; do not translate or paraphrase an exact span.\n- For pure slot questions such as `when`, `where`, `how many`, `which`, `what profession`, or `what amount`, prefer answer-only output and keep the smallest supported span.\n- For explanatory extraction questions such as `how did`, `what approach`, `what steps`, or `how did X influence Y`, answer with one short grounded sentence or two short clauses using note wording instead of a generic recap.\n- For multi-value extraction questions, return the requested values in the same order as the question instead of collapsing them into a generic summary.\n- If the question asks for plural values such as days, dates, or items, include every explicitly listed requested value, not just the first one.\n- For paired slot questions such as `when and where`, `age and role`, or several named dates, answer every requested slot in one short answer.\n- If the note confirms that a meeting, feedback, or advice existed but does not state the requested contents, answer exactly `insufficient evidence`."
         }
         "knowledge_update" => {
-            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- For updates, prefer the current value stated in the notes over older conflicting context."
+            "- Prefer exact extraction from `facts.md` when it directly answers the question.\n- For updates, return only the current or most recently scheduled value explicitly stated in the notes, not an inferred or older superseded value.\n- When multiple values appear for the same field, prefer the one tied to words like `current`, `latest`, `most recently`, `final`, `updated`, `should`, `aim`, `plan`, or the newest explicit date.\n- Preserve the source-note language and formatting for the updated value, including adjacent units or qualifiers when they are part of the value span.\n- Do not shorten an updated value to a nearby partial field such as just the number when the supported span is `4 hours of overtime` or `$4,000 for initial patent filing fees`.\n- If the notes describe an update event but do not state the resulting current value, answer exactly `insufficient evidence`."
         }
         _ => {
             "- Return the shortest grounded answer that matches the question shape.\n- Avoid unnecessary recap or speculation."
@@ -565,6 +569,7 @@ mod tests {
         assert!(!prompt.contains("Start from `/Wiki/index.md`"));
         assert!(prompt.contains("Do not use write-node"));
         assert!(prompt.contains("insufficient evidence"));
+        assert!(prompt.contains("Do not translate note content into Japanese"));
         assert!(!prompt.contains("Query skill contract could not be loaded"));
         assert!(!prompt.contains(&format!("{}/beam", "/Wiki")));
         assert!(prompt.contains("read-node --path /Wiki/run-a/index.md --json"));
@@ -601,21 +606,13 @@ mod tests {
         assert!(prompt.contains("smallest answer span"));
         assert!(prompt.contains("- question type: information_extraction"));
         assert!(prompt.contains(
-            "For abstention questions, only an explicit statement in a note counts as evidence."
+            "For pure slot questions such as `when`, `where`, `how many`, `which`, `what profession`, or `what amount`, prefer answer-only output"
         ));
-        assert!(prompt.contains(
-            "For abstention questions, do not treat recap notes or cross-note synthesis as direct evidence"
-        ));
-        assert!(
-            prompt.contains(
-                "Return only the smallest answer span that preserves the supported value;"
-            )
-        );
         assert!(prompt.contains(
             "Do not return `insufficient evidence` while a higher-priority canonical note remains unread."
         ));
         assert!(prompt.contains(
-            "For single-attribute questions such as `when`, `where`, `how many`, `which`, or `what profession`, prefer answer-only output."
+            "For pure slot questions such as `when`, `where`, `how many`, `which`, `what profession`, or `what amount`, prefer answer-only output"
         ));
         assert!(prompt.contains(
             "For multi-value extraction questions, return the requested values in the same order as the question instead of collapsing them into a generic summary."
@@ -623,7 +620,47 @@ mod tests {
         assert!(prompt.contains(
             "For paired slot questions such as `when and where`, `age and role`, or several named dates, answer every requested slot in one short answer."
         ));
+        assert!(prompt.contains(
+            "Preserve the source-note language, wording, and value formatting; do not translate or paraphrase an exact span."
+        ));
         assert!(!prompt.contains("Benchmark-specific extraction exemplars:"));
+
+        let abstention_prompt = codex_prompt(
+            &test_context_with_type("abstention"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(abstention_prompt.contains(
+            "For abstention questions, only an explicit statement in a note counts as evidence."
+        ));
+        assert!(abstention_prompt.contains(
+            "If the notes mention the topic, entity, meeting, event, project, or person but do not state the requested detail, answer exactly `insufficient evidence`."
+        ));
+        assert!(abstention_prompt.contains(
+            "Do not infer discussion contents, rationale, criteria, advice, feedback, background, or prior projects from adjacent context."
+        ));
+        assert!(abstention_prompt.contains(
+            "Do not relabel a generic habit, plan, or reminder as a named technique unless the note explicitly does so."
+        ));
+
+        let update_prompt = codex_prompt(
+            &test_context_with_type("knowledge_update"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(update_prompt.contains(
+            "If the notes describe an update event but do not state the resulting current value, answer exactly `insufficient evidence`."
+        ));
+        assert!(update_prompt.contains(
+            "For updates, return only the current or most recently scheduled value explicitly stated in the notes"
+        ));
+        assert!(
+            update_prompt.contains("Do not shorten an updated value to a nearby partial field")
+        );
     }
 
     #[test]
@@ -663,5 +700,19 @@ mod tests {
             "Use `summary.md` as the base note and add only the minimum supporting notes needed to complete the answer."
         ));
         assert!(summary_prompt.contains("/Wiki/run-a/conv-1/summary.md"));
+
+        let extraction_prompt = codex_prompt(
+            &test_context_with_type("information_extraction"),
+            &ResolvedConnection {
+                replica_host: "http://127.0.0.1:8000".to_string(),
+                canister_id: "aaaaa-aa".to_string(),
+            },
+        );
+        assert!(extraction_prompt.contains(
+            "For explanatory extraction questions such as `how did`, `what approach`, `what steps`, or `how did X influence Y`, answer with one short grounded sentence or two short clauses"
+        ));
+        assert!(extraction_prompt.contains(
+            "If the question asks for plural values such as days, dates, or items, include every explicitly listed requested value, not just the first one."
+        ));
     }
 }
