@@ -150,7 +150,61 @@ fn list_and_recent_queries_use_covering_indexes() {
     );
 }
 
+#[test]
+fn list_children_queries_use_path_index_range_scans() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/indexed.md", None, 10);
+    write_file(&store, "/Wiki/nested/child.md", None, 11);
+    let conn = Connection::open(store.database_path()).expect("db should open");
+
+    let direct_plan = explain_query_plan_dynamic(
+        &conn,
+        "SELECT path, kind, updated_at, etag, length(content)
+         FROM fs_nodes
+         WHERE path >= ?1
+           AND path < ?2
+           AND instr(substr(path, ?3), '/') = 0
+         ORDER BY path ASC",
+        &[
+            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
+            &"/Wiki/\u{10ffff}".to_string(),
+            &7_i64,
+        ],
+    );
+    assert!(
+        direct_plan.contains("USING INDEX") && direct_plan.contains("path>? AND path<?"),
+        "direct child query should use path range scan: {direct_plan}"
+    );
+
+    let virtual_plan = explain_query_plan_dynamic(
+        &conn,
+        "SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
+         FROM fs_nodes
+         WHERE path >= ?1
+           AND path < ?2
+           AND instr(substr(path, ?3), '/') > 0
+         ORDER BY 1 ASC",
+        &[
+            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
+            &"/Wiki/\u{10ffff}".to_string(),
+            &7_i64,
+        ],
+    );
+    assert!(
+        virtual_plan.contains("USING") && virtual_plan.contains("path>? AND path<?"),
+        "virtual child query should use path range scan: {virtual_plan}"
+    );
+}
+
 fn explain_query_plan(conn: &Connection, sql: &str, params: [&str; 2]) -> String {
+    explain_query_plan_dynamic(conn, sql, &[&params[0] as &dyn rusqlite::ToSql, &params[1]])
+}
+
+fn explain_query_plan_dynamic(
+    conn: &Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> String {
     conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
         .expect("explain should prepare")
         .query_map(params, |row| row.get::<_, String>(3))
@@ -851,6 +905,46 @@ fn list_children_rejects_non_directory_paths() {
         })
         .expect_err("relative path should be rejected");
     assert_eq!(relative_error, "path must start with '/': Wiki");
+}
+
+#[test]
+fn list_children_collapses_many_descendants_to_direct_entries() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/alpha.md", None, 10);
+    for index in 0..300 {
+        write_file(
+            &store,
+            &format!("/Wiki/bulk-{}/leaf-{}.md", index % 3, index),
+            None,
+            20 + index,
+        );
+    }
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki".to_string(),
+        })
+        .expect("children should list");
+    let paths = children
+        .iter()
+        .map(|child| child.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![
+            "/Wiki/bulk-0",
+            "/Wiki/bulk-1",
+            "/Wiki/bulk-2",
+            "/Wiki/alpha.md"
+        ]
+    );
+    assert_eq!(
+        children
+            .iter()
+            .filter(|child| child.kind == NodeEntryKind::Directory)
+            .count(),
+        3
+    );
 }
 
 fn assert_v5_snapshot_revision_without_state_hash(snapshot_revision: &str) {

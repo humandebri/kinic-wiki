@@ -55,6 +55,20 @@ const SNAPSHOT_SESSION_CURSOR_INVALID: &str = "cursor is invalid for snapshot_se
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
 const SNAPSHOT_SESSION_TTL_SECS: i64 = 300;
+const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
+SELECT path, kind, updated_at, etag, length(content)
+FROM fs_nodes
+WHERE path >= ?1
+  AND path < ?2
+  AND instr(substr(path, ?3), '/') = 0
+ORDER BY path ASC";
+const LIST_VIRTUAL_CHILD_NAMES_SQL: &str = "\
+SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
+FROM fs_nodes
+WHERE path >= ?1
+  AND path < ?2
+  AND instr(substr(path, ?3), '/') > 0
+ORDER BY 1 ASC";
 
 struct ChildRow {
     path: String,
@@ -62,12 +76,6 @@ struct ChildRow {
     updated_at: i64,
     etag: String,
     size_bytes: u64,
-}
-
-#[derive(Default)]
-struct ChildSlot {
-    concrete: Option<ChildRow>,
-    has_descendant: bool,
 }
 
 // Where: crates/vfs_store/src/fs_store.rs
@@ -134,7 +142,8 @@ impl FsStore {
             return Err(format!("not a directory: {path}"));
         }
         let rows = load_child_rows(&conn, &path)?;
-        Ok(build_child_nodes(&path, rows))
+        let virtual_names = load_virtual_child_names(&conn, &path)?;
+        build_child_nodes(&path, rows, virtual_names)
     }
 
     pub fn write_node(
@@ -1119,18 +1128,11 @@ fn normalize_list_children_path(path: &str) -> Result<String, String> {
 }
 
 fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, String> {
-    let mut sql = String::from(
-        "SELECT path, kind, updated_at, etag, length(content)
-         FROM fs_nodes WHERE 1 = 1",
-    );
-    let mut values = Vec::new();
-    if path != "/" {
-        sql.push_str(" AND path LIKE ?1");
-        values.push(rusqlite::types::Value::from(format!("{path}/%")));
-    }
-    sql.push_str(" ORDER BY path ASC");
-    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+    let (prefix, upper, relative_start) = list_child_query_bounds(path);
+    let mut stmt = conn
+        .prepare(LIST_DIRECT_CHILD_ROWS_SQL)
+        .map_err(|error| error.to_string())?;
+    stmt.query_map(params![prefix, upper, relative_start], |row| {
         let size_bytes = row.get::<_, i64>(4)?;
         Ok(ChildRow {
             path: row.get(0)?,
@@ -1145,52 +1147,91 @@ fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, Strin
     .map_err(|error| error.to_string())
 }
 
-fn build_child_nodes(parent_path: &str, rows: Vec<ChildRow>) -> Vec<ChildNode> {
-    let mut slots = BTreeMap::<String, ChildSlot>::new();
+fn load_virtual_child_names(conn: &Connection, path: &str) -> Result<Vec<String>, String> {
+    let (prefix, upper, relative_start) = list_child_query_bounds(path);
+    let mut stmt = conn
+        .prepare(LIST_VIRTUAL_CHILD_NAMES_SQL)
+        .map_err(|error| error.to_string())?;
+    stmt.query_map(params![prefix, upper, relative_start], |row| row.get(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn build_child_nodes(
+    parent_path: &str,
+    rows: Vec<ChildRow>,
+    virtual_names: Vec<String>,
+) -> Result<Vec<ChildNode>, String> {
+    let mut children = BTreeMap::<String, ChildNode>::new();
+
     for row in rows {
-        let Some((name, is_direct)) = child_name(parent_path, &row.path) else {
-            continue;
-        };
-        let slot = slots.entry(name).or_default();
-        if is_direct {
-            slot.concrete = Some(row);
-        } else {
-            slot.has_descendant = true;
+        let (name, is_direct) = child_name(parent_path, &row.path)
+            .ok_or_else(|| format!("invalid child path: {}", row.path))?;
+        if !is_direct {
+            return Err(format!("non-direct child row loaded: {}", row.path));
         }
+        children.insert(
+            name.clone(),
+            ChildNode {
+                path: row.path,
+                name,
+                kind: entry_kind_from_node_kind(&row.kind),
+                updated_at: Some(row.updated_at),
+                etag: Some(row.etag),
+                size_bytes: Some(row.size_bytes),
+                is_virtual: false,
+            },
+        );
+    }
+    for child in build_virtual_child_nodes(parent_path, virtual_names) {
+        children.entry(child.name.clone()).or_insert(child);
     }
 
-    let mut children = slots
-        .into_iter()
-        .map(|(name, slot)| {
-            if let Some(row) = slot.concrete {
-                return ChildNode {
-                    path: row.path,
-                    name,
-                    kind: entry_kind_from_node_kind(&row.kind),
-                    updated_at: Some(row.updated_at),
-                    etag: Some(row.etag),
-                    size_bytes: Some(row.size_bytes),
-                    is_virtual: false,
-                };
-            }
-            ChildNode {
-                path: child_path(parent_path, &name),
-                name,
-                kind: NodeEntryKind::Directory,
-                updated_at: None,
-                etag: None,
-                size_bytes: None,
-                is_virtual: true,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut children = children.into_values().collect::<Vec<_>>();
     children.sort_by(|left, right| match (&left.kind, &right.kind) {
         (NodeEntryKind::Directory, NodeEntryKind::Directory) => left.name.cmp(&right.name),
         (NodeEntryKind::Directory, _) => std::cmp::Ordering::Less,
         (_, NodeEntryKind::Directory) => std::cmp::Ordering::Greater,
         _ => left.name.cmp(&right.name),
     });
-    children
+    Ok(children)
+}
+
+fn build_virtual_child_nodes(parent_path: &str, names: Vec<String>) -> Vec<ChildNode> {
+    names
+        .into_iter()
+        .map(|name| ChildNode {
+            path: child_path(parent_path, &name),
+            name,
+            kind: NodeEntryKind::Directory,
+            updated_at: None,
+            etag: None,
+            size_bytes: None,
+            is_virtual: true,
+        })
+        .collect()
+}
+
+fn child_prefix(parent_path: &str) -> String {
+    if parent_path == "/" {
+        "/".to_string()
+    } else {
+        format!("{parent_path}/")
+    }
+}
+
+fn list_child_query_bounds(parent_path: &str) -> (String, String, i64) {
+    let prefix = child_prefix(parent_path);
+    let upper = prefix_upper_bound(&prefix);
+    // SQLite `substr` is 1-based. Start after the normalized parent prefix so
+    // `instr(relative, '/')` distinguishes direct rows from descendants.
+    let relative_start = (prefix.len() + 1) as i64;
+    (prefix, upper, relative_start)
+}
+
+fn prefix_upper_bound(prefix: &str) -> String {
+    format!("{prefix}\u{10ffff}")
 }
 
 fn child_name(parent_path: &str, path: &str) -> Option<(String, bool)> {

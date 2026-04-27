@@ -22,6 +22,7 @@
 /tmp/
 *.tmp
 *.tsbuildinfo
+.playwright-cli/
 __pycache__/
 *.pyc
 
