@@ -32,5 +32,9 @@ assert.equal(
   hrefForPath("t63gs-up777-77776-aaaba-cai", "/Wiki/demo.md", undefined, "search", "alpha beta"),
   "/site/t63gs-up777-77776-aaaba-cai/Wiki/demo.md?tab=search&q=alpha+beta"
 );
+assert.equal(
+  hrefForPath("t63gs-up777-77776-aaaba-cai", "/Wiki/demo.md", undefined, "search", "alpha beta", "full"),
+  "/site/t63gs-up777-77776-aaaba-cai/Wiki/demo.md?tab=search&q=alpha+beta&kind=full"
+);
 
 console.log(`Path helpers OK: ${pathToFileURL(sourcePath.pathname).pathname}`);

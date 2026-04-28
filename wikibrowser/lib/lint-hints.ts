@@ -5,6 +5,7 @@ export type LintHint = {
   title: string;
   detail: string;
   line: number | null;
+  preview: string | null;
 };
 
 const futurePattern = /\b(deadline|meeting|check-?in|pending|tomorrow|next\s+\w+|will|plan to|scheduled)\b/i;
@@ -34,7 +35,8 @@ function findLineHints(content: string, pattern: RegExp, title: string, detail: 
       severity: "warning",
       title,
       detail,
-      line: entry.index + 1
+      line: entry.index + 1,
+      preview: entry.line.trim()
     }));
 }
 
@@ -47,7 +49,8 @@ function findCodeNoteHints(path: string, content: string): LintHint[] {
         severity: "warning",
         title: "Long code block",
         detail: "Wiki code notes should point to source paths and decisions, not store long implementation copies.",
-        line: firstLineOf(content, block)
+        line: firstLineOf(content, block),
+        preview: block.split("\n").slice(0, 2).join(" ").trim()
       });
       break;
     }
@@ -57,10 +60,25 @@ function findCodeNoteHints(path: string, content: string): LintHint[] {
       severity: "warning",
       title: "Code note lacks decision context",
       detail: "Add Why or Verification so the note records judgment, not just a file pointer.",
-      line: null
+      line: null,
+      preview: firstMatchingLine(content, filePathPattern)
     });
   }
   return hints;
+}
+
+export function rawSourceLinksFor(path: string, content: string): string[] {
+  const links = new Set<string>();
+  if (path.endsWith("/provenance.md")) {
+    for (const line of content.split("\n")) {
+      const sourcePath = line.match(/\/Sources\/raw\/[^\s)`'"]+/)?.[0];
+      if (sourcePath) links.add(sourcePath);
+    }
+  }
+  for (const match of content.matchAll(/\/Sources\/raw\/[^\s)`'"]+/g)) {
+    links.add(match[0]);
+  }
+  return [...links].slice(0, 8);
 }
 
 function isCodeNote(path: string, content: string): boolean {
@@ -73,4 +91,8 @@ function hasDecisionContext(content: string): boolean {
 
 function firstLineOf(content: string, needle: string): number {
   return content.slice(0, content.indexOf(needle)).split("\n").length;
+}
+
+function firstMatchingLine(content: string, pattern: RegExp): string | null {
+  return content.split("\n").find((line) => pattern.test(line))?.trim() ?? null;
 }

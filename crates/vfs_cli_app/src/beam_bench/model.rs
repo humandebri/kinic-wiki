@@ -80,7 +80,7 @@ pub(crate) async fn run_codex_question(
         .arg("--sandbox")
         .arg(context.codex_sandbox)
         .arg("-c")
-        .arg("model_reasoning_effort=\"none\"")
+        .arg("model_reasoning_effort=\"low\"")
         .arg("--output-schema")
         .arg(&schema_path)
         .arg("--model")

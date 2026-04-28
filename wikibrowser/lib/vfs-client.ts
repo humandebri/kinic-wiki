@@ -1,5 +1,6 @@
 import { Actor, HttpAgent } from "@dfinity/agent";
 import { Principal } from "@dfinity/principal";
+import { sortChildNodes } from "@/lib/child-sort";
 import { normalizeSearchHit, type RawSearchHit } from "@/lib/search-normalizer";
 import { idlFactory } from "@/lib/vfs-idl";
 import type { ChildNode, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, WikiNode } from "@/lib/types";
@@ -92,7 +93,7 @@ export async function listChildren(canisterId: string, path: string): Promise<Ch
   if ("Err" in result) {
     throw new Error(result.Err);
   }
-  return result.Ok.map(normalizeChild);
+  return sortChildNodes(result.Ok.map(normalizeChild));
 }
 
 export async function recentNodes(canisterId: string, limit: number): Promise<RecentNode[]> {

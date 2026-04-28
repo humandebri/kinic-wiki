@@ -5,7 +5,14 @@ export function pathFromSegments(segments: string[]): string {
   return `/${segments.join("/")}`;
 }
 
-export function hrefForPath(canisterId: string, path: string, view?: string, tab?: string, searchQuery?: string): string {
+export function hrefForPath(
+  canisterId: string,
+  path: string,
+  view?: string,
+  tab?: string,
+  searchQuery?: string,
+  searchKind?: string
+): string {
   const normalized = path.startsWith("/") ? path.slice(1) : path;
   const suffix = normalized
     .split("/")
@@ -21,6 +28,9 @@ export function hrefForPath(canisterId: string, path: string, view?: string, tab
   }
   if (searchQuery) {
     params.set("q", searchQuery);
+  }
+  if (searchKind) {
+    params.set("kind", searchKind);
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
   return `/site/${encodeURIComponent(canisterId)}/${suffix}${queryString}`;

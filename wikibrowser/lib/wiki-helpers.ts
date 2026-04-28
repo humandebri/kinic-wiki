@@ -3,8 +3,20 @@ import type { ChildNode } from "@/lib/types";
 export type ViewMode = "preview" | "raw";
 export type ModeTab = "explorer" | "search" | "recent" | "lint";
 
-export type LoadState<T> = { data: T | null; error: string | null; loading: boolean };
+export type LoadState<T> = {
+  data: T | null;
+  error: string | null;
+  hint?: string | null;
+  loading: boolean;
+};
 export type PathLoadState<T> = LoadState<T> & { path: string };
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly hint: string | null = null, readonly code: string | null = null) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
   return {
@@ -26,9 +38,26 @@ export async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   const body: unknown = await response.json();
   if (!response.ok) {
-    throw new Error(isErrorBody(body) ? body.error : `request failed: ${response.status}`);
+    throw new ApiError(
+      isErrorBody(body) ? body.error : `request failed: ${response.status}`,
+      response.status,
+      isErrorBody(body) ? body.hint ?? null : null,
+      isErrorBody(body) ? body.code ?? null : null
+    );
   }
   return body as T;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function errorHint(error: unknown): string | null {
+  return error instanceof ApiError ? error.hint : null;
+}
+
+export function isNotFoundError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404;
 }
 
 export function loadingState<T>(path: string): PathLoadState<T> {
@@ -60,11 +89,13 @@ export function extractMarkdownLinks(content: string): string[] {
   return [...links].filter(Boolean).slice(0, 20);
 }
 
-function isErrorBody(value: unknown): value is { error: string } {
+function isErrorBody(value: unknown): value is { error: string; hint?: string; code?: string } {
   return (
     typeof value === "object" &&
     value !== null &&
     "error" in value &&
-    typeof value.error === "string"
+    typeof value.error === "string" &&
+    (!("hint" in value) || typeof value.hint === "string") &&
+    (!("code" in value) || typeof value.code === "string")
   );
 }

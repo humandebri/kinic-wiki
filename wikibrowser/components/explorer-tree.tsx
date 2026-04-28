@@ -5,11 +5,17 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { ChildNode } from "@/lib/types";
-import { apiPath, fetchJson, rootChild, type LoadState } from "@/lib/wiki-helpers";
+import { apiPath, errorMessage, fetchJson, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
-export function ExplorerTree({ canisterId, selectedPath }: { canisterId: string; selectedPath: string }) {
+export function ExplorerTree({
+  canisterId,
+  selectedPath
+}: {
+  canisterId: string;
+  selectedPath: string;
+}) {
   return (
-    <div className="space-y-1 overflow-auto p-2">
+    <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
       <TreeNode canisterId={canisterId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} />
       <TreeNode canisterId={canisterId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} />
     </div>
@@ -43,7 +49,7 @@ function TreeNode({
       })
       .catch((error: Error) => {
         if (!cancelled) {
-          setChildren({ data: null, error: error.message, loading: false });
+          setChildren({ data: null, error: errorMessage(error), loading: false });
           requestedPath.current = null;
         }
       });
@@ -63,11 +69,21 @@ function TreeNode({
       >
         {isDirectory ? <Toggle expanded={expanded} setExpanded={setExpanded} /> : <span className="w-[18px]" />}
         {directoryIcon(isDirectory, expanded)}
-        <Link className="min-w-0 flex-1 truncate no-underline" href={hrefForPath(canisterId, node.path)}>
+        <Link
+          className="min-w-0 flex-1 truncate no-underline"
+          href={hrefForPath(canisterId, node.path)}
+        >
           {node.name}
         </Link>
       </div>
-      {expanded && isDirectory ? <ChildrenList canisterId={canisterId} childrenState={children} depth={depth} selectedPath={selectedPath} /> : null}
+      {expanded && isDirectory ? (
+        <ChildrenList
+          canisterId={canisterId}
+          childrenState={children}
+          depth={depth}
+          selectedPath={selectedPath}
+        />
+      ) : null}
     </div>
   );
 }
@@ -101,7 +117,13 @@ function ChildrenList({
       {!childrenState.data && !childrenState.error ? <TreeStatus depth={depth + 1} label="Loading" /> : null}
       {childrenState.error ? <TreeStatus depth={depth + 1} label={childrenState.error} /> : null}
       {childrenState.data?.map((child) => (
-        <TreeNode key={child.path} canisterId={canisterId} node={child} selectedPath={selectedPath} depth={depth + 1} />
+        <TreeNode
+          key={child.path}
+          canisterId={canisterId}
+          node={child}
+          selectedPath={selectedPath}
+          depth={depth + 1}
+        />
       ))}
     </div>
   );

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Clock } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { RecentNode } from "@/lib/types";
-import { apiPath, fetchJson, type LoadState } from "@/lib/wiki-helpers";
+import { apiPath, errorHint, errorMessage, fetchJson, type LoadState } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
 
 export function RecentPanel({ canisterId }: { canisterId: string }) {
@@ -22,17 +22,17 @@ export function RecentPanel({ canisterId }: { canisterId: string }) {
         if (!cancelled) setRecent({ data, error: null, loading: false });
       })
       .catch((error: Error) => {
-        if (!cancelled) setRecent({ data: null, error: error.message, loading: false });
+        if (!cancelled) setRecent({ data: null, error: errorMessage(error), hint: errorHint(error), loading: false });
       });
     return () => {
       cancelled = true;
     };
   }, [canisterId]);
 
-  if (recent.error) return <div className="p-3"><ErrorBox message={recent.error} /></div>;
-  if (recent.loading) return <p className="p-4 text-sm text-muted">Loading recent nodes</p>;
+  if (recent.error) return <div className="min-h-0 flex-1 p-3"><ErrorBox message={recent.error} hint={recent.hint} /></div>;
+  if (recent.loading) return <p className="min-h-0 flex-1 p-4 text-sm text-muted">Loading recent nodes</p>;
   return (
-    <div className="space-y-2 overflow-auto p-3">
+    <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
       {recent.data?.map((node) => (
         <Link
           key={node.path}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { classifyApiError, invalidCanisterIdError } from "@/lib/api-errors";
 import { validateCanisterId } from "@/lib/vfs-client";
 
 export type RouteParams = Promise<{ canisterId: string }>;
@@ -8,7 +9,7 @@ export function invalidCanisterResponse(canisterId: string): NextResponse | null
   if (typeof result !== "string") {
     return null;
   }
-  return NextResponse.json({ error: `invalid canister id: ${result}` }, { status: 400 });
+  return NextResponse.json(invalidCanisterIdError(result), { status: 400 });
 }
 
 export function missingParam(name: string): NextResponse {
@@ -21,6 +22,6 @@ export function clampLimit(rawValue: string | null, fallback: number): number {
 }
 
 export function handleApiError(error: unknown): NextResponse {
-  const message = error instanceof Error ? error.message : String(error);
-  return NextResponse.json({ error: message }, { status: 502 });
+  const host = process.env.WIKI_IC_HOST ?? "https://icp0.io";
+  return NextResponse.json(classifyApiError(error, host), { status: 502 });
 }

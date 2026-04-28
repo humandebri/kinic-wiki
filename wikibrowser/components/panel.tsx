@@ -7,14 +7,14 @@ export function PanelHeader({
 }: {
   icon: ReactNode;
   title: string;
-  subtitle: string;
+  subtitle?: string;
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-line px-4 py-3">
       <span className="text-accent">{icon}</span>
       <div>
         <h2 className="text-sm font-semibold">{title}</h2>
-        <p className="text-xs text-muted">{subtitle}</p>
+        {subtitle ? <p className="text-xs text-muted">{subtitle}</p> : null}
       </div>
     </div>
   );
@@ -49,6 +49,11 @@ export function Meta({ label, value }: { label: string; value: string | null }) 
   );
 }
 
-export function ErrorBox({ message }: { message: string }) {
-  return <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{message}</div>;
+export function ErrorBox({ message, hint }: { message: string; hint?: string | null }) {
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <p>{message}</p>
+      {hint ? <p className="mt-2 text-xs leading-5 text-red-600">{hint}</p> : null}
+    </div>
+  );
 }
