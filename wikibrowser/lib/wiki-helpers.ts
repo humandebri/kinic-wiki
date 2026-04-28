@@ -1,7 +1,7 @@
 import type { ChildNode } from "@/lib/types";
 
 export type ViewMode = "preview" | "raw";
-export type ModeTab = "explorer" | "search" | "recent" | "lint";
+export type ModeTab = "explorer" | "recent" | "lint";
 
 export type LoadState<T> = {
   data: T | null;
@@ -31,7 +31,7 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
 }
 
 export function apiPath(canisterId: string, endpoint: string, params: URLSearchParams): string {
-  return `/api/site/${encodeURIComponent(canisterId)}/${endpoint}?${params.toString()}`;
+  return `/api/wiki/${encodeURIComponent(canisterId)}/${endpoint}?${params.toString()}`;
 }
 
 export async function fetchJson<T>(url: string): Promise<T> {

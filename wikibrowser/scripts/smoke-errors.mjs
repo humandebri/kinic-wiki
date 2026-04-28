@@ -6,11 +6,7 @@ const canisterId = readCanisterId();
 const smokeWaitMs = 30_000;
 const pollMs = 500;
 
-run("open", [`${baseUrl}/missing-route`]);
-assertSnapshotIncludes("Page not found");
-assertSnapshotIncludes("Open start page");
-
-run("open", [`${baseUrl}/site/${encodeURIComponent(canisterId)}/Wiki/does-not-exist.md`]);
+run("open", [`${baseUrl}/${encodeURIComponent(canisterId)}/Wiki/does-not-exist.md`]);
 assertSnapshotIncludes("No wiki node at this path");
 assertSnapshotIncludes("Search this path");
 

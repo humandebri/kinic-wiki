@@ -1,11 +1,18 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, GitBranch, Info, Sparkles } from "lucide-react";
-import { collectLintHints, rawSourceLinksFor } from "@/lib/lint-hints";
+import { collectLintHints, provenancePathFor, rawSourceLinksFor } from "@/lib/lint-hints";
 import { hrefForPath } from "@/lib/paths";
 import type { ChildNode, WikiNode } from "@/lib/types";
+import { apiPath, fetchJson } from "@/lib/wiki-helpers";
 import { InspectorCard, Meta } from "@/components/panel";
+
+type ProvenanceState = {
+  path: string | null;
+  links: string[];
+};
 
 export function Inspector({
   canisterId,
@@ -25,7 +32,37 @@ export function Inspector({
   const kind = node?.kind ?? "directory";
   const size = node ? `${new TextEncoder().encode(node.content).length}` : null;
   const hints = node ? collectLintHints(path, node.content) : [];
-  const rawSourceLinks = node ? rawSourceLinksFor(path, node.content) : [];
+  const directRawSourceLinks = node ? rawSourceLinksFor(path, node.content) : [];
+  const expectedProvenancePath = node && directRawSourceLinks.length === 0 ? provenancePathFor(path) : null;
+  const [provenance, setProvenance] = useState<ProvenanceState>({ path: null, links: [] });
+  const inferredRawSourceLinks = provenance.path === expectedProvenancePath ? provenance.links : [];
+  const rawSourceLinks = directRawSourceLinks.length > 0 ? directRawSourceLinks : inferredRawSourceLinks;
+  const loadingRawSource = Boolean(expectedProvenancePath && provenance.path !== expectedProvenancePath);
+
+  useEffect(() => {
+    if (!expectedProvenancePath) {
+      return;
+    }
+    let cancelled = false;
+    fetchJson<WikiNode>(apiPath(canisterId, "node", new URLSearchParams({ path: expectedProvenancePath })))
+      .then((provenanceNode) => {
+        if (!cancelled) {
+          setProvenance({
+            path: expectedProvenancePath,
+            links: rawSourceLinksFor(expectedProvenancePath, provenanceNode.content)
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProvenance({ path: expectedProvenancePath, links: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canisterId, expectedProvenancePath]);
+
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
       <InspectorCard title="Identity" icon={<Info size={15} />}>
@@ -80,6 +117,8 @@ export function Inspector({
               </li>
             ))}
           </ul>
+        ) : loadingRawSource ? (
+          <p className="text-xs text-muted">Checking provenance...</p>
         ) : (
           <p className="text-xs text-muted">No raw source path inferred.</p>
         )}

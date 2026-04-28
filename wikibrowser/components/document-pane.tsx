@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { FileText, Folder, Loader2 } from "lucide-react";
-import { hrefForPath } from "@/lib/paths";
+import { hrefForMarkdownLink, hrefForPath, hrefForSearch } from "@/lib/paths";
 import type { ChildNode, WikiNode } from "@/lib/types";
 import type { LoadState, PathLoadState, ViewMode } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
@@ -47,7 +47,7 @@ export function DocumentPane({
   canisterId: string;
 }) {
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
-  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} /></PaneBody>;
+  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} /></PaneBody>;
   if (childrenState.data) {
     return (
       <PaneBody>
@@ -98,7 +98,7 @@ function NotFoundState({
           >
             Open /Sources
           </Link>
-          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForPath(canisterId, "/Wiki", undefined, "search", path.split("/").filter(Boolean).at(-1) ?? path, "path")}>
+          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForSearch(canisterId, path.split("/").filter(Boolean).at(-1) ?? path, "path")}>
             Search this path
           </Link>
         </div>
@@ -107,7 +107,7 @@ function NotFoundState({
   );
 }
 
-function NodeDocument({ node, view }: { node: WikiNode; view: ViewMode }) {
+function NodeDocument({ node, view, canisterId }: { node: WikiNode; view: ViewMode; canisterId: string }) {
   return (
     <article className="h-full overflow-auto px-6 py-6 md:px-10">
       {view === "raw" ? (
@@ -116,7 +116,20 @@ function NodeDocument({ node, view }: { node: WikiNode; view: ViewMode }) {
         </pre>
       ) : (
         <div className="markdown-body mx-auto max-w-3xl">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.content}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a({ href, children, ...props }) {
+                const wikiHref = hrefForMarkdownLink(canisterId, node.path, href);
+                if (!wikiHref) {
+                  return <a href={href} {...props}>{children}</a>;
+                }
+                return <Link href={wikiHref} {...props}>{children}</Link>;
+              }
+            }}
+          >
+            {node.content}
+          </ReactMarkdown>
         </div>
       )}
     </article>

@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 
 const url = readUrl();
 const targetUrl = new URL(url);
-const canisterId = targetUrl.pathname.split("/")[2];
-const nodePath = `/${targetUrl.pathname.split("/").slice(3).join("/")}`;
+const canisterId = targetUrl.pathname.split("/")[1];
+const nodePath = `/${targetUrl.pathname.split("/").slice(2).join("/")}`;
+const searchUrl = `${targetUrl.origin}/${encodeURIComponent(canisterId)}/search`;
 const smokeWaitMs = 30_000;
 const pollMs = 500;
 const targetNode = await readTargetNode();
@@ -16,11 +17,11 @@ run("open", [url]);
 assertSnapshotIncludes(contentProbe);
 run("open", [`${url}?view=raw`]);
 assertSnapshotIncludes(contentProbe);
-run("open", [`${url}?tab=search&q=${encodeURIComponent(pathQuery)}&kind=path`]);
+run("open", [`${searchUrl}?q=${encodeURIComponent(pathQuery)}&kind=path`]);
 assertSnapshotIncludes("path_substring");
-run("open", [`${url}?tab=search&q=${encodeURIComponent(fullQuery)}&kind=full`]);
+run("open", [`${searchUrl}?q=${encodeURIComponent(fullQuery)}&kind=full`]);
 assertSnapshotIncludes("content_fts");
-assertSnapshotIncludes("kind=full");
+assertSnapshotIncludes("Full text");
 run("open", [`${url}?tab=recent`]);
 assertSnapshotIncludes("Recent");
 run("open", [`${url}?tab=lint`]);
@@ -51,7 +52,7 @@ function assertSnapshotIncludes(text) {
 }
 
 async function readTargetNode() {
-  const response = await fetch(`${targetUrl.origin}/api/site/${encodeURIComponent(canisterId)}/node?path=${encodeURIComponent(nodePath)}`);
+  const response = await fetch(`${targetUrl.origin}/api/wiki/${encodeURIComponent(canisterId)}/node?path=${encodeURIComponent(nodePath)}`);
   if (!response.ok) {
     throw new Error(`smoke target node is not readable: ${response.status} ${await response.text()}`);
   }

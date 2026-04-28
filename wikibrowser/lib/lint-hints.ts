@@ -69,6 +69,9 @@ function findCodeNoteHints(path: string, content: string): LintHint[] {
 
 export function rawSourceLinksFor(path: string, content: string): string[] {
   const links = new Set<string>();
+  if (path.startsWith("/Sources/raw/")) {
+    links.add(path);
+  }
   if (path.endsWith("/provenance.md")) {
     for (const line of content.split("\n")) {
       const sourcePath = line.match(/\/Sources\/raw\/[^\s)`'"]+/)?.[0];
@@ -79,6 +82,17 @@ export function rawSourceLinksFor(path: string, content: string): string[] {
     links.add(match[0]);
   }
   return [...links].slice(0, 8);
+}
+
+export function provenancePathFor(path: string): string | null {
+  if (!path.startsWith("/Wiki/") || path.endsWith("/provenance.md")) {
+    return null;
+  }
+  const index = path.lastIndexOf("/");
+  if (index <= 0) {
+    return null;
+  }
+  return `${path.slice(0, index)}/provenance.md`;
 }
 
 function isCodeNote(path: string, content: string): boolean {

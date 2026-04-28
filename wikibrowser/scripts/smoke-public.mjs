@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 const baseUrl = readRequiredArg("--base-url", "WIKI_BROWSER_PUBLIC_BASE_URL").replace(/\/$/, "");
 const canisterId = readRequiredArg("--canister-id", "WIKI_BROWSER_PUBLIC_CANISTER_ID");
 const path = normalizePath(readRequiredArg("--path", "WIKI_BROWSER_PUBLIC_PATH"));
-const nodeUrl = `${baseUrl}/site/${encodeURIComponent(canisterId)}${path}`;
+const nodeUrl = `${baseUrl}/${encodeURIComponent(canisterId)}${path}`;
 
 runNodeScript("scripts/smoke-ui.mjs", ["--url", nodeUrl]);
 runNodeScript("scripts/smoke-errors.mjs", ["--base-url", baseUrl, "--canister-id", canisterId]);

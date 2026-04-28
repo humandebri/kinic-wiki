@@ -13,7 +13,7 @@ pnpm dev
 Open a canister with:
 
 ```text
-http://localhost:3000/site/<canister-id>/Wiki
+http://localhost:3000/<canister-id>/Wiki
 ```
 
 `WIKI_IC_HOST` controls the agent host:
@@ -60,7 +60,7 @@ pnpm dev
 Run the browser smoke against an existing file node:
 
 ```bash
-pnpm smoke -- --url http://127.0.0.1:3000/site/<canister-id>/Wiki/<existing-file>.md
+pnpm smoke -- --url http://127.0.0.1:3000/<canister-id>/Wiki/<existing-file>.md
 ```
 
 The URL must point to a readable file node. Directory paths and missing files intentionally fail.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const { collectLintHints, rawSourceLinksFor } = await importTs("../lib/lint-hints.ts");
+const { collectLintHints, provenancePathFor, rawSourceLinksFor } = await importTs("../lib/lint-hints.ts");
 const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 
@@ -24,6 +24,12 @@ assert.deepEqual(
   rawSourceLinksFor("/Wiki/demo/provenance.md", "- Raw: /Sources/raw/demo/source.md\n- Raw: /Sources/raw/demo/source.md"),
   ["/Sources/raw/demo/source.md"]
 );
+assert.deepEqual(
+  rawSourceLinksFor("/Sources/raw/demo/source.md", "# Raw"),
+  ["/Sources/raw/demo/source.md"]
+);
+assert.equal(provenancePathFor("/Wiki/demo/facts.md"), "/Wiki/demo/provenance.md");
+assert.equal(provenancePathFor("/Wiki/demo/provenance.md"), null);
 
 const sortedChildren = sortChildNodes([
   child("/Wiki/10.md", "10.md", "file"),

@@ -12,7 +12,7 @@ import { LintPanel } from "@/components/lint-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
 import { SearchPanel } from "@/components/search-panel";
-import { hrefForPath } from "@/lib/paths";
+import { hrefForPath, hrefForSearch } from "@/lib/paths";
 import type { ChildNode, WikiNode } from "@/lib/types";
 import {
   apiPath,
@@ -38,10 +38,11 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const selectedPath = useMemo(() => pathFromSitePathname(canisterId, pathname), [canisterId, pathname]);
+  const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, pathname), [canisterId, pathname]);
+  const selectedPath = useMemo(() => isSearchPage ? "/Wiki" : pathFromBrowserPathname(canisterId, pathname), [canisterId, isSearchPage, pathname]);
   const view = parseView(searchParams.get("view"));
   const tab = parseTab(searchParams.get("tab"));
-  const query = searchParams.get("q") ?? "";
+  const query = isSearchPage ? searchParams.get("q") ?? "" : "";
   const searchKind = parseSearchKind(searchParams.get("kind"));
   const [node, setNode] = useState<PathLoadState<WikiNode>>(loadingState(selectedPath));
   const [childNodes, setChildNodes] = useState<PathLoadState<ChildNode[]>>(loadingState(selectedPath));
@@ -98,11 +99,10 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
     <main className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <TopBar
         canisterId={canisterId}
-        selectedPath={selectedPath}
         query={query}
         searchKind={searchKind}
       />
-      <section className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+      <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
           <PanelHeader icon={<GitBranch size={15} />} title={tabTitle(tab)} />
           <ModeTabs canisterId={canisterId} selectedPath={selectedPath} tab={tab} />
@@ -110,38 +110,44 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
             tab={tab}
             canisterId={canisterId}
             selectedPath={selectedPath}
-            query={query}
-            searchKind={searchKind}
             node={currentNode.data}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
-          <DocumentHeader
-            path={selectedPath}
-            view={view}
-            onViewChange={(nextView) => {
-              router.replace(hrefForPath(canisterId, selectedPath, nextView, tab, query, searchKind));
-            }}
-            isDirectory={!currentNode.data && Boolean(currentChildren.data)}
-          />
-          <DocumentPane
-            node={currentNode}
-            childrenState={currentChildren}
-            view={view}
-            canisterId={canisterId}
-          />
+          {isSearchPage ? (
+            <SearchPanel canisterId={canisterId} query={query} initialKind={searchKind} />
+          ) : (
+            <>
+              <DocumentHeader
+                path={selectedPath}
+                view={view}
+                onViewChange={(nextView) => {
+                  router.replace(hrefForPath(canisterId, selectedPath, nextView, tab));
+                }}
+                isDirectory={!currentNode.data && Boolean(currentChildren.data)}
+              />
+              <DocumentPane
+                node={currentNode}
+                childrenState={currentChildren}
+                view={view}
+                canisterId={canisterId}
+              />
+            </>
+          )}
         </section>
-        <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
-          <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
-          <Inspector
-            canisterId={canisterId}
-            path={selectedPath}
-            node={currentNode.data}
-            childNodes={currentChildren.data ?? []}
-            noteRole={noteRole}
-            outgoingLinks={outgoingLinks}
-          />
-        </aside>
+        {!isSearchPage ? (
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
+            <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
+            <Inspector
+              canisterId={canisterId}
+              path={selectedPath}
+              node={currentNode.data}
+              childNodes={currentChildren.data ?? []}
+              noteRole={noteRole}
+              outgoingLinks={outgoingLinks}
+            />
+          </aside>
+        ) : null}
       </section>
     </main>
   );
@@ -151,27 +157,13 @@ function LeftPane({
   tab,
   canisterId,
   selectedPath,
-  query,
-  searchKind,
   node
 }: {
   tab: ModeTab;
   canisterId: string;
   selectedPath: string;
-  query: string;
-  searchKind: "path" | "full";
   node: WikiNode | null;
 }) {
-  if (tab === "search") {
-    return (
-      <SearchPanel
-        canisterId={canisterId}
-        selectedPath={selectedPath}
-        query={query}
-        initialKind={searchKind}
-      />
-    );
-  }
   if (tab === "recent") return <RecentPanel canisterId={canisterId} />;
   if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} />;
   return <ExplorerTree canisterId={canisterId} selectedPath={selectedPath} />;
@@ -179,12 +171,10 @@ function LeftPane({
 
 function TopBar({
   canisterId,
-  selectedPath,
   query,
   searchKind
 }: {
   canisterId: string;
-  selectedPath: string;
   query: string;
   searchKind: "path" | "full";
 }) {
@@ -195,7 +185,7 @@ function TopBar({
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
       </div>
       <div className="flex min-w-0 flex-1 items-center justify-end">
-        <HeaderSearch canisterId={canisterId} selectedPath={selectedPath} query={query} searchKind={searchKind} />
+        <HeaderSearch canisterId={canisterId} query={query} searchKind={searchKind} />
       </div>
     </header>
   );
@@ -203,12 +193,10 @@ function TopBar({
 
 function HeaderSearch({
   canisterId,
-  selectedPath,
   query,
   searchKind
 }: {
   canisterId: string;
-  selectedPath: string;
   query: string;
   searchKind: "path" | "full";
 }) {
@@ -220,7 +208,7 @@ function HeaderSearch({
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    router.replace(hrefForPath(canisterId, selectedPath, undefined, "search", text.trim(), kind));
+    router.replace(hrefForSearch(canisterId, text.trim(), kind));
   }
 
   return (
@@ -283,14 +271,13 @@ function ModeTabs({
 }
 
 function tabTitle(tab: ModeTab): string {
-  if (tab === "search") return "Results";
   if (tab === "recent") return "Recent";
   if (tab === "lint") return "Lint Hints";
   return "Explorer";
 }
 
 function parseTab(value: string | null): ModeTab {
-  if (value === "search" || value === "recent" || value === "lint" || value === "explorer") {
+  if (value === "recent" || value === "lint" || value === "explorer") {
     return value;
   }
   return "explorer";
@@ -309,8 +296,12 @@ function looksLikeFilePath(path: string): boolean {
   return /\.[A-Za-z0-9]+$/.test(name);
 }
 
-function pathFromSitePathname(canisterId: string, pathname: string): string {
-  const prefix = `/site/${encodeURIComponent(canisterId)}/`;
+function pathFromBrowserPathname(canisterId: string, pathname: string): string {
+  const canisterPath = `/${encodeURIComponent(canisterId)}`;
+  if (pathname === canisterPath) {
+    return "/Wiki";
+  }
+  const prefix = `${canisterPath}/`;
   if (!pathname.startsWith(prefix)) {
     return "/Wiki";
   }
@@ -321,6 +312,10 @@ function pathFromSitePathname(canisterId: string, pathname: string): string {
     .map(decodePathSegment)
     .join("/");
   return path ? `/${path}` : "/Wiki";
+}
+
+function isBrowserSearchPathname(canisterId: string, pathname: string): boolean {
+  return pathname === `/${encodeURIComponent(canisterId)}/search`;
 }
 
 function decodePathSegment(segment: string): string {

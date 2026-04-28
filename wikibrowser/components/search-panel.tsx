@@ -19,19 +19,17 @@ type SearchState = {
 
 export function SearchPanel({
   canisterId,
-  selectedPath,
   query,
   initialKind
 }: {
   canisterId: string;
-  selectedPath: string;
   query: string;
   initialKind: SearchKind;
 }) {
   const latestRequest = useRef(0);
   const lastRequestedKey = useRef<string | null>(null);
   const urlQuery = query.trim();
-  const urlSearchKey = searchKey(canisterId, selectedPath, urlQuery, initialKind);
+  const urlSearchKey = searchKey(canisterId, urlQuery, initialKind);
   const [searchState, setSearchState] = useState<SearchState>({
     key: null,
     results: [],
@@ -51,7 +49,7 @@ export function SearchPanel({
     const requestId = latestRequest.current + 1;
     latestRequest.current = requestId;
     const endpoint = searchKind === "path" ? "search-path" : "search";
-    const params = new URLSearchParams({ q: searchText, limit: "20", prefix: rootPrefix(selectedPath) });
+    const params = new URLSearchParams({ q: searchText, limit: "20", prefix: "/Wiki" });
     if (syncState) {
       setSearchState({ key: requestKey, results: [], error: null, hint: null, loading: true, hasSearched: true });
     }
@@ -73,7 +71,7 @@ export function SearchPanel({
           });
         }
       });
-  }, [canisterId, selectedPath]);
+  }, [canisterId]);
 
   useEffect(() => {
     if (!urlQuery) {
@@ -86,36 +84,39 @@ export function SearchPanel({
   }, [initialKind, startSearch, urlQuery, urlSearchKey]);
 
   return (
-    <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
-      {!urlQuery && !error ? <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">Use the header search.</p> : null}
-      {error ? <ErrorBox message={error} hint={isCurrentSearchState ? searchState.hint : null} /> : null}
-      {loading ? <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">Searching wiki...</p> : null}
-      {!loading && hasSearched && !error && results.length === 0 ? (
-        <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">No results.</p>
-      ) : null}
-      <div className="space-y-2">
-        {results.map((hit) => (
-          <Link
-            key={`${hit.path}-${hit.score}`}
-            href={hrefForPath(canisterId, hit.path)}
-            className="block rounded-xl border border-line bg-white p-3 text-sm no-underline hover:border-accent"
-          >
-            <div className="truncate font-mono text-xs text-accent">{hit.path}</div>
-            <div className="mt-1 text-xs text-muted">{hit.matchReasons.join(", ") || hit.kind}</div>
-            {hit.preview?.excerpt || hit.snippet ? (
-              <p className="mt-2 line-clamp-3 text-xs text-ink">{hit.preview?.excerpt ?? hit.snippet}</p>
-            ) : null}
-          </Link>
-        ))}
+    <div className="min-h-0 flex-1 overflow-auto p-5">
+      <div className="mx-auto flex max-w-4xl flex-col gap-3">
+        <div className="border-b border-line pb-4">
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Search</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.04em]">Wiki search</h2>
+          <p className="mt-1 text-sm text-muted">{initialKind === "path" ? "Path" : "Full text"} in /Wiki</p>
+        </div>
+        {!urlQuery && !error ? <p className="rounded-xl border border-line bg-paper p-4 text-sm text-muted">Use the header search.</p> : null}
+        {error ? <ErrorBox message={error} hint={isCurrentSearchState ? searchState.hint : null} /> : null}
+        {loading ? <p className="rounded-xl border border-line bg-paper p-4 text-sm text-muted">Searching wiki...</p> : null}
+        {!loading && hasSearched && !error && results.length === 0 ? (
+          <p className="rounded-xl border border-line bg-paper p-4 text-sm text-muted">No results.</p>
+        ) : null}
+        <div className="space-y-2">
+          {results.map((hit) => (
+            <Link
+              key={`${hit.path}-${hit.score}`}
+              href={hrefForPath(canisterId, hit.path)}
+              className="block rounded-xl border border-line bg-white p-3 text-sm no-underline hover:border-accent"
+            >
+              <div className="truncate font-mono text-xs text-accent">{hit.path}</div>
+              <div className="mt-1 text-xs text-muted">{hit.matchReasons.join(", ") || hit.kind}</div>
+              {hit.preview?.excerpt || hit.snippet ? (
+                <p className="mt-2 line-clamp-3 text-xs text-ink">{hit.preview?.excerpt ?? hit.snippet}</p>
+              ) : null}
+            </Link>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function rootPrefix(path: string): string {
-  return path.startsWith("/Sources") ? "/Sources" : "/Wiki";
-}
-
-function searchKey(canisterId: string, selectedPath: string, searchText: string, searchKind: SearchKind): string {
-  return `${canisterId}\n${selectedPath}\n${searchKind}\n${searchText}`;
+function searchKey(canisterId: string, searchText: string, searchKind: SearchKind): string {
+  return `${canisterId}\n${searchKind}\n${searchText}`;
 }
