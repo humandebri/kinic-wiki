@@ -28,3 +28,20 @@ export type RecentNode = {
   etag: string;
 };
 
+export type SearchPreviewField = "path" | "content";
+
+export type SearchPreview = {
+  field: SearchPreviewField;
+  charOffset: number;
+  matchReason: string;
+  excerpt: string | null;
+};
+
+export type SearchNodeHit = {
+  path: string;
+  kind: NodeKind;
+  snippet: string | null;
+  preview: SearchPreview | null;
+  score: number;
+  matchReasons: string[];
+};

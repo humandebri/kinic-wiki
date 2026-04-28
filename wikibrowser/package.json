@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs",
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

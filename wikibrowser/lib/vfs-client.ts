@@ -1,7 +1,8 @@
 import { Actor, HttpAgent } from "@dfinity/agent";
 import { Principal } from "@dfinity/principal";
+import { normalizeSearchHit, type RawSearchHit } from "@/lib/search-normalizer";
 import { idlFactory } from "@/lib/vfs-idl";
-import type { ChildNode, NodeEntryKind, NodeKind, RecentNode, WikiNode } from "@/lib/types";
+import type { ChildNode, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, WikiNode } from "@/lib/types";
 
 type Variant = Record<string, null>;
 
@@ -38,6 +39,17 @@ type VfsActor = {
   recent_nodes: (request: { path: [] | [string]; limit: number }) => Promise<
     { Ok: RawRecent[] } | { Err: string }
   >;
+  search_node_paths: (request: {
+    query_text: string;
+    prefix: [] | [string];
+    top_k: number;
+  }) => Promise<{ Ok: RawSearchHit[] } | { Err: string }>;
+  search_nodes: (request: {
+    query_text: string;
+    prefix: [] | [string];
+    top_k: number;
+    preview_mode: [] | [Variant];
+  }) => Promise<{ Ok: RawSearchHit[] } | { Err: string }>;
 };
 
 export function validateCanisterId(canisterId: string): Principal | string {
@@ -95,6 +107,43 @@ export async function recentNodes(canisterId: string, limit: number): Promise<Re
     updatedAt: node.updated_at.toString(),
     etag: node.etag
   }));
+}
+
+export async function searchNodePaths(
+  canisterId: string,
+  queryText: string,
+  limit: number,
+  prefix: string | null
+): Promise<SearchNodeHit[]> {
+  const actor = await createVfsActor(canisterId);
+  const result = await actor.search_node_paths({
+    query_text: queryText,
+    prefix: prefix ? [prefix] : [],
+    top_k: limit
+  });
+  if ("Err" in result) {
+    throw new Error(result.Err);
+  }
+  return result.Ok.map(normalizeSearchHit);
+}
+
+export async function searchNodes(
+  canisterId: string,
+  queryText: string,
+  limit: number,
+  prefix: string | null
+): Promise<SearchNodeHit[]> {
+  const actor = await createVfsActor(canisterId);
+  const result = await actor.search_nodes({
+    query_text: queryText,
+    prefix: prefix ? [prefix] : [],
+    top_k: limit,
+    preview_mode: [{ Light: null }]
+  });
+  if ("Err" in result) {
+    throw new Error(result.Err);
+  }
+  return result.Ok.map(normalizeSearchHit);
 }
 
 function normalizeNode(raw: RawNode): WikiNode {

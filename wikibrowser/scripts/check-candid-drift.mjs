@@ -1,98 +1,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { didTypeAliases, expectedMethods, expectedTypes } from "./candid-shapes.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
 const did = readFileSync(join(root, "crates", "vfs_canister", "vfs.did"), "utf8");
 const idl = readFileSync(join(here, "..", "lib", "vfs-idl.ts"), "utf8");
-
-const expectedTypes = {
-  ChildNode: {
-    kind: "record",
-    fields: {
-      updated_at: "opt int64",
-      etag: "opt text",
-      kind: "NodeEntryKind",
-      name: "text",
-      size_bytes: "opt nat64",
-      path: "text",
-      is_virtual: "bool"
-    }
-  },
-  ListChildrenRequest: {
-    kind: "record",
-    fields: { path: "text" }
-  },
-  Node: {
-    kind: "record",
-    fields: {
-      updated_at: "int64",
-      content: "text",
-      etag: "text",
-      kind: "NodeKind",
-      path: "text",
-      created_at: "int64",
-      metadata_json: "text"
-    }
-  },
-  NodeEntryKind: {
-    kind: "variant",
-    cases: { File: "null", Source: "null", Directory: "null" }
-  },
-  NodeKind: {
-    kind: "variant",
-    cases: { File: "null", Source: "null" }
-  },
-  RecentNodeHit: {
-    kind: "record",
-    fields: {
-      updated_at: "int64",
-      etag: "text",
-      kind: "NodeKind",
-      path: "text"
-    }
-  },
-  RecentNodesRequest: {
-    kind: "record",
-    fields: { path: "opt text", limit: "nat32" }
-  },
-  ResultChildren: {
-    kind: "variant",
-    cases: { Ok: "vec ChildNode", Err: "text" }
-  },
-  ResultNode: {
-    kind: "variant",
-    cases: { Ok: "opt Node", Err: "text" }
-  },
-  ResultRecent: {
-    kind: "variant",
-    cases: { Ok: "vec RecentNodeHit", Err: "text" }
-  }
-};
-const didTypeAliases = {
-  ResultChildren: "Result_6",
-  ResultNode: "Result_10",
-  ResultRecent: "Result_11"
-};
-
-const expectedMethods = {
-  list_children: {
-    input: ["ListChildrenRequest"],
-    output: "ResultChildren",
-    mode: "query"
-  },
-  read_node: {
-    input: ["text"],
-    output: "ResultNode",
-    mode: "query"
-  },
-  recent_nodes: {
-    input: ["RecentNodesRequest"],
-    output: "ResultRecent",
-    mode: "query"
-  }
-};
 
 const didTypes = parseDidTypes(did);
 const didMethods = parseDidMethods(did);
@@ -243,6 +157,7 @@ function normalizeIdlShape(value) {
     .replace(/^Int64$/, "int64")
     .replace(/^Nat64$/, "nat64")
     .replace(/^Nat32$/, "nat32")
+    .replace(/^Float32$/, "float32")
     .replace(/^Bool$/, "bool")
     .replace(/^Null$/, "null")
     .replace(/^Opt\((.+)\)$/, (_, inner) => `opt ${normalizeIdlShape(inner)}`)
@@ -270,6 +185,7 @@ function normalizeResultAlias(value) {
   if (normalized === "Result_6") return "ResultChildren";
   if (normalized === "Result_10") return "ResultNode";
   if (normalized === "Result_11") return "ResultRecent";
+  if (normalized === "Result_12") return "ResultSearch";
   return normalized;
 }
 

@@ -5,15 +5,25 @@ export function pathFromSegments(segments: string[]): string {
   return `/${segments.join("/")}`;
 }
 
-export function hrefForPath(canisterId: string, path: string, view?: string): string {
+export function hrefForPath(canisterId: string, path: string, view?: string, tab?: string, searchQuery?: string): string {
   const normalized = path.startsWith("/") ? path.slice(1) : path;
   const suffix = normalized
     .split("/")
     .filter(Boolean)
     .map(encodeURIComponent)
     .join("/");
-  const query = view === "raw" ? "?view=raw" : "";
-  return `/site/${encodeURIComponent(canisterId)}/${suffix}${query}`;
+  const params = new URLSearchParams();
+  if (view === "raw") {
+    params.set("view", "raw");
+  }
+  if (tab) {
+    params.set("tab", tab);
+  }
+  if (searchQuery) {
+    params.set("q", searchQuery);
+  }
+  const queryString = params.size > 0 ? `?${params.toString()}` : "";
+  return `/site/${encodeURIComponent(canisterId)}/${suffix}${queryString}`;
 }
 
 export function parentPath(path: string): string | null {

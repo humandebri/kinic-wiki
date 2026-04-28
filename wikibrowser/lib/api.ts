@@ -15,6 +15,11 @@ export function missingParam(name: string): NextResponse {
   return NextResponse.json({ error: `missing ${name}` }, { status: 400 });
 }
 
+export function clampLimit(rawValue: string | null, fallback: number): number {
+  const rawLimit = Number.parseInt(rawValue ?? String(fallback), 10);
+  return Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : fallback;
+}
+
 export function handleApiError(error: unknown): NextResponse {
   const message = error instanceof Error ? error.message : String(error);
   return NextResponse.json({ error: message }, { status: 502 });
