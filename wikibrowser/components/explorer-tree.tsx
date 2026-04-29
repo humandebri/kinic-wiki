@@ -5,19 +5,21 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { ChildNode } from "@/lib/types";
-import { apiPath, errorMessage, fetchJson, rootChild, type LoadState } from "@/lib/wiki-helpers";
+import { errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
 export function ExplorerTree({
   canisterId,
-  selectedPath
+  selectedPath,
+  autoExpandSelected = true
 }: {
   canisterId: string;
   selectedPath: string;
+  autoExpandSelected?: boolean;
 }) {
   return (
     <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
-      <TreeNode canisterId={canisterId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} />
-      <TreeNode canisterId={canisterId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} />
+      <TreeNode canisterId={canisterId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
+      <TreeNode canisterId={canisterId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
     </div>
   );
 }
@@ -26,14 +28,16 @@ function TreeNode({
   canisterId,
   node,
   selectedPath,
-  depth
+  depth,
+  autoExpandSelected
 }: {
   canisterId: string;
   node: ChildNode;
   selectedPath: string;
   depth: number;
+  autoExpandSelected: boolean;
 }) {
-  const [expanded, setExpanded] = useState(node.path === selectedPath || selectedPath.startsWith(`${node.path}/`));
+  const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
   const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
   const requestedPath = useRef<string | null>(null);
   const isDirectory = node.kind === "directory";
@@ -43,7 +47,8 @@ function TreeNode({
     if (!expanded || !isDirectory || children.data || children.error || requestedPath.current === node.path) return;
     let cancelled = false;
     requestedPath.current = node.path;
-    fetchJson<ChildNode[]>(apiPath(canisterId, "children", new URLSearchParams({ path: node.path })))
+    import("@/lib/vfs-client")
+      .then(({ listChildren }) => listChildren(canisterId, node.path))
       .then((data) => {
         if (!cancelled) setChildren({ data, error: null, loading: false });
       })
@@ -82,6 +87,7 @@ function TreeNode({
           childrenState={children}
           depth={depth}
           selectedPath={selectedPath}
+          autoExpandSelected={autoExpandSelected}
         />
       ) : null}
     </div>
@@ -105,12 +111,14 @@ function ChildrenList({
   canisterId,
   childrenState,
   depth,
-  selectedPath
+  selectedPath,
+  autoExpandSelected
 }: {
   canisterId: string;
   childrenState: LoadState<ChildNode[]>;
   depth: number;
   selectedPath: string;
+  autoExpandSelected: boolean;
 }) {
   return (
     <div>
@@ -123,6 +131,7 @@ function ChildrenList({
           node={child}
           selectedPath={selectedPath}
           depth={depth + 1}
+          autoExpandSelected={autoExpandSelected}
         />
       ))}
     </div>

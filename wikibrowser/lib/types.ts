@@ -28,6 +28,21 @@ export type RecentNode = {
   etag: string;
 };
 
+export type LinkEdge = {
+  sourcePath: string;
+  targetPath: string;
+  rawHref: string;
+  linkText: string;
+  linkKind: string;
+  updatedAt: string;
+};
+
+export type NodeContext = {
+  node: WikiNode;
+  incomingLinks: LinkEdge[];
+  outgoingLinks: LinkEdge[];
+};
+
 export type SearchPreviewField = "path" | "content";
 
 export type SearchPreview = {

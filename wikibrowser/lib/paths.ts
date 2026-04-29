@@ -33,7 +33,7 @@ export function hrefForPath(
     params.set("kind", searchKind);
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
-  return `/${encodeURIComponent(canisterId)}/${suffix}${queryString}`;
+  return `/w/${encodeURIComponent(canisterId)}/${suffix}${queryString}`;
 }
 
 export function hrefForSearch(canisterId: string, searchQuery: string, searchKind: string): string {
@@ -45,7 +45,19 @@ export function hrefForSearch(canisterId: string, searchQuery: string, searchKin
     params.set("kind", searchKind);
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
-  return `/${encodeURIComponent(canisterId)}/search${queryString}`;
+  return `/w/${encodeURIComponent(canisterId)}/search${queryString}`;
+}
+
+export function hrefForGraph(canisterId: string, centerPath?: string | null, depth?: number): string {
+  const params = new URLSearchParams();
+  if (centerPath) {
+    params.set("center", centerPath);
+  }
+  if (depth && depth !== 1) {
+    params.set("depth", String(depth));
+  }
+  const queryString = params.size > 0 ? `?${params.toString()}` : "";
+  return `/w/${encodeURIComponent(canisterId)}/graph${queryString}`;
 }
 
 export function hrefForMarkdownLink(canisterId: string, currentPath: string, href: string | undefined): string | null {

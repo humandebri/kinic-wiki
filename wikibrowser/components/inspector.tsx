@@ -5,21 +5,21 @@ import Link from "next/link";
 import { AlertTriangle, GitBranch, Info, Sparkles } from "lucide-react";
 import { collectLintHints, provenancePathFor, rawSourceLinksFor } from "@/lib/lint-hints";
 import { hrefForPath } from "@/lib/paths";
-import type { ChildNode, WikiNode } from "@/lib/types";
-import { apiPath, fetchJson } from "@/lib/wiki-helpers";
+import type { ChildNode, LinkEdge, WikiNode } from "@/lib/types";
 import { InspectorCard, Meta } from "@/components/panel";
 
 type ProvenanceState = {
   path: string | null;
   links: string[];
 };
-
 export function Inspector({
   canisterId,
   path,
   node,
   childNodes,
   noteRole,
+  incomingLinks,
+  incomingError,
   outgoingLinks
 }: {
   canisterId: string;
@@ -27,7 +27,9 @@ export function Inspector({
   node: WikiNode | null;
   childNodes: ChildNode[];
   noteRole: string;
-  outgoingLinks: string[];
+  incomingLinks: LinkEdge[] | null;
+  incomingError?: string | null;
+  outgoingLinks: LinkEdge[];
 }) {
   const kind = node?.kind ?? "directory";
   const size = node ? `${new TextEncoder().encode(node.content).length}` : null;
@@ -44,12 +46,13 @@ export function Inspector({
       return;
     }
     let cancelled = false;
-    fetchJson<WikiNode>(apiPath(canisterId, "node", new URLSearchParams({ path: expectedProvenancePath })))
+    import("@/lib/vfs-client")
+      .then(({ readNode }) => readNode(canisterId, expectedProvenancePath))
       .then((provenanceNode) => {
         if (!cancelled) {
           setProvenance({
             path: expectedProvenancePath,
-            links: rawSourceLinksFor(expectedProvenancePath, provenanceNode.content)
+            links: provenanceNode ? rawSourceLinksFor(expectedProvenancePath, provenanceNode.content) : []
           });
         }
       })
@@ -94,16 +97,39 @@ export function Inspector({
       <InspectorCard title="Outgoing Links" icon={<GitBranch size={15} />}>
         {outgoingLinks.length > 0 ? (
           <ul className="space-y-1">
-            {outgoingLinks.map((link) => (
-              <li key={link} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={linkHref(canisterId, link)}>
-                  {link}
+            {outgoingLinks.map((edge) => (
+              <li key={`${edge.targetPath}-${edge.rawHref}`} className="truncate font-mono text-xs">
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, edge.targetPath)}>
+                  {edge.targetPath}
                 </Link>
+                <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-muted">No markdown links detected.</p>
+          <p className="text-xs text-muted">No outgoing links indexed.</p>
+        )}
+      </InspectorCard>
+      <InspectorCard title="Incoming Links" icon={<GitBranch size={15} />}>
+        {!node ? (
+          <p className="text-xs text-muted">Select a file node to inspect backlinks.</p>
+        ) : incomingLinks === null ? (
+          <p className="text-xs text-muted">Loading backlinks...</p>
+        ) : incomingError ? (
+          <p className="text-xs text-red-700">{incomingError}</p>
+        ) : incomingLinks.length > 0 ? (
+          <ul className="space-y-1">
+            {incomingLinks.map((edge) => (
+              <li key={`${edge.sourcePath}-${edge.rawHref}`} className="truncate font-mono text-xs">
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, edge.sourcePath)}>
+                  {edge.sourcePath}
+                </Link>
+                <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted">No backlinks indexed.</p>
         )}
       </InspectorCard>
       <InspectorCard title="Raw Source" icon={<GitBranch size={15} />}>
@@ -125,14 +151,4 @@ export function Inspector({
       </InspectorCard>
     </div>
   );
-}
-
-function linkHref(canisterId: string, link: string): string {
-  if (link.startsWith("/Wiki") || link.startsWith("/Sources")) {
-    return hrefForPath(canisterId, link);
-  }
-  if (link.startsWith("http://") || link.startsWith("https://")) {
-    return link;
-  }
-  return hrefForPath(canisterId, `/Wiki/${link.replace(/^\/+/, "")}`);
 }

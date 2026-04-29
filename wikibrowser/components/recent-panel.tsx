@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Clock } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { RecentNode } from "@/lib/types";
-import { apiPath, errorHint, errorMessage, fetchJson, type LoadState } from "@/lib/wiki-helpers";
+import { errorHint, errorMessage, type LoadState } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
 
 export function RecentPanel({ canisterId }: { canisterId: string }) {
@@ -17,7 +17,8 @@ export function RecentPanel({ canisterId }: { canisterId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchJson<RecentNode[]>(apiPath(canisterId, "recent", new URLSearchParams({ limit: "30" })))
+    import("@/lib/vfs-client")
+      .then(({ recentNodes }) => recentNodes(canisterId, 30))
       .then((data) => {
         if (!cancelled) setRecent({ data, error: null, loading: false });
       })

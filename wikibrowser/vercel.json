@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/w/:segments*",
+      "destination": "/w"
+    }
+  ]
+}

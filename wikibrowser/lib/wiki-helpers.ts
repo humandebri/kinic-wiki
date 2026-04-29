@@ -30,24 +30,6 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
   };
 }
 
-export function apiPath(canisterId: string, endpoint: string, params: URLSearchParams): string {
-  return `/api/wiki/${encodeURIComponent(canisterId)}/${endpoint}?${params.toString()}`;
-}
-
-export async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  const body: unknown = await response.json();
-  if (!response.ok) {
-    throw new ApiError(
-      isErrorBody(body) ? body.error : `request failed: ${response.status}`,
-      response.status,
-      isErrorBody(body) ? body.hint ?? null : null,
-      isErrorBody(body) ? body.code ?? null : null
-    );
-  }
-  return body as T;
-}
-
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -87,15 +69,4 @@ export function extractMarkdownLinks(content: string): string[] {
     links.add(match[1] ?? "");
   }
   return [...links].filter(Boolean).slice(0, 20);
-}
-
-function isErrorBody(value: unknown): value is { error: string; hint?: string; code?: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "error" in value &&
-    typeof value.error === "string" &&
-    (!("hint" in value) || typeof value.hint === "string") &&
-    (!("code" in value) || typeof value.code === "string")
-  );
 }

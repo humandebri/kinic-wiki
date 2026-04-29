@@ -35,15 +35,15 @@ export function classifyApiError(error: unknown, host: string): PublicApiError {
     return {
       error: "Cannot reach IC host",
       hint: local
-        ? "Check that the local replica or icp local network is running and that WIKI_IC_HOST points to it."
-        : "Check WIKI_IC_HOST and network connectivity to the IC gateway.",
+        ? "Check that the local replica or icp local network is running and that NEXT_PUBLIC_WIKI_IC_HOST points to it."
+        : "Check NEXT_PUBLIC_WIKI_IC_HOST and network connectivity to the IC gateway.",
       code: "ic_host_unreachable"
     };
   }
   if (/method .*not found|no (query|update) method|does not expose|Cannot find field|subtype|type mismatch|Candid|IDL/i.test(raw)) {
     return {
       error: "This canister does not expose the Wiki VFS API",
-      hint: "Use a Kinic Wiki canister with read_node, list_children, search, and recent_nodes methods.",
+      hint: "Use a Kinic Wiki canister with read_node_context, list_children, graph_neighborhood, search, and recent_nodes methods.",
       code: "wiki_api_missing"
     };
   }

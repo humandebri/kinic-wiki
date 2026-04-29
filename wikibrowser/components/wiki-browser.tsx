@@ -2,97 +2,130 @@
 
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GitBranch, PanelRight, Search } from "lucide-react";
+import { GitBranch, Network, PanelRight, Search } from "lucide-react";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
 import { LintPanel } from "@/components/lint-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
-import { SearchPanel } from "@/components/search-panel";
-import { hrefForPath, hrefForSearch } from "@/lib/paths";
-import type { ChildNode, WikiNode } from "@/lib/types";
+import { hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
+import { nodeRequestKey } from "@/lib/request-keys";
+import type { ChildNode, NodeContext, WikiNode } from "@/lib/types";
 import {
-  apiPath,
   errorHint,
   errorMessage,
-  extractMarkdownLinks,
-  fetchJson,
   inferNoteRole,
   isNotFoundError,
   loadingState,
+  ApiError,
   type ModeTab,
   type PathLoadState,
   type ViewMode
 } from "@/lib/wiki-helpers";
 
 const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "lint"];
+const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
+  ssr: false,
+  loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
+});
+const SearchPanel = dynamic(() => import("@/components/search-panel").then((module) => module.SearchPanel), {
+  ssr: false,
+  loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading search...</p>
+});
 
-type WikiBrowserProps = {
-  canisterId: string;
+type BrowserLoadState<T> = PathLoadState<T> & {
+  requestKey: string;
 };
 
-export function WikiBrowser({ canisterId }: WikiBrowserProps) {
+export function WikiBrowser() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const routeState = useMemo(() => parseWikiRoute(pathname), [pathname]);
+  const canisterId = routeState.canisterId ?? "";
   const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, pathname), [canisterId, pathname]);
-  const selectedPath = useMemo(() => isSearchPage ? "/Wiki" : pathFromBrowserPathname(canisterId, pathname), [canisterId, isSearchPage, pathname]);
+  const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, pathname), [canisterId, pathname]);
+  const graphCenter = isGraphPage ? searchParams.get("center") : null;
+  const graphDepth = parseGraphDepth(searchParams.get("depth"));
+  const selectedPath = useMemo(
+    () => isSearchPage ? "/Wiki" : isGraphPage ? graphCenter ?? "/Wiki" : routeState.nodePath,
+    [graphCenter, isGraphPage, isSearchPage, routeState.nodePath]
+  );
   const view = parseView(searchParams.get("view"));
   const tab = parseTab(searchParams.get("tab"));
   const query = isSearchPage ? searchParams.get("q") ?? "" : "";
   const searchKind = parseSearchKind(searchParams.get("kind"));
-  const [node, setNode] = useState<PathLoadState<WikiNode>>(loadingState(selectedPath));
-  const [childNodes, setChildNodes] = useState<PathLoadState<ChildNode[]>>(loadingState(selectedPath));
+  const currentRequestKey = nodeRequestKey(canisterId, selectedPath);
+  const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, selectedPath));
+  const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, selectedPath));
+  const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, selectedPath));
+  const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
     let cancelled = false;
-    const nodeUrl = apiPath(canisterId, "node", new URLSearchParams({ path: selectedPath }));
-    const childrenUrl = apiPath(canisterId, "children", new URLSearchParams({ path: selectedPath }));
-    fetchJson<WikiNode>(nodeUrl)
+    if (typeof invalidCanister === "string") {
+      return;
+    }
+    if (isGraphPage && !graphCenter) {
+      return;
+    }
+    const requestKey = nodeRequestKey(canisterId, selectedPath);
+    import("@/lib/vfs-client")
+      .then(({ readNodeContext }) => readNodeContext(canisterId, selectedPath, 20))
       .then((data) => {
         if (!cancelled) {
-          setNode({ path: selectedPath, data, error: null, loading: false });
-          setChildNodes({ path: selectedPath, data: [], error: null, loading: false });
+          if (!data) {
+            throw new ApiError(`node not found: ${selectedPath}`, 404);
+          }
+          setNode({ requestKey, path: selectedPath, data: data.node, error: null, loading: false });
+          setNodeContext({ requestKey, path: selectedPath, data, error: null, loading: false });
+          setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
         }
       })
       .catch((nodeError: Error) => {
         if (!isNotFoundError(nodeError)) {
           if (!cancelled) {
-            setNode({ path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
-            setChildNodes({ path: selectedPath, data: null, error: null, loading: false });
+            setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+            setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+            setChildNodes({ requestKey, path: selectedPath, data: null, error: null, loading: false });
           }
           return;
         }
-        fetchJson<ChildNode[]>(childrenUrl)
+        import("@/lib/vfs-client")
+          .then(({ listChildren }) => listChildren(canisterId, selectedPath))
           .then((data) => {
             if (!cancelled) {
               if (data.length === 0 && looksLikeFilePath(selectedPath)) {
-                setNode({ path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
-                setChildNodes({ path: selectedPath, data: null, error: `path not found: ${selectedPath}`, loading: false });
+                setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+                setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+                setChildNodes({ requestKey, path: selectedPath, data: null, error: `path not found: ${selectedPath}`, loading: false });
               } else {
-                setNode({ path: selectedPath, data: null, error: null, loading: false });
-                setChildNodes({ path: selectedPath, data, error: null, loading: false });
+                setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+                setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+                setChildNodes({ requestKey, path: selectedPath, data, error: null, loading: false });
               }
             }
           })
           .catch((childrenError: Error) => {
             if (!cancelled) {
-              setNode({ path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
-              setChildNodes({ path: selectedPath, data: null, error: errorMessage(childrenError), hint: errorHint(childrenError), loading: false });
+              setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+              setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
+              setChildNodes({ requestKey, path: selectedPath, data: null, error: errorMessage(childrenError), hint: errorHint(childrenError), loading: false });
             }
           });
       });
     return () => {
       cancelled = true;
     };
-  }, [canisterId, selectedPath]);
+  }, [canisterId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
 
-  const currentNode = node.path === selectedPath ? node : loadingState<WikiNode>(selectedPath);
-  const currentChildren = childNodes.path === selectedPath ? childNodes : loadingState<ChildNode[]>(selectedPath);
-  const outgoingLinks = useMemo(() => extractMarkdownLinks(currentNode.data?.content ?? ""), [currentNode.data]);
+  const currentNode = currentNodeState(invalidCanister, canisterId, selectedPath, currentRequestKey, node);
+  const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, selectedPath, currentRequestKey, nodeContext);
+  const currentChildren = currentChildrenState(invalidCanister, canisterId, selectedPath, currentRequestKey, childNodes);
   const noteRole = inferNoteRole(selectedPath);
 
   return (
@@ -101,8 +134,11 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
         canisterId={canisterId}
         query={query}
         searchKind={searchKind}
+        isGraphPage={isGraphPage}
+        graphCenter={graphCenter}
+        selectedPath={selectedPath}
       />
-      <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
+      <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
           <PanelHeader icon={<GitBranch size={15} />} title={tabTitle(tab)} />
           <ModeTabs canisterId={canisterId} selectedPath={selectedPath} tab={tab} />
@@ -111,10 +147,13 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
             canisterId={canisterId}
             selectedPath={selectedPath}
             node={currentNode.data}
+            autoExpandExplorer={!(isGraphPage && !graphCenter)}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
-          {isSearchPage ? (
+          {isGraphPage ? (
+            <GraphPanel canisterId={canisterId} centerPath={graphCenter} depth={graphDepth} />
+          ) : isSearchPage ? (
             <SearchPanel canisterId={canisterId} query={query} initialKind={searchKind} />
           ) : (
             <>
@@ -135,7 +174,7 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
             </>
           )}
         </section>
-        {!isSearchPage ? (
+        {!isSearchPage && !isGraphPage ? (
           <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
             <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
             <Inspector
@@ -144,7 +183,9 @@ export function WikiBrowser({ canisterId }: WikiBrowserProps) {
               node={currentNode.data}
               childNodes={currentChildren.data ?? []}
               noteRole={noteRole}
-              outgoingLinks={outgoingLinks}
+              incomingLinks={currentNodeContext.data?.incomingLinks ?? null}
+              incomingError={currentNodeContext.error}
+              outgoingLinks={currentNodeContext.data?.outgoingLinks ?? []}
             />
           </aside>
         ) : null}
@@ -157,34 +198,50 @@ function LeftPane({
   tab,
   canisterId,
   selectedPath,
-  node
+  node,
+  autoExpandExplorer
 }: {
   tab: ModeTab;
   canisterId: string;
   selectedPath: string;
   node: WikiNode | null;
+  autoExpandExplorer: boolean;
 }) {
   if (tab === "recent") return <RecentPanel canisterId={canisterId} />;
   if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} />;
-  return <ExplorerTree canisterId={canisterId} selectedPath={selectedPath} />;
+  return <ExplorerTree canisterId={canisterId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} />;
 }
 
 function TopBar({
   canisterId,
   query,
-  searchKind
+  searchKind,
+  isGraphPage,
+  graphCenter,
+  selectedPath
 }: {
   canisterId: string;
   query: string;
   searchKind: "path" | "full";
+  isGraphPage: boolean;
+  graphCenter: string | null;
+  selectedPath: string;
 }) {
+  const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
   return (
     <header className="flex min-h-[52px] items-center gap-4 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur">
       <div className="w-[168px] shrink-0">
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Wiki Canister Browser</p>
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
       </div>
-      <div className="flex min-w-0 flex-1 items-center justify-end">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+        <Link
+          className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
+          href={hrefForGraph(canisterId, graphLinkCenter)}
+        >
+          <Network size={15} />
+          Graph
+        </Link>
         <HeaderSearch canisterId={canisterId} query={query} searchKind={searchKind} />
       </div>
     </header>
@@ -291,31 +348,90 @@ function parseSearchKind(value: string | null): "path" | "full" {
   return value === "full" ? "full" : "path";
 }
 
+function parseGraphDepth(value: string | null): 1 | 2 {
+  return value === "2" ? 2 : 1;
+}
+
+function currentNodeState(
+  invalidCanister: string | null,
+  canisterId: string,
+  selectedPath: string,
+  requestKey: string,
+  node: BrowserLoadState<WikiNode>
+): PathLoadState<WikiNode> {
+  if (typeof invalidCanister === "string") {
+    return { path: selectedPath, data: null, error: "Invalid canister ID", hint: invalidCanister, loading: false };
+  }
+  return node.requestKey === requestKey ? node : browserLoadingState<WikiNode>(canisterId, selectedPath);
+}
+
+function currentNodeContextState(
+  invalidCanister: string | null,
+  canisterId: string,
+  selectedPath: string,
+  requestKey: string,
+  nodeContext: BrowserLoadState<NodeContext>
+): PathLoadState<NodeContext> {
+  if (typeof invalidCanister === "string") {
+    return { path: selectedPath, data: null, error: "Invalid canister ID", hint: invalidCanister, loading: false };
+  }
+  return nodeContext.requestKey === requestKey ? nodeContext : browserLoadingState<NodeContext>(canisterId, selectedPath);
+}
+
+function currentChildrenState(
+  invalidCanister: string | null,
+  canisterId: string,
+  selectedPath: string,
+  requestKey: string,
+  childNodes: BrowserLoadState<ChildNode[]>
+): PathLoadState<ChildNode[]> {
+  if (typeof invalidCanister === "string") {
+    return { path: selectedPath, data: null, error: null, loading: false };
+  }
+  return childNodes.requestKey === requestKey ? childNodes : browserLoadingState<ChildNode[]>(canisterId, selectedPath);
+}
+
+function browserLoadingState<T>(canisterId: string, path: string): BrowserLoadState<T> {
+  return { ...loadingState<T>(path), requestKey: nodeRequestKey(canisterId, path) };
+}
+
 function looksLikeFilePath(path: string): boolean {
   const name = path.split("/").filter(Boolean).at(-1) ?? "";
   return /\.[A-Za-z0-9]+$/.test(name);
 }
 
-function pathFromBrowserPathname(canisterId: string, pathname: string): string {
-  const canisterPath = `/${encodeURIComponent(canisterId)}`;
-  if (pathname === canisterPath) {
-    return "/Wiki";
+function validateCanisterText(canisterId: string): string | null {
+  if (!canisterId) {
+    return "missing canister id";
   }
-  const prefix = `${canisterPath}/`;
-  if (!pathname.startsWith(prefix)) {
-    return "/Wiki";
+  if (!/^[a-z0-9-]+$/i.test(canisterId)) {
+    return "canister id contains unsupported characters";
   }
-  const suffix = pathname.slice(prefix.length);
-  const path = suffix
-    .split("/")
+  return null;
+}
+
+function parseWikiRoute(pathname: string): { canisterId: string | null; nodePath: string } {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] !== "w" || !segments[1]) {
+    return { canisterId: null, nodePath: "/Wiki" };
+  }
+  const path = segments
+    .slice(2)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
-  return path ? `/${path}` : "/Wiki";
+  return {
+    canisterId: decodePathSegment(segments[1]),
+    nodePath: path ? `/${path}` : "/Wiki"
+  };
 }
 
 function isBrowserSearchPathname(canisterId: string, pathname: string): boolean {
-  return pathname === `/${encodeURIComponent(canisterId)}/search`;
+  return pathname === `/w/${encodeURIComponent(canisterId)}/search`;
+}
+
+function isBrowserGraphPathname(canisterId: string, pathname: string): boolean {
+  return pathname === `/w/${encodeURIComponent(canisterId)}/graph`;
 }
 
 function decodePathSegment(segment: string): string {
