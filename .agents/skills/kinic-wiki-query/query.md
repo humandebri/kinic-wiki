@@ -2,15 +2,15 @@
 
 ## Goal
 
-Answer questions against the current wiki using CLI read and search commands.
+Answer questions against the current wiki using CLI context, read, and search commands.
 
 ## Workflow
 
-1. Read `index.md` first when it exists for the current scope.
-2. Choose the structured note whose role best matches the question shape, then read that note before broad search.
+1. Read `index.md` first with `read-node-context` when it exists for the current scope.
+2. Choose the structured note whose role best matches the question shape, then read that note with `read-node-context` before broad search.
 3. If the first role-matched note is empty or lacks the requested value, read the next canonical note directly before broad search.
 4. Run `search-path-remote` or `search-remote` only when direct canonical-note reads are still missing, ambiguous, or insufficient.
-5. Use `read-node`, with `recent-nodes` or `list-nodes` only when needed, to collect the minimum relevant note set.
+5. Use `read-node-context`, with `read-node`, `recent-nodes`, or `list-nodes` only when needed, to collect the minimum relevant note set.
 6. Synthesize a source-backed answer from current wiki material.
 7. If the user explicitly wants durable write-back, hand off to `kinic-wiki-ingest` instead of growing query-side mutation rules.
 
@@ -24,7 +24,8 @@ Answer questions against the current wiki using CLI read and search commands.
 - For exact extraction or single-attribute questions, inspect the canonical note chain directly before any broad search.
 - If `facts.md` is empty for an extraction question, move to the next role-matched note instead of returning `insufficient evidence` early.
 - Do not return `insufficient evidence` while a higher-priority canonical note remains unread.
-- Use `search-path-remote` and `search-remote` as targeted recall steps only after direct canonical-note reads are insufficient.
+- Use `search-path-remote` and `search-remote` as targeted recall steps only after direct canonical-note context reads are insufficient.
+- Use `graph-neighborhood` only when incoming or outgoing links from an already-read note are relevant to the question.
 - Treat `search-path-remote` as path and basename recall.
 - Treat `search-remote` as FTS-based content recall.
 - If the question shape is still unclear after reading `index.md`, follow the current note roles from `docs/internal/WIKI_CANONICALITY.md` rather than inventing ad hoc search order.
@@ -44,4 +45,4 @@ Answer questions against the current wiki using CLI read and search commands.
 ## Repo Contract
 
 - Preferred query primitives:
-  - CLI commands: `read-node`, `list-nodes`, `search-remote`, `search-path-remote`, `recent-nodes`
+  - CLI commands: `read-node-context`, `read-node`, `list-nodes`, `search-remote`, `search-path-remote`, `recent-nodes`, `graph-neighborhood`, `incoming-links`, `outgoing-links`

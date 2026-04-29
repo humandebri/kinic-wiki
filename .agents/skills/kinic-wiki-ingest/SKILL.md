@@ -1,6 +1,6 @@
 ---
 name: kinic-wiki-ingest
-description: Kinic Wiki 専用 workflow skill for ingesting raw source material into the current canister-backed wiki workflow.
+description: Kinic Wiki workflow skill for ingesting raw source material into the current canister-backed wiki workflow.
 ---
 
 # Kinic Wiki Ingest
@@ -11,6 +11,8 @@ Use this skill when the user wants to:
 - normalize raw source material before wiki synthesis
 - persist selected source material under `/Sources/raw/...`
 - update existing wiki pages from new evidence
+- initialize or repair an LLM Wiki scope with `index.md`, `overview.md`, `log.md`, `schema.md`, and `topics/`
+- regenerate scope or conversation `summary.md` pages from raw sources and existing structured notes
 - create review-ready wiki pages without pushing immediately
 
 Do not use this skill for:
