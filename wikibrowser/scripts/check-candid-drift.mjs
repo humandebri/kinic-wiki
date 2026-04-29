@@ -157,6 +157,7 @@ function normalizeIdlShape(value) {
     .replace(/^Int64$/, "int64")
     .replace(/^Nat64$/, "nat64")
     .replace(/^Nat32$/, "nat32")
+    .replace(/^Nat$/, "nat")
     .replace(/^Float32$/, "float32")
     .replace(/^Bool$/, "bool")
     .replace(/^Null$/, "null")

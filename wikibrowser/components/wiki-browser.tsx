@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { GitBranch, Network, PanelRight, Search } from "lucide-react";
+import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
@@ -242,6 +243,7 @@ function TopBar({
           <Network size={15} />
           Graph
         </Link>
+        <CycleBattery canisterId={canisterId} />
         <HeaderSearch canisterId={canisterId} query={query} searchKind={searchKind} />
       </div>
     </header>

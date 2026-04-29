@@ -1,4 +1,5 @@
 export const expectedTypes = {
+  CanisterHealth: { kind: "record", fields: { cycles_balance: "nat" } },
   ChildNode: {
     kind: "record",
     fields: {
@@ -109,6 +110,7 @@ export const didTypeAliases = {
 };
 
 export const expectedMethods = {
+  canister_health: { input: [], output: "CanisterHealth", mode: "query" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
   incoming_links: { input: ["IncomingLinksRequest"], output: "ResultLinks", mode: "query" },

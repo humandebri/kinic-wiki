@@ -5,6 +5,7 @@ import ts from "typescript";
 const { collectLintHints, provenancePathFor, rawSourceLinksFor } = await importTs("../lib/lint-hints.ts");
 const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
+const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
 
@@ -93,6 +94,14 @@ assert.notEqual(
   graphRequestKey("aaaaa-aa", "/Wiki/index.md", 2)
 );
 assert.equal(graphRequestKey("aaaaa-aa", null, 1), null);
+assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
+assert.equal(formatCycles(850_000_000_000n), "850.00B");
+assert.equal(formatCycles(123_450_000n), "123.45M");
+assert.equal(formatRawCycles(1234567890123n), "1,234,567,890,123");
+assert.equal(cycleTone(5_000_000_000_000n), "blue");
+assert.equal(cycleTone(1_000_000_000_000n), "amber");
+assert.equal(cycleTone(999_999_999_999n), "red");
+assert.equal(cycleTone(null), "gray");
 
 console.log("UI helper checks OK");
 

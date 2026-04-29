@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use candid::{Decode, Encode};
 use ic_agent::{Agent, export::Principal};
 use vfs_types::{
-    AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
-    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    AppendNodeRequest, CanisterHealth, ChildNode, DeleteNodeRequest, DeleteNodeResult,
+    EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
+    FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
@@ -19,6 +19,9 @@ use vfs_types::{
 #[async_trait]
 pub trait VfsApi: Sync {
     async fn status(&self) -> Result<Status>;
+    async fn canister_health(&self) -> Result<CanisterHealth> {
+        Err(anyhow!("canister_health is not implemented by this client"))
+    }
     async fn read_node(&self, path: &str) -> Result<Option<Node>>;
     async fn read_node_context(&self, _request: NodeContextRequest) -> Result<Option<NodeContext>> {
         Err(anyhow!(
@@ -127,6 +130,10 @@ impl CanisterVfsClient {
 impl VfsApi for CanisterVfsClient {
     async fn status(&self) -> Result<Status> {
         self.query("status", &()).await
+    }
+
+    async fn canister_health(&self) -> Result<CanisterHealth> {
+        self.query("canister_health", &()).await
     }
 
     async fn read_node(&self, path: &str) -> Result<Option<Node>> {

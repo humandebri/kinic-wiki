@@ -4,7 +4,7 @@ import { classifyApiError, invalidCanisterIdError } from "@/lib/api-errors";
 import { sortChildNodes } from "@/lib/child-sort";
 import { normalizeSearchHit, type RawSearchHit } from "@/lib/search-normalizer";
 import { idlFactory } from "@/lib/vfs-idl";
-import type { ChildNode, LinkEdge, NodeContext, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, WikiNode } from "@/lib/types";
+import type { CanisterHealth, ChildNode, LinkEdge, NodeContext, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, WikiNode } from "@/lib/types";
 import { ApiError } from "@/lib/wiki-helpers";
 
 type Variant = Record<string, null>;
@@ -17,6 +17,10 @@ type RawNode = {
   updated_at: bigint;
   etag: string;
   metadata_json: string;
+};
+
+type RawCanisterHealth = {
+  cycles_balance: bigint;
 };
 
 type RawChild = {
@@ -52,6 +56,7 @@ type RawNodeContext = {
 };
 
 type VfsActor = {
+  canister_health: () => Promise<RawCanisterHealth>;
   read_node: (path: string) => Promise<{ Ok: [] | [RawNode] } | { Err: string }>;
   list_children: (request: { path: string }) => Promise<{ Ok: RawChild[] } | { Err: string }>;
   recent_nodes: (request: { path: [] | [string]; limit: number }) => Promise<
@@ -85,6 +90,7 @@ export function validateCanisterId(canisterId: string): Principal | string {
 }
 
 const actorCache = new Map<string, Promise<VfsActor>>();
+const healthCache = new Map<string, Promise<CanisterHealth>>();
 
 export async function createVfsActor(canisterId: string): Promise<VfsActor> {
   const principal = validateCanisterId(canisterId);
@@ -137,6 +143,22 @@ export async function readNode(canisterId: string, path: string): Promise<WikiNo
     const raw = result.Ok[0];
     return raw ? normalizeNode(raw) : null;
   });
+}
+
+export function canisterHealth(canisterId: string): Promise<CanisterHealth> {
+  const cached = healthCache.get(canisterId);
+  if (cached) {
+    return cached;
+  }
+  const request = callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    return normalizeCanisterHealth(await actor.canister_health());
+  }).catch((error) => {
+    healthCache.delete(canisterId);
+    throw error;
+  });
+  healthCache.set(canisterId, request);
+  return request;
 }
 
 export async function readNodeContext(canisterId: string, path: string, linkLimit: number): Promise<NodeContext | null> {
@@ -273,6 +295,12 @@ function normalizeNode(raw: RawNode): WikiNode {
     updatedAt: raw.updated_at.toString(),
     etag: raw.etag,
     metadataJson: raw.metadata_json
+  };
+}
+
+function normalizeCanisterHealth(raw: RawCanisterHealth): CanisterHealth {
+  return {
+    cyclesBalance: raw.cycles_balance
   };
 }
 

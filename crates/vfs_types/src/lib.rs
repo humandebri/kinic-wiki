@@ -13,3 +13,8 @@ pub struct Status {
     pub file_count: u64,
     pub source_count: u64,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct CanisterHealth {
+    pub cycles_balance: u128,
+}

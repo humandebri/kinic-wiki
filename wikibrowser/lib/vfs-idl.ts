@@ -4,6 +4,7 @@ import { Actor } from "@dfinity/agent";
 type ActorInterfaceFactory = Parameters<typeof Actor.createActor>[0];
 
 export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
+  const CanisterHealth = idl.Record({ cycles_balance: idl.Nat });
   const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
   const NodeEntryKind = idl.Variant({
     File: idl.Null,
@@ -90,6 +91,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultSearch = idl.Variant({ Ok: idl.Vec(SearchNodeHit), Err: idl.Text });
 
   return idl.Service({
+    canister_health: idl.Func([], [CanisterHealth], ["query"]),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
     incoming_links: idl.Func([IncomingLinksRequest], [ResultLinks], ["query"]),

@@ -11,6 +11,10 @@ export type WikiNode = {
   metadataJson: string;
 };
 
+export type CanisterHealth = {
+  cyclesBalance: bigint;
+};
+
 export type ChildNode = {
   path: string;
   name: string;

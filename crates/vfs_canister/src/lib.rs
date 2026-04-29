@@ -12,9 +12,9 @@ use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
-    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    AppendNodeRequest, CanisterHealth, ChildNode, DeleteNodeRequest, DeleteNodeResult,
+    EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
+    FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
@@ -46,6 +46,13 @@ fn post_upgrade_hook() {
 #[query]
 fn status() -> Status {
     with_service(|service| service.status()).unwrap_or_else(|error| ic_cdk::trap(&error))
+}
+
+#[query]
+fn canister_health() -> CanisterHealth {
+    CanisterHealth {
+        cycles_balance: ic_cdk::api::canister_cycle_balance(),
+    }
 }
 
 #[query]

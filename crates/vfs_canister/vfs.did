@@ -6,6 +6,7 @@ type AppendNodeRequest = record {
   expected_etag : opt text;
   metadata_json : opt text;
 };
+type CanisterHealth = record { cycles_balance : nat };
 type ChildNode = record {
   updated_at : opt int64;
   etag : opt text;
@@ -193,6 +194,7 @@ type WriteNodeRequest = record {
 type WriteNodeResult = record { created : bool; node : RecentNodeHit };
 service : () -> {
   append_node : (AppendNodeRequest) -> (Result);
+  canister_health : () -> (CanisterHealth) query;
   delete_node : (DeleteNodeRequest) -> (Result_1);
   edit_node : (EditNodeRequest) -> (Result_2);
   export_snapshot : (ExportSnapshotRequest) -> (Result_3);
