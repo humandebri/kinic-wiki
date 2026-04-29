@@ -16,6 +16,7 @@ const BASENAME_PREFIX_SCORE: f32 = -400_000_000.0;
 const TITLE_SCORE: f32 = -300_000_000.0;
 const PATH_SCORE: f32 = -200_000_000.0;
 const CONTENT_SUBSTRING_SCORE: f32 = -100_000_000.0;
+const CONTENT_START_PREVIEW_MAX_CHARS: usize = 200;
 const LIGHT_PREVIEW_CONTEXT_CHARS: usize = 24;
 const LIGHT_PREVIEW_MAX_CHARS: usize = 96;
 
@@ -350,15 +351,24 @@ pub(crate) fn sort_candidates(mut ranked: Vec<SearchCandidate>) -> Vec<SearchCan
     ranked
 }
 
-pub(crate) fn build_light_previews_for_hits(
+pub(crate) fn build_previews_for_hits(
     conn: &Connection,
     candidates: &mut [SearchCandidate],
     plan: &SearchQueryPlan,
     preview_mode: SearchPreviewMode,
 ) -> Result<(), String> {
-    if matches!(preview_mode, SearchPreviewMode::None) {
-        return Ok(());
+    match preview_mode {
+        SearchPreviewMode::None => Ok(()),
+        SearchPreviewMode::Light => build_match_previews_for_hits(conn, candidates, plan),
+        SearchPreviewMode::ContentStart => build_content_start_previews_for_hits(conn, candidates),
     }
+}
+
+fn build_match_previews_for_hits(
+    conn: &Connection,
+    candidates: &mut [SearchCandidate],
+    plan: &SearchQueryPlan,
+) -> Result<(), String> {
     let content_ids = candidates
         .iter_mut()
         .filter_map(|candidate| {
@@ -385,6 +395,29 @@ pub(crate) fn build_light_previews_for_hits(
             continue;
         };
         candidate.preview = build_content_preview(candidate, content, plan);
+    }
+    Ok(())
+}
+
+fn build_content_start_previews_for_hits(
+    conn: &Connection,
+    candidates: &mut [SearchCandidate],
+) -> Result<(), String> {
+    let content_ids = candidates
+        .iter()
+        .map(|candidate| candidate.row_id)
+        .collect::<Vec<_>>();
+    let contents = load_contents_by_id(conn, &content_ids)?;
+    for candidate in candidates {
+        let excerpt = contents
+            .get(&candidate.row_id)
+            .and_then(|content| content_start_excerpt(content));
+        candidate.preview = Some(SearchPreview {
+            field: SearchPreviewField::Content,
+            match_reason: "content_start".to_string(),
+            char_offset: 0,
+            excerpt,
+        });
     }
     Ok(())
 }
@@ -558,6 +591,17 @@ fn build_excerpt(content: &str, start_char: usize, matched_len: usize) -> Option
         .skip(window_start)
         .take(window_end.saturating_sub(window_start))
         .take(LIGHT_PREVIEW_MAX_CHARS)
+        .collect::<String>();
+    (!excerpt.is_empty()).then_some(excerpt)
+}
+
+fn content_start_excerpt(content: &str) -> Option<String> {
+    let excerpt = content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(CONTENT_START_PREVIEW_MAX_CHARS)
         .collect::<String>();
     (!excerpt.is_empty()).then_some(excerpt)
 }

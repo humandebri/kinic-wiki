@@ -25,6 +25,7 @@ Detailed structure map:
 - FS-first remote node API backed by the IC
 - Rust CLI for direct path-based operations and sync flows
 - Search, snapshot export, and delta sync
+- Link graph and node-context queries for wiki navigation
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -73,12 +74,14 @@ Use `--local` to target the local replica. Otherwise the default host is `https:
 ### CLI
 
 Use `vfs-cli` when working from a shell or script.
+See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
 
 Main commands:
 
 - `rebuild-index`
 - `rebuild-scope-index`
 - `read-node`
+- `read-node-context`
 - `list-nodes`
 - `write-node`
 - `append-node`
@@ -89,6 +92,10 @@ Main commands:
 - `move-node`
 - `glob-nodes`
 - `recent-nodes`
+- `graph-neighborhood`
+- `graph-links`
+- `incoming-links`
+- `outgoing-links`
 - `multi-edit-node`
 - `search-remote`
 - `search-path-remote`
@@ -133,6 +140,7 @@ async fn run() -> Result<()> {
 Current tool names:
 
 - `read`
+- `read_context`
 - `write`
 - `append`
 - `edit`
@@ -141,6 +149,10 @@ Current tool names:
 - `mv`
 - `glob`
 - `recent`
+- `graph_neighborhood`
+- `graph_links`
+- `incoming_links`
+- `outgoing_links`
 - `multi_edit`
 - `rm`
 - `search`

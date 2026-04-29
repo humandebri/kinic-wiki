@@ -180,6 +180,54 @@ pub struct RecentNodeHit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct IncomingLinksRequest {
+    pub path: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OutgoingLinksRequest {
+    pub path: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GraphLinksRequest {
+    pub prefix: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GraphNeighborhoodRequest {
+    pub center_path: String,
+    pub depth: u32,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct LinkEdge {
+    pub source_path: String,
+    pub target_path: String,
+    pub raw_href: String,
+    pub link_text: String,
+    pub link_kind: String,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeContextRequest {
+    pub path: String,
+    pub link_limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeContext {
+    pub node: Node,
+    pub incoming_links: Vec<LinkEdge>,
+    pub outgoing_links: Vec<LinkEdge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MultiEdit {
     pub old_text: String,
     pub new_text: String,
@@ -223,6 +271,8 @@ pub struct SearchNodePathsRequest {
     pub query_text: String,
     pub prefix: Option<String>,
     pub top_k: u32,
+    #[serde(default)]
+    pub preview_mode: Option<SearchPreviewMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
@@ -243,6 +293,8 @@ pub enum SearchPreviewMode {
     None,
     #[serde(alias = "Light")]
     Light,
+    #[serde(alias = "ContentStart")]
+    ContentStart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

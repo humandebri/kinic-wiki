@@ -1,0 +1,443 @@
+// Where: crates/vfs_store/src/fs_links.rs
+// What: Markdown link extraction and SQLite backlink index helpers.
+// Why: Backlinks should be cheap to query, so writes maintain a small edge table.
+use std::collections::{BTreeSet, VecDeque};
+
+use rusqlite::{Connection, Transaction, params};
+use vfs_types::{LinkEdge, Node};
+
+use crate::fs_helpers::{normalize_node_path, prefix_filter_sql_for_column};
+
+pub(crate) fn sync_node_links(tx: &Transaction<'_>, node: &Node) -> Result<(), String> {
+    delete_source_links(tx, &node.path)?;
+    for edge in extract_link_edges(&node.path, &node.content, node.updated_at) {
+        tx.execute(
+            "INSERT OR REPLACE INTO fs_links
+             (source_path, target_path, raw_href, link_text, link_kind, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                edge.source_path,
+                edge.target_path,
+                edge.raw_href,
+                edge.link_text,
+                edge.link_kind,
+                edge.updated_at
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn backfill_node_links(tx: &Transaction<'_>) -> Result<(), String> {
+    let mut stmt = tx
+        .prepare("SELECT path, content, updated_at FROM fs_nodes ORDER BY path ASC")
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for (source_path, content, updated_at) in rows {
+        for edge in extract_link_edges(&source_path, &content, updated_at) {
+            tx.execute(
+                "INSERT OR REPLACE INTO fs_links
+                 (source_path, target_path, raw_href, link_text, link_kind, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    edge.source_path,
+                    edge.target_path,
+                    edge.raw_href,
+                    edge.link_text,
+                    edge.link_kind,
+                    edge.updated_at
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn delete_source_links(tx: &Transaction<'_>, source_path: &str) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM fs_links WHERE source_path = ?1",
+        params![source_path],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_incoming_links(
+    conn: &Connection,
+    target_path: &str,
+    limit: i64,
+) -> Result<Vec<LinkEdge>, String> {
+    load_links(
+        conn,
+        "SELECT source_path, target_path, raw_href, link_text, link_kind, updated_at
+         FROM fs_links
+         WHERE target_path = ?1
+         ORDER BY source_path ASC, raw_href ASC
+         LIMIT ?2",
+        params![target_path, limit],
+    )
+}
+
+pub(crate) fn load_outgoing_links(
+    conn: &Connection,
+    source_path: &str,
+    limit: i64,
+) -> Result<Vec<LinkEdge>, String> {
+    load_links(
+        conn,
+        "SELECT source_path, target_path, raw_href, link_text, link_kind, updated_at
+         FROM fs_links
+         WHERE source_path = ?1
+         ORDER BY target_path ASC, raw_href ASC
+         LIMIT ?2",
+        params![source_path, limit],
+    )
+}
+
+pub(crate) fn load_graph_links(
+    conn: &Connection,
+    prefix: &str,
+    limit: i64,
+) -> Result<Vec<LinkEdge>, String> {
+    let mut sql = String::from(
+        "SELECT source_path, target_path, raw_href, link_text, link_kind, updated_at
+         FROM fs_links WHERE 1 = 1",
+    );
+    let mut values = Vec::new();
+    if prefix != "/" {
+        let (scope_sql, scope_values) =
+            prefix_filter_sql_for_column("source_path", prefix, values.len() + 1);
+        sql.push_str(&scope_sql);
+        values.extend(scope_values);
+    }
+    sql.push_str(" ORDER BY source_path ASC, target_path ASC, raw_href ASC LIMIT ?");
+    values.push(rusqlite::types::Value::from(limit));
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    stmt.query_map(rusqlite::params_from_iter(values.iter()), edge_from_row)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_graph_neighborhood(
+    conn: &Connection,
+    center_path: &str,
+    depth: u32,
+    limit: i64,
+) -> Result<Vec<LinkEdge>, String> {
+    if !(1..=2).contains(&depth) {
+        return Err("depth must be 1 or 2".to_string());
+    }
+    let mut seen_edges = BTreeSet::new();
+    let mut seen_nodes = BTreeSet::from([center_path.to_string()]);
+    let mut frontier = VecDeque::from([(center_path.to_string(), 0_u32)]);
+    let mut edges = Vec::new();
+    while let Some((path, distance)) = frontier.pop_front() {
+        if edges.len() >= limit as usize {
+            break;
+        }
+        let adjacent = load_adjacent_links(conn, &path, limit)?;
+        for edge in adjacent {
+            let edge_key = (
+                edge.source_path.clone(),
+                edge.target_path.clone(),
+                edge.raw_href.clone(),
+            );
+            if seen_edges.insert(edge_key) {
+                if distance + 1 < depth {
+                    for next_path in [&edge.source_path, &edge.target_path] {
+                        if seen_nodes.insert(next_path.clone()) {
+                            frontier.push_back((next_path.clone(), distance + 1));
+                        }
+                    }
+                }
+                edges.push(edge);
+                if edges.len() >= limit as usize {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(edges)
+}
+
+fn load_adjacent_links(conn: &Connection, path: &str, limit: i64) -> Result<Vec<LinkEdge>, String> {
+    load_links(
+        conn,
+        "SELECT source_path, target_path, raw_href, link_text, link_kind, updated_at
+         FROM fs_links
+         WHERE source_path = ?1 OR target_path = ?1
+         ORDER BY source_path ASC, target_path ASC, raw_href ASC
+         LIMIT ?2",
+        params![path, limit],
+    )
+}
+
+fn load_links<P>(conn: &Connection, sql: &str, params: P) -> Result<Vec<LinkEdge>, String>
+where
+    P: rusqlite::Params,
+{
+    conn.prepare(sql)
+        .map_err(|error| error.to_string())?
+        .query_map(params, edge_from_row)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn edge_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkEdge> {
+    Ok(LinkEdge {
+        source_path: row.get(0)?,
+        target_path: row.get(1)?,
+        raw_href: row.get(2)?,
+        link_text: row.get(3)?,
+        link_kind: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
+fn extract_link_edges(source_path: &str, content: &str, updated_at: i64) -> Vec<LinkEdge> {
+    let mut edges = Vec::new();
+    extract_markdown_links(source_path, content, updated_at, &mut edges);
+    extract_wikilinks(source_path, content, updated_at, &mut edges);
+    edges
+}
+
+fn extract_markdown_links(
+    source_path: &str,
+    content: &str,
+    updated_at: i64,
+    edges: &mut Vec<LinkEdge>,
+) {
+    let mut offset = 0;
+    while let Some(open) = content[offset..].find('[').map(|index| offset + index) {
+        if open > 0 && content.as_bytes()[open - 1] == b'!' {
+            offset = open + 1;
+            continue;
+        }
+        let Some(close) = content[open + 1..].find(']').map(|index| open + 1 + index) else {
+            break;
+        };
+        if !content[close + 1..].starts_with('(') {
+            offset = close + 1;
+            continue;
+        }
+        let href_start = close + 2;
+        let Some(href_end) = find_markdown_href_end(content, href_start) else {
+            break;
+        };
+        let text = &content[open + 1..close];
+        let raw_href = &content[href_start..href_end];
+        push_edge(source_path, text, raw_href, "markdown", updated_at, edges);
+        offset = href_end + 1;
+    }
+}
+
+fn extract_wikilinks(source_path: &str, content: &str, updated_at: i64, edges: &mut Vec<LinkEdge>) {
+    let mut offset = 0;
+    while let Some(open) = content[offset..].find("[[").map(|index| offset + index) {
+        let href_start = open + 2;
+        let Some(close) = content[href_start..]
+            .find("]]")
+            .map(|index| href_start + index)
+        else {
+            break;
+        };
+        let raw_href = &content[href_start..close];
+        push_edge(
+            source_path,
+            raw_href,
+            raw_href,
+            "wikilink",
+            updated_at,
+            edges,
+        );
+        offset = close + 2;
+    }
+}
+
+fn push_edge(
+    source_path: &str,
+    link_text: &str,
+    raw_href: &str,
+    link_kind: &str,
+    updated_at: i64,
+    edges: &mut Vec<LinkEdge>,
+) {
+    let strip_title = link_kind == "markdown";
+    let Some(target_path) = resolve_link_target(source_path, raw_href, strip_title) else {
+        return;
+    };
+    edges.push(LinkEdge {
+        source_path: source_path.to_string(),
+        target_path,
+        raw_href: raw_href.trim().to_string(),
+        link_text: link_text.trim().to_string(),
+        link_kind: link_kind.to_string(),
+        updated_at,
+    });
+}
+
+fn resolve_link_target(source_path: &str, raw_href: &str, strip_title: bool) -> Option<String> {
+    let trimmed = raw_href.trim();
+    let link_href = if strip_title {
+        strip_markdown_title(trimmed)
+    } else {
+        trimmed
+    };
+    if link_href.is_empty() || link_href.starts_with('#') || is_external_href(link_href) {
+        return None;
+    }
+    let path_part = split_href_path(link_href);
+    if path_part.is_empty() {
+        return None;
+    }
+    let resolved = if path_part.starts_with("/Wiki") || path_part.starts_with("/Sources") {
+        path_part.to_string()
+    } else if path_part.starts_with('/') {
+        return None;
+    } else {
+        resolve_relative_path(source_path, path_part)
+    };
+    normalize_node_path(&resolved, false).ok()
+}
+
+fn find_markdown_href_end(content: &str, href_start: usize) -> Option<usize> {
+    let bytes = content.as_bytes();
+    let mut index = href_start;
+    while index < bytes.len() {
+        if bytes[index] == b')' {
+            return Some(index);
+        }
+        if bytes[index] == b'(' && looks_like_parenthesized_title(&content[href_start..index]) {
+            return content[index + 1..]
+                .find(')')
+                .map(|title_end| index + 1 + title_end + 1);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn looks_like_parenthesized_title(before_open_paren: &str) -> bool {
+    before_open_paren
+        .chars()
+        .last()
+        .is_some_and(char::is_whitespace)
+}
+
+fn split_href_path(href: &str) -> &str {
+    let query = href.find('?');
+    let hash = href.find('#');
+    let end = match (query, hash) {
+        (Some(query), Some(hash)) => query.min(hash),
+        (Some(query), None) => query,
+        (None, Some(hash)) => hash,
+        (None, None) => href.len(),
+    };
+    &href[..end]
+}
+
+fn strip_markdown_title(href: &str) -> &str {
+    let Some((target, title)) = href.split_once(char::is_whitespace) else {
+        return href;
+    };
+    let title = title.trim_start();
+    if title.starts_with('"') || title.starts_with('\'') || title.starts_with('(') {
+        return target;
+    }
+    href
+}
+
+fn resolve_relative_path(source_path: &str, href: &str) -> String {
+    let parent =
+        source_path.rsplit_once('/').map_or(
+            "/",
+            |(parent, _name)| {
+                if parent.is_empty() { "/" } else { parent }
+            },
+        );
+    let parts = parent
+        .split('/')
+        .chain(href.split('/'))
+        .filter(|part| !part.is_empty())
+        .fold(Vec::new(), |mut parts, part| {
+            if part == "." {
+                return parts;
+            }
+            if part == ".." {
+                parts.pop();
+                return parts;
+            }
+            parts.push(part);
+            parts
+        });
+    format!("/{}", parts.join("/"))
+}
+
+fn is_external_href(href: &str) -> bool {
+    href.starts_with("//")
+        || href.split_once(':').is_some_and(|(scheme, _)| {
+            let mut chars = scheme.chars();
+            chars.next().is_some_and(|ch| ch.is_ascii_alphabetic())
+                && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '.' | '-'))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edges_for(content: &str) -> Vec<LinkEdge> {
+        extract_link_edges("/Wiki/topic/source.md", content, 10)
+    }
+
+    #[test]
+    fn markdown_parser_preserves_titles_and_continues_after_parenthesized_title() {
+        let edges = edges_for(
+            "[Quoted](../alpha.md \"Alpha title\") [Paren](../paren.md (Paren title)) [After](../after.md)",
+        );
+
+        assert_eq!(edges.len(), 3);
+        assert_eq!(edges[0].target_path, "/Wiki/alpha.md");
+        assert_eq!(edges[0].raw_href, "../alpha.md \"Alpha title\"");
+        assert_eq!(edges[1].target_path, "/Wiki/paren.md");
+        assert_eq!(edges[1].raw_href, "../paren.md (Paren title)");
+        assert_eq!(edges[2].target_path, "/Wiki/after.md");
+        assert_eq!(edges[2].raw_href, "../after.md");
+    }
+
+    #[test]
+    fn markdown_parser_strips_query_hash_and_external_schemes_from_targets() {
+        let edges = edges_for(
+            "[Query](../gamma.md?view=raw#section \"Gamma\") [Web](web+foo:bar) [Git](git+ssh://example/repo) [Urn](urn:isbn:123) [Anchor](#top)",
+        );
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].target_path, "/Wiki/gamma.md");
+        assert_eq!(edges[0].raw_href, "../gamma.md?view=raw#section \"Gamma\"");
+    }
+
+    #[test]
+    fn wikilink_parser_keeps_spaces_quotes_and_parentheses_in_target_path() {
+        let edges = edges_for("[[Project \"Alpha\".md]] [[Project (Alpha).md]]");
+
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].target_path, "/Wiki/topic/Project \"Alpha\".md");
+        assert_eq!(edges[0].raw_href, "Project \"Alpha\".md");
+        assert_eq!(edges[1].target_path, "/Wiki/topic/Project (Alpha).md");
+        assert_eq!(edges[1].raw_href, "Project (Alpha).md");
+    }
+}

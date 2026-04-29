@@ -3,13 +3,21 @@
 // Why: The repo now has one node-based schema, so migration history only tracks FS tables.
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::fs_links::backfill_node_links;
+
 // Keep the persisted version token stable so existing local databases do not
 // require a forced migration just because the crate naming moved from wiki_* to vfs_*.
-const CURRENT_SCHEMA_VERSION: &str = "wiki_store:000_fs_schema";
-const MIGRATIONS: &[(&str, &str)] = &[(
-    CURRENT_SCHEMA_VERSION,
-    include_str!("../migrations/000_fs_schema.sql"),
-)];
+const CURRENT_SCHEMA_VERSION: &str = "wiki_store:001_fs_links";
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "wiki_store:000_fs_schema",
+        include_str!("../migrations/000_fs_schema.sql"),
+    ),
+    (
+        CURRENT_SCHEMA_VERSION,
+        include_str!("../migrations/001_fs_links.sql"),
+    ),
+];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
     include_str!("../migrations/000_schema_migrations.sql");
 
@@ -23,6 +31,7 @@ pub fn run_fs_migrations(conn: &mut Connection) -> Result<(), String> {
             continue;
         }
         tx.execute_batch(sql).map_err(|error| error.to_string())?;
+        run_post_migration_hook(&tx, version)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
             params![version],
@@ -30,6 +39,13 @@ pub fn run_fs_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     }
     tx.commit().map_err(|error| error.to_string())
+}
+
+fn run_post_migration_hook(conn: &rusqlite::Transaction<'_>, version: &str) -> Result<(), String> {
+    if version == "wiki_store:001_fs_links" {
+        backfill_node_links(conn)?;
+    }
+    Ok(())
 }
 
 fn ensure_schema_migrations_table(conn: &Connection) -> Result<(), String> {
@@ -48,16 +64,33 @@ fn reject_legacy_schema(conn: &Connection) -> Result<(), String> {
         }
         return Ok(());
     }
-    if versions.len() == 1
-        && versions[0] == CURRENT_SCHEMA_VERSION
-        && current_schema_shape_is_present(conn)?
-    {
-        return Ok(());
+    let known_versions = MIGRATIONS
+        .iter()
+        .map(|(version, _sql)| version.to_string())
+        .collect::<Vec<_>>();
+    if !known_versions.starts_with(&versions) || versions.is_empty() {
+        return Err(format!(
+            "legacy wiki_store schema is unsupported; recreate database: {}",
+            versions.join(", ")
+        ));
     }
-    Err(format!(
-        "legacy wiki_store schema is unsupported; recreate database: {}",
-        versions.join(", ")
-    ))
+    if !base_schema_shape_is_present(conn)? {
+        return Err(format!(
+            "legacy wiki_store schema is unsupported; recreate database: {}",
+            versions.join(", ")
+        ));
+    }
+    if versions
+        .last()
+        .is_some_and(|version| version == CURRENT_SCHEMA_VERSION)
+        && !current_schema_shape_is_present(conn)?
+    {
+        return Err(format!(
+            "legacy wiki_store schema is unsupported; recreate database: {}",
+            versions.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 fn migration_already_applied(conn: &Connection, version: &str) -> Result<bool, String> {
@@ -94,6 +127,23 @@ fn index_exists(conn: &Connection, index: &str) -> Result<bool, String> {
 }
 
 fn current_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
+    if !base_schema_shape_is_present(conn)? {
+        return Ok(false);
+    }
+    for table in ["fs_links"] {
+        if !table_exists(conn, table)? {
+            return Ok(false);
+        }
+    }
+    for index in ["fs_links_target_path_idx", "fs_links_source_path_idx"] {
+        if !index_exists(conn, index)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn base_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
     for table in [
         "fs_nodes",
         "fs_nodes_fts",
@@ -150,6 +200,7 @@ fn managed_table_exists(conn: &Connection) -> Result<bool, String> {
         "fs_path_state",
         "fs_snapshot_sessions",
         "fs_snapshot_session_paths",
+        "fs_links",
     ] {
         if table_exists(conn, table)? {
             return Ok(true);

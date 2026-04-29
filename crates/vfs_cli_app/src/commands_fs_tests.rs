@@ -35,6 +35,7 @@ pub(crate) struct MockClient {
     pub(crate) globs: std::sync::Mutex<Vec<GlobNodesRequest>>,
     pub(crate) recents: std::sync::Mutex<Vec<RecentNodesRequest>>,
     pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+    pub(crate) searches: std::sync::Mutex<Vec<SearchNodesRequest>>,
     pub(crate) path_searches: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
 }
 
@@ -235,7 +236,11 @@ impl VfsApi for MockClient {
         })
     }
 
-    async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+    async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        self.searches
+            .lock()
+            .expect("searches should lock")
+            .push(request);
         Ok(self.search_hits.clone())
     }
 

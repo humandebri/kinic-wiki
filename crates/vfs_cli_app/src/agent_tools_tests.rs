@@ -8,8 +8,8 @@ use vfs_types::{
     GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
     MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    SearchPreviewMode, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 use crate::agent_tools::{
@@ -24,7 +24,14 @@ struct ToolMockClient {
     move_requests: std::sync::Mutex<Vec<MoveNodeRequest>>,
     glob_requests: std::sync::Mutex<Vec<GlobNodesRequest>>,
     recent_requests: std::sync::Mutex<Vec<RecentNodesRequest>>,
+    context_requests: std::sync::Mutex<Vec<vfs_types::NodeContextRequest>>,
+    graph_requests: std::sync::Mutex<Vec<vfs_types::GraphNeighborhoodRequest>>,
+    graph_link_requests: std::sync::Mutex<Vec<vfs_types::GraphLinksRequest>>,
+    incoming_requests: std::sync::Mutex<Vec<vfs_types::IncomingLinksRequest>>,
+    outgoing_requests: std::sync::Mutex<Vec<vfs_types::OutgoingLinksRequest>>,
     multi_edit_requests: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+    search_requests: std::sync::Mutex<Vec<SearchNodesRequest>>,
+    path_search_requests: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
 }
 
 #[async_trait]
@@ -38,6 +45,21 @@ impl VfsApi for ToolMockClient {
 
     async fn read_node(&self, path: &str) -> Result<Option<Node>> {
         Ok(Some(sample_node(path, "body", "etag-1")))
+    }
+
+    async fn read_node_context(
+        &self,
+        request: vfs_types::NodeContextRequest,
+    ) -> Result<Option<vfs_types::NodeContext>> {
+        self.context_requests
+            .lock()
+            .expect("context lock should succeed")
+            .push(request.clone());
+        Ok(Some(vfs_types::NodeContext {
+            node: sample_node(&request.path, "body", "etag-1"),
+            incoming_links: vec![sample_link("/Wiki/source.md", &request.path)],
+            outgoing_links: vec![sample_link(&request.path, "/Wiki/target.md")],
+        }))
     }
 
     async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -139,6 +161,50 @@ impl VfsApi for ToolMockClient {
         }])
     }
 
+    async fn graph_links(
+        &self,
+        request: vfs_types::GraphLinksRequest,
+    ) -> Result<Vec<vfs_types::LinkEdge>> {
+        self.graph_link_requests
+            .lock()
+            .expect("graph links lock should succeed")
+            .push(request);
+        Ok(vec![sample_link("/Wiki/a.md", "/Wiki/b.md")])
+    }
+
+    async fn graph_neighborhood(
+        &self,
+        request: vfs_types::GraphNeighborhoodRequest,
+    ) -> Result<Vec<vfs_types::LinkEdge>> {
+        self.graph_requests
+            .lock()
+            .expect("graph lock should succeed")
+            .push(request);
+        Ok(vec![sample_link("/Wiki/a.md", "/Wiki/b.md")])
+    }
+
+    async fn incoming_links(
+        &self,
+        request: vfs_types::IncomingLinksRequest,
+    ) -> Result<Vec<vfs_types::LinkEdge>> {
+        self.incoming_requests
+            .lock()
+            .expect("incoming lock should succeed")
+            .push(request);
+        Ok(vec![sample_link("/Wiki/source.md", "/Wiki/a.md")])
+    }
+
+    async fn outgoing_links(
+        &self,
+        request: vfs_types::OutgoingLinksRequest,
+    ) -> Result<Vec<vfs_types::LinkEdge>> {
+        self.outgoing_requests
+            .lock()
+            .expect("outgoing lock should succeed")
+            .push(request);
+        Ok(vec![sample_link("/Wiki/a.md", "/Wiki/target.md")])
+    }
+
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult> {
         self.multi_edit_requests
             .lock()
@@ -153,14 +219,22 @@ impl VfsApi for ToolMockClient {
         })
     }
 
-    async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+    async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        self.search_requests
+            .lock()
+            .expect("search lock should succeed")
+            .push(request);
         Ok(Vec::new())
     }
 
     async fn search_node_paths(
         &self,
-        _request: SearchNodePathsRequest,
+        request: SearchNodePathsRequest,
     ) -> Result<Vec<SearchNodeHit>> {
+        self.path_search_requests
+            .lock()
+            .expect("path search lock should succeed")
+            .push(request);
         Ok(vec![SearchNodeHit {
             path: "/Wiki/nested/beta.md".to_string(),
             kind: NodeKind::File,
@@ -197,14 +271,15 @@ impl VfsApi for ToolMockClient {
 fn tool_schemas_include_minimal_vfs_tools() {
     let openai = create_openai_tools();
     let anthropic = create_anthropic_tools();
-    assert_eq!(openai.len(), 13);
-    assert_eq!(anthropic.len(), 13);
+    assert_eq!(openai.len(), 18);
+    assert_eq!(anthropic.len(), 18);
 
     let openai_names = tool_names(&openai, "function");
     let anthropic_names = tool_names(&anthropic, "name");
 
     for name in [
         "read",
+        "read_context",
         "write",
         "append",
         "edit",
@@ -213,6 +288,10 @@ fn tool_schemas_include_minimal_vfs_tools() {
         "mv",
         "glob",
         "recent",
+        "graph_neighborhood",
+        "graph_links",
+        "incoming_links",
+        "outgoing_links",
         "multi_edit",
         "rm",
         "search",
@@ -231,9 +310,20 @@ fn tool_schemas_cap_query_result_limits() {
 
     let search = openai_tool_parameters(&openai, "search");
     assert_eq!(search["properties"]["top_k"]["maximum"], 100);
+    assert_eq!(
+        search["properties"]["preview_mode"]["enum"],
+        serde_json::json!(["none", "light", "content_start"])
+    );
 
     let search_paths = openai_tool_parameters(&openai, "search_paths");
     assert_eq!(search_paths["properties"]["top_k"]["maximum"], 100);
+
+    let read_context = openai_tool_parameters(&openai, "read_context");
+    assert_eq!(read_context["properties"]["link_limit"]["maximum"], 100);
+
+    let graph = openai_tool_parameters(&openai, "graph_neighborhood");
+    assert_eq!(graph["properties"]["depth"]["maximum"], 2);
+    assert_eq!(graph["properties"]["limit"]["maximum"], 100);
 }
 
 fn openai_tool_parameters<'a>(tools: &'a [Value], name: &str) -> &'a Value {
@@ -431,7 +521,8 @@ async fn anthropic_dispatch_routes_search_paths() {
         serde_json::json!({
             "query_text": "nested",
             "prefix": "/Wiki",
-            "top_k": 5
+            "top_k": 5,
+            "preview_mode": "content_start"
         }),
     )
     .await
@@ -439,6 +530,115 @@ async fn anthropic_dispatch_routes_search_paths() {
     assert!(!result.is_error);
     assert!(result.text.contains("/Wiki/nested/beta.md"));
     assert!(result.text.contains("path_substring"));
+    assert_eq!(
+        client
+            .path_search_requests
+            .lock()
+            .expect("path search lock should succeed")[0]
+            .preview_mode,
+        Some(SearchPreviewMode::ContentStart)
+    );
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_routes_search_preview_mode() {
+    let client = ToolMockClient::default();
+    let result = handle_anthropic_tool_call(
+        &client,
+        "search",
+        serde_json::json!({
+            "query_text": "body",
+            "prefix": "/Wiki",
+            "top_k": 5,
+            "preview_mode": "content_start"
+        }),
+    )
+    .await
+    .expect("search tool should succeed");
+
+    assert!(!result.is_error);
+    assert_eq!(
+        client
+            .search_requests
+            .lock()
+            .expect("search lock should succeed")[0]
+            .preview_mode,
+        Some(SearchPreviewMode::ContentStart)
+    );
+}
+
+#[tokio::test]
+async fn anthropic_dispatch_routes_link_tools() {
+    let client = ToolMockClient::default();
+
+    for (name, input) in [
+        (
+            "read_context",
+            serde_json::json!({ "path": "/Wiki/a.md", "link_limit": 7 }),
+        ),
+        (
+            "graph_neighborhood",
+            serde_json::json!({ "center_path": "/Wiki/a.md", "depth": 2, "limit": 9 }),
+        ),
+        (
+            "graph_links",
+            serde_json::json!({ "prefix": "/Wiki", "limit": 11 }),
+        ),
+        (
+            "incoming_links",
+            serde_json::json!({ "path": "/Wiki/a.md", "limit": 13 }),
+        ),
+        (
+            "outgoing_links",
+            serde_json::json!({ "path": "/Wiki/a.md", "limit": 15 }),
+        ),
+    ] {
+        let result = handle_anthropic_tool_call(&client, name, input)
+            .await
+            .expect("link tool should dispatch");
+        assert!(!result.is_error);
+    }
+
+    assert_eq!(
+        client
+            .context_requests
+            .lock()
+            .expect("context lock should succeed")[0]
+            .link_limit,
+        7
+    );
+    assert_eq!(
+        client
+            .graph_requests
+            .lock()
+            .expect("graph lock should succeed")[0]
+            .depth,
+        2
+    );
+    assert_eq!(
+        client
+            .graph_link_requests
+            .lock()
+            .expect("graph links lock should succeed")[0]
+            .limit,
+        11
+    );
+    assert_eq!(
+        client
+            .incoming_requests
+            .lock()
+            .expect("incoming lock should succeed")[0]
+            .limit,
+        13
+    );
+    assert_eq!(
+        client
+            .outgoing_requests
+            .lock()
+            .expect("outgoing lock should succeed")[0]
+            .limit,
+        15
+    );
 }
 
 fn sample_node(path: &str, content: &str, etag: &str) -> Node {
@@ -459,6 +659,17 @@ fn sample_ack(path: &str, kind: NodeKind, etag: &str) -> NodeMutationAck {
         kind,
         updated_at: 2,
         etag: etag.to_string(),
+    }
+}
+
+fn sample_link(source_path: &str, target_path: &str) -> vfs_types::LinkEdge {
+    vfs_types::LinkEdge {
+        source_path: source_path.to_string(),
+        target_path: target_path.to_string(),
+        raw_href: target_path.to_string(),
+        link_text: "target".to_string(),
+        link_kind: "wiki".to_string(),
+        updated_at: 2,
     }
 }
 

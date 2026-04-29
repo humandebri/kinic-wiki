@@ -7,10 +7,12 @@ use vfs_store::FsStore;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, ListChildrenRequest, ListNodesRequest,
-    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
+    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -94,6 +96,32 @@ impl VfsService {
 
     pub fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
         self.fs_store.recent_nodes(request)
+    }
+
+    pub fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.incoming_links(request)
+    }
+
+    pub fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.outgoing_links(request)
+    }
+
+    pub fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.graph_links(request)
+    }
+
+    pub fn graph_neighborhood(
+        &self,
+        request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.graph_neighborhood(request)
+    }
+
+    pub fn read_node_context(
+        &self,
+        request: NodeContextRequest,
+    ) -> Result<Option<NodeContext>, String> {
+        self.fs_store.read_node_context(request)
     }
 
     pub fn multi_edit_node(

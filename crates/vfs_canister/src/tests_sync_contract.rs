@@ -73,6 +73,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
         query_text: "PROJECT-beta".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 10,
+        preview_mode: None,
     })
     .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -266,19 +267,19 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             "list_children request type must stay nominal in the public interface",
         );
         assert!(
-            did.contains("list_children : (ListChildrenRequest) -> (Result_6) query;"),
+            did.contains("list_children : (ListChildrenRequest) -> (Result_7) query;"),
             "list_children must consume ListChildrenRequest at the interface boundary",
         );
         assert!(
-            did.contains("mkdir_node : (MkdirNodeRequest) -> (Result_8) query;"),
+            did.contains("mkdir_node : (MkdirNodeRequest) -> (Result_9) query;"),
             "mkdir_node must consume MkdirNodeRequest at the interface boundary",
         );
         assert!(
-            !did.contains("list_children : (DeleteNodeResult) -> (Result_6) query;"),
+            !did.contains("list_children : (DeleteNodeResult) -> (Result_7) query;"),
             "list_children must not collapse to DeleteNodeResult",
         );
         assert!(
-            !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_8) query;"),
+            !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_9) query;"),
             "mkdir_node must not collapse to DeleteNodeResult",
         );
     }

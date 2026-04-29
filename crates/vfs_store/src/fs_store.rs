@@ -6,7 +6,7 @@
 // That prevents SQLite `snippet()` cost from scaling with all matched rows.
 // Only returned hits pay preview generation cost.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -16,11 +16,13 @@ use uuid::Uuid;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodeType, GlobNodesRequest, ListChildrenRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
-    MultiEdit, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    SearchPreviewMode, Status, WriteNodeRequest, WriteNodeResult,
+    MultiEdit, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest,
+    NodeEntry, NodeEntryKind, NodeKind, OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -31,8 +33,12 @@ use crate::{
         node_kind_from_db, node_kind_to_db, normalize_node_path, prefix_filter_sql,
         prefix_filter_sql_for_column, relative_to_prefix, snapshot_revision_token,
     },
+    fs_links::{
+        delete_source_links, load_graph_links, load_graph_neighborhood, load_incoming_links,
+        load_outgoing_links, sync_node_links,
+    },
     fs_search::{
-        build_light_previews_for_hits, build_search_query_plan, finalize_hits,
+        SearchCandidate, build_previews_for_hits, build_search_query_plan, finalize_hits,
         load_content_substring_candidates, load_path_candidates, load_ranked_fts_candidates,
         path_match_score, rerank_candidates, sort_candidates,
     },
@@ -166,6 +172,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
         sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(WriteNodeResult {
             node: node_ack(&node),
@@ -200,6 +207,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
         sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(WriteNodeResult {
             node: node_ack(&node),
@@ -233,6 +241,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         save_node(&tx, Some(current.row_id), &node)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(EditNodeResult {
             node: node_ack(&node),
@@ -269,6 +278,7 @@ impl FsStore {
             return Err(format!("target node already exists: {to_path}"));
         }
         if let Some(target) = target.as_ref() {
+            delete_source_links(&tx, &target.node.path)?;
             delete_node_row(&tx, target)?;
         }
         let mut moved = current.node.clone();
@@ -281,6 +291,8 @@ impl FsStore {
         moved.etag = compute_node_etag(&moved);
         save_node(&tx, Some(current.row_id), &moved)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &moved)))?;
+        delete_source_links(&tx, &from_path)?;
+        sync_node_links(&tx, &moved)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(MoveNodeResult {
             node: node_ack(&moved),
@@ -384,6 +396,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         save_node(&tx, Some(current.row_id), &node)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(MultiEditNodeResult {
             node: node_ack(&node),
@@ -406,9 +419,59 @@ impl FsStore {
         }
         let revision = record_path_removal(&tx, &path)?;
         update_path_state(&tx, &path, revision)?;
+        delete_source_links(&tx, &path)?;
         delete_node_row(&tx, &current)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(DeleteNodeResult { path })
+    }
+
+    pub fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        load_incoming_links(&conn, &path, capped_query_limit(request.limit))
+    }
+
+    pub fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        load_outgoing_links(&conn, &path, capped_query_limit(request.limit))
+    }
+
+    pub fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let prefix = normalize_node_path(&request.prefix, true)?;
+        let conn = self.open()?;
+        load_graph_links(&conn, &prefix, capped_query_limit(request.limit))
+    }
+
+    pub fn graph_neighborhood(
+        &self,
+        request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>, String> {
+        let center_path = normalize_node_path(&request.center_path, false)?;
+        let conn = self.open()?;
+        load_graph_neighborhood(
+            &conn,
+            &center_path,
+            request.depth,
+            capped_query_limit(request.limit),
+        )
+    }
+
+    pub fn read_node_context(
+        &self,
+        request: NodeContextRequest,
+    ) -> Result<Option<NodeContext>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        let Some(node) = load_node(&conn, &path)? else {
+            return Ok(None);
+        };
+        let limit = capped_query_limit(request.link_limit);
+        Ok(Some(NodeContext {
+            incoming_links: load_incoming_links(&conn, &path, limit)?,
+            outgoing_links: load_outgoing_links(&conn, &path, limit)?,
+            node,
+        }))
     }
 
     pub fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {
@@ -448,7 +511,7 @@ impl FsStore {
             sort_candidates(candidates.into_values().collect())
         };
         ranked.truncate(top_k as usize);
-        build_light_previews_for_hits(&conn, &mut ranked, &plan, preview_mode)?;
+        build_previews_for_hits(&conn, &mut ranked, &plan, preview_mode)?;
         Ok(finalize_hits(ranked, top_k))
     }
 
@@ -465,8 +528,10 @@ impl FsStore {
             .ok_or_else(|| "query_text must not be empty".to_string())?;
         let conn = self.open()?;
         let top_k = capped_query_limit(request.top_k);
+        let preview_mode = request.preview_mode.unwrap_or(SearchPreviewMode::None);
         let mut sql = String::from(
-            "SELECT path,
+            "SELECT id,
+                    path,
                     kind,
                     instr(lower(path), ?1) AS first_match_position,
                     length(path) AS path_length
@@ -489,30 +554,40 @@ impl FsStore {
             " ORDER BY first_match_position ASC, path_length ASC, path ASC LIMIT {top_k}"
         ));
         let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-        stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| {
-            let path = row.get::<_, String>(0)?;
-            let first_match_position = row.get::<_, i64>(2)?;
-            let path_length = row.get::<_, i64>(3)?;
-            let title = file_search_title(&path).to_lowercase();
-            let lowered_query = request.query_text.to_lowercase();
-            let mut match_reasons = vec!["path_substring".to_string()];
-            if title == lowered_query {
-                match_reasons.push("basename_exact".to_string());
-            } else if title.starts_with(&lowered_query) {
-                match_reasons.push("basename_prefix".to_string());
-            }
-            Ok(SearchNodeHit {
-                path: path.clone(),
-                kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
-                snippet: Some(path),
-                preview: None,
-                score: path_match_score(first_match_position, path_length),
-                match_reasons,
+        let mut candidates = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                let path = row.get::<_, String>(1)?;
+                let first_match_position = row.get::<_, i64>(3)?;
+                let path_length = row.get::<_, i64>(4)?;
+                let title = file_search_title(&path).to_lowercase();
+                let lowered_query = request.query_text.to_lowercase();
+                let mut match_reasons = BTreeSet::from(["path_substring".to_string()]);
+                if title == lowered_query {
+                    match_reasons.insert("basename_exact".to_string());
+                } else if title.starts_with(&lowered_query) {
+                    match_reasons.insert("basename_prefix".to_string());
+                }
+                Ok(SearchCandidate {
+                    row_id: row.get::<_, i64>(0)?,
+                    path: path.clone(),
+                    kind: node_kind_from_db(&row.get::<_, String>(2)?)?,
+                    snippet: Some(path),
+                    preview: None,
+                    score: path_match_score(first_match_position, path_length),
+                    match_reasons,
+                    has_content_match: false,
+                })
             })
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        build_previews_for_hits(
+            &conn,
+            &mut candidates,
+            &build_search_query_plan(&request.query_text).expect("path terms already validated"),
+            preview_mode,
+        )?;
+        Ok(finalize_hits(candidates, top_k))
     }
 
     pub fn export_snapshot(

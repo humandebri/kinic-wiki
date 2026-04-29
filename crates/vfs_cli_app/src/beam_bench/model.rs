@@ -253,10 +253,15 @@ Runtime constraints:
 - Use shell commands only through `cargo run -p vfs-cli --bin vfs-cli -- ...`
 - Allowed read-only subcommands only:
   - read-node
+  - read-node-context
   - list-nodes
   - search-remote
   - search-path-remote
   - recent-nodes
+  - graph-neighborhood
+  - graph-links
+  - incoming-links
+  - outgoing-links
 - Do not use write-node, append-node, edit-node, multi-edit-node, delete-node, delete-tree, rebuild-index, pull, or push
 - If evidence is insufficient, answer exactly `insufficient evidence`
 - Return the final answer in the same language and terminology as the supporting note span. Do not translate note content into Japanese or another language unless the note itself uses that language.
@@ -265,13 +270,14 @@ Use this exact argument order. Do not put connection flags after the subcommand.
 
 ```bash
 cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node --path /Wiki/index.md --json
-cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node --path {namespace_index_path} --json
+cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node-context --path {namespace_index_path} --link-limit 20 --json
 cargo run -p vfs-cli --bin vfs-cli -- {connection_args} list-nodes --prefix {namespace_path} --recursive --json
 cargo run -p vfs-cli --bin vfs-cli -- {connection_args} list-nodes --prefix {base_path} --recursive --json
 cargo run -p vfs-cli --bin vfs-cli -- {connection_args} search-remote --prefix {base_path} "query text" --json
 cargo run -p vfs-cli --bin vfs-cli -- {connection_args} search-path-remote "query text" --prefix {base_path} --json
-cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node --path {base_path}/index.md --json
-cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node --path <discovered path> --json
+cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node-context --path {base_path}/index.md --link-limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- {connection_args} read-node-context --path <discovered path> --link-limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- {connection_args} graph-neighborhood --center-path <discovered path> --depth 1 --limit 100 --json
 ```
 
 Connection:
@@ -483,14 +489,20 @@ fn parse_wiki_cli_subcommand(command: &str) -> Option<&'static str> {
             "--local" | "--json" | "--recursive" => {
                 index += 1;
             }
-            "--canister-id" | "--path" | "--prefix" | "--top-k" => {
+            "--canister-id" | "--path" | "--prefix" | "--top-k" | "--link-limit"
+            | "--center-path" | "--depth" | "--limit" => {
                 index += 2;
             }
             "read-node" => return Some("read-node"),
+            "read-node-context" => return Some("read-node-context"),
             "list-nodes" => return Some("list-nodes"),
             "search-remote" => return Some("search-remote"),
             "search-path-remote" => return Some("search-path-remote"),
             "recent-nodes" => return Some("recent-nodes"),
+            "graph-neighborhood" => return Some("graph-neighborhood"),
+            "graph-links" => return Some("graph-links"),
+            "incoming-links" => return Some("incoming-links"),
+            "outgoing-links" => return Some("outgoing-links"),
             _ => {
                 index += 1;
             }
@@ -572,7 +584,12 @@ mod tests {
         assert!(prompt.contains("Do not translate note content into Japanese"));
         assert!(!prompt.contains("Query skill contract could not be loaded"));
         assert!(!prompt.contains(&format!("{}/beam", "/Wiki")));
-        assert!(prompt.contains("read-node --path /Wiki/run-a/index.md --json"));
+        assert!(
+            prompt.contains("read-node-context --path /Wiki/run-a/index.md --link-limit 20 --json")
+        );
+        assert!(prompt.contains(
+            "graph-neighborhood --center-path <discovered path> --depth 1 --limit 100 --json"
+        ));
         assert!(prompt.contains("Benchmark-specific workflow overrides:"));
         assert!(prompt.contains(
             "Read `/Wiki/run-a/conv-1/facts.md` first after the namespace and conversation index."

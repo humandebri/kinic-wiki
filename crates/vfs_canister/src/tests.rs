@@ -5,15 +5,17 @@ use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, ListChildrenRequest, ListNodesRequest,
-    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind,
-    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode,
-    WriteNodeRequest,
+    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
+    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
+    NodeEntryKind, NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest,
+    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
 
 use super::{
     SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    list_children, list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes,
+    graph_links, graph_neighborhood, incoming_links, list_children, list_nodes, mkdir_node,
+    move_node, multi_edit_node, outgoing_links, read_node, read_node_context, recent_nodes,
     search_node_paths, search_nodes, status, write_node,
 };
 
@@ -112,6 +114,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         query_text: "NeStEd".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
+        preview_mode: None,
     })
     .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -165,6 +168,63 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         expected_etag: Some("stale".to_string()),
     });
     assert!(stale_delete.is_err());
+}
+
+#[test]
+fn fs_entrypoints_cover_backlink_queries() {
+    install_test_service();
+
+    write_node(WriteNodeRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        kind: NodeKind::File,
+        content: "[Target](../target.md) and [[/Wiki/target.md]]".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("source write should succeed");
+
+    let incoming = incoming_links(IncomingLinksRequest {
+        path: "/Wiki/target.md".to_string(),
+        limit: 10,
+    })
+    .expect("incoming links should load");
+    assert_eq!(incoming.len(), 2);
+    assert!(
+        incoming
+            .iter()
+            .all(|edge| edge.source_path == "/Wiki/topic/source.md")
+    );
+
+    let outgoing = outgoing_links(OutgoingLinksRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        limit: 10,
+    })
+    .expect("outgoing links should load");
+    assert_eq!(outgoing.len(), 2);
+
+    let graph = graph_links(GraphLinksRequest {
+        prefix: "/Wiki/topic".to_string(),
+        limit: 10,
+    })
+    .expect("graph links should load");
+    assert_eq!(graph.len(), 2);
+
+    let context = read_node_context(NodeContextRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        link_limit: 10,
+    })
+    .expect("context should load")
+    .expect("node should exist");
+    assert_eq!(context.node.path, "/Wiki/topic/source.md");
+    assert_eq!(context.outgoing_links.len(), 2);
+
+    let neighborhood = graph_neighborhood(GraphNeighborhoodRequest {
+        center_path: "/Wiki/target.md".to_string(),
+        depth: 1,
+        limit: 10,
+    })
+    .expect("neighborhood should load");
+    assert_eq!(neighborhood.len(), 2);
 }
 
 #[test]

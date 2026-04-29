@@ -8,16 +8,23 @@ use ic_agent::{Agent, export::Principal};
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, ListChildrenRequest, ListNodesRequest,
-    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
+    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[async_trait]
-pub trait VfsApi {
+pub trait VfsApi: Sync {
     async fn status(&self) -> Result<Status>;
     async fn read_node(&self, path: &str) -> Result<Option<Node>>;
+    async fn read_node_context(&self, _request: NodeContextRequest) -> Result<Option<NodeContext>> {
+        Err(anyhow!(
+            "read_node_context is not implemented by this client"
+        ))
+    }
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>>;
     async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>>;
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult>;
@@ -28,6 +35,23 @@ pub trait VfsApi {
     async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult>;
     async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>>;
     async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>>;
+    async fn graph_links(&self, _request: GraphLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("graph_links is not implemented by this client"))
+    }
+    async fn graph_neighborhood(
+        &self,
+        _request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!(
+            "graph_neighborhood is not implemented by this client"
+        ))
+    }
+    async fn incoming_links(&self, _request: IncomingLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("incoming_links is not implemented by this client"))
+    }
+    async fn outgoing_links(&self, _request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("outgoing_links is not implemented by this client"))
+    }
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult>;
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>>;
     async fn search_node_paths(
@@ -111,6 +135,12 @@ impl VfsApi for CanisterVfsClient {
         result.map_err(|error| anyhow!(error))
     }
 
+    async fn read_node_context(&self, request: NodeContextRequest) -> Result<Option<NodeContext>> {
+        let result: Result<Option<NodeContext>, String> =
+            self.query("read_node_context", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
         let result: Result<Vec<NodeEntry>, String> = self.query("list_nodes", &request).await?;
         result.map_err(|error| anyhow!(error))
@@ -159,6 +189,27 @@ impl VfsApi for CanisterVfsClient {
     async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
         let result: Result<Vec<RecentNodeHit>, String> =
             self.query("recent_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("graph_links", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn graph_neighborhood(&self, request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> =
+            self.query("graph_neighborhood", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("incoming_links", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("outgoing_links", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

@@ -14,10 +14,12 @@ use vfs_runtime::VfsService;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
-    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, ListChildrenRequest, ListNodesRequest,
-    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
+    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -106,6 +108,31 @@ fn glob_nodes(request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>, String> {
 #[query]
 fn recent_nodes(request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
     with_service(|service| service.recent_nodes(request))
+}
+
+#[query]
+fn incoming_links(request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+    with_service(|service| service.incoming_links(request))
+}
+
+#[query]
+fn outgoing_links(request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+    with_service(|service| service.outgoing_links(request))
+}
+
+#[query]
+fn graph_links(request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
+    with_service(|service| service.graph_links(request))
+}
+
+#[query]
+fn graph_neighborhood(request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>, String> {
+    with_service(|service| service.graph_neighborhood(request))
+}
+
+#[query]
+fn read_node_context(request: NodeContextRequest) -> Result<Option<NodeContext>, String> {
+    with_service(|service| service.read_node_context(request))
 }
 
 #[update]
@@ -237,12 +264,16 @@ fn normalize_candid_interface(interface: String) -> String {
     //      rewrites path-only requests to DeleteNodeResult.
     let normalized = interface
         .replace(
-            "list_children : (DeleteNodeResult) -> (Result_6) query;",
-            "list_children : (ListChildrenRequest) -> (Result_6) query;",
+            "list_children : (DeleteNodeResult) -> (Result_7) query;",
+            "list_children : (ListChildrenRequest) -> (Result_7) query;",
         )
         .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_8) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_8) query;",
+            "mkdir_node : (DeleteNodeResult) -> (Result_9) query;",
+            "mkdir_node : (MkdirNodeRequest) -> (Result_9) query;",
+        )
+        .replace(
+            "outgoing_links : (IncomingLinksRequest) -> (Result_6) query;",
+            "outgoing_links : (OutgoingLinksRequest) -> (Result_6) query;",
         );
     let normalized = if normalized.contains("type ListChildrenRequest = record { path : text };") {
         normalized
@@ -253,11 +284,21 @@ fn normalize_candid_interface(interface: String) -> String {
         )
     };
     if normalized.contains("type MkdirNodeRequest = record { path : text };") {
-        return normalized;
+        return ensure_outgoing_links_request(normalized);
     }
-    normalized.replace(
+    ensure_outgoing_links_request(normalized.replace(
         "type MkdirNodeResult = record { created : bool; path : text };",
         "type MkdirNodeRequest = record { path : text };\ntype MkdirNodeResult = record { created : bool; path : text };",
+    ))
+}
+
+fn ensure_outgoing_links_request(interface: String) -> String {
+    if interface.contains("type OutgoingLinksRequest = record { path : text; limit : nat32 };") {
+        return interface;
+    }
+    interface.replace(
+        "type LinkEdge = record {",
+        "type OutgoingLinksRequest = record { path : text; limit : nat32 };\ntype LinkEdge = record {",
     )
 }
 

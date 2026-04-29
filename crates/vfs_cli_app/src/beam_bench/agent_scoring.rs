@@ -225,7 +225,10 @@ fn derive_retrieved_paths(
 }
 
 fn is_read_tool_name(name: &str) -> bool {
-    matches!(name, "read" | "read-node")
+    matches!(
+        name,
+        "read" | "read_context" | "read-node" | "read-node-context"
+    )
 }
 
 fn extract_search_paths_from_events(
@@ -242,10 +245,16 @@ fn extract_search_paths_from_events(
         let Some(command) = item.get("command").and_then(Value::as_str) else {
             continue;
         };
-        if !command.contains("search-remote") && !command.contains("search-path-remote") {
+        if !command.contains("search-remote")
+            && !command.contains("search-path-remote")
+            && !command.contains("graph-neighborhood")
+            && !command.contains("graph-links")
+            && !command.contains("incoming-links")
+            && !command.contains("outgoing-links")
+        {
             continue;
         }
-        for text in collect_strings(item) {
+        for text in collect_result_strings(item) {
             for path in extract_note_paths(&text, &imported.base_path) {
                 if note_counts_as_retrieved(&path, &imported.notes, allow_explicit_gold_paths)
                     && seen.insert(path.clone())
@@ -256,6 +265,17 @@ fn extract_search_paths_from_events(
         }
     }
     paths
+}
+
+fn collect_result_strings(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .filter(|(key, _)| key.as_str() != "command")
+            .flat_map(|(_, item)| collect_strings(item))
+            .collect(),
+        _ => collect_strings(value),
+    }
 }
 
 fn collect_strings(value: &Value) -> Vec<String> {
@@ -672,6 +692,79 @@ mod tests {
         assert!(result.gold_path_hit_at_3);
         assert!(result.gold_span_hit_at_3);
         assert_eq!(result.docs_read_count, 1);
+    }
+
+    #[test]
+    fn read_context_tool_counts_as_retrieved_path() {
+        let result = score_question(
+            "conv-1".to_string(),
+            &imported(),
+            fact_question(),
+            model_run(
+                "March 15, 2024",
+                vec![ToolCallRecord {
+                    name: "read-node-context".to_string(),
+                    arguments: "cargo run -p vfs-cli --bin vfs-cli -- --local read-node-context --path /Wiki/run/conv-1/facts.md --link-limit 20 --json".to_string(),
+                    is_error: false,
+                }],
+                Vec::new(),
+            ),
+        );
+
+        assert_eq!(
+            result.retrieved_paths,
+            vec!["/Wiki/run/conv-1/facts.md".to_string()]
+        );
+        assert!(result.gold_path_hit_at_3);
+        assert_eq!(result.docs_read_count, 1);
+    }
+
+    #[test]
+    fn graph_output_paths_count_as_retrieved_paths() {
+        let result = score_question(
+            "conv-1".to_string(),
+            &imported(),
+            fact_question(),
+            model_run(
+                "March 15, 2024",
+                Vec::new(),
+                vec![json!({
+                    "type": "item.completed",
+                    "item": {
+                        "command": "cargo run -p vfs-cli --bin vfs-cli -- --local graph-neighborhood --center-path /Wiki/run/conv-1/index.md --depth 1 --limit 100 --json",
+                        "stdout": "[{\"source_path\":\"/Wiki/run/conv-1/index.md\",\"target_path\":\"/Wiki/run/conv-1/facts.md\"}]"
+                    }
+                })],
+            ),
+        );
+        assert_eq!(
+            result.retrieved_paths,
+            vec!["/Wiki/run/conv-1/facts.md".to_string()]
+        );
+        assert!(result.gold_path_hit_at_1);
+    }
+
+    #[test]
+    fn graph_command_path_does_not_count_without_output_path() {
+        let result = score_question(
+            "conv-1".to_string(),
+            &imported(),
+            fact_question(),
+            model_run(
+                "March 15, 2024",
+                Vec::new(),
+                vec![json!({
+                    "type": "item.completed",
+                    "item": {
+                        "command": "cargo run -p vfs-cli --bin vfs-cli -- --local graph-neighborhood --center-path /Wiki/run/conv-1/facts.md --depth 1 --limit 100 --json",
+                        "stdout": "[]"
+                    }
+                })],
+            ),
+        );
+
+        assert!(result.retrieved_paths.is_empty());
+        assert!(!result.gold_path_hit_at_1);
     }
 
     #[test]
