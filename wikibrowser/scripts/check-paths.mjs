@@ -18,31 +18,31 @@ assert.equal(pathFromSegments([]), "/Wiki");
 assert.equal(pathFromSegments(["Wiki", "100%.md"]), "/Wiki/100%.md");
 assert.equal(
   hrefForPath("t63gs-up777-77776-aaaba-cai", "/Wiki/100%.md"),
-  "/t63gs-up777-77776-aaaba-cai/Wiki/100%25.md"
+  "/w/t63gs-up777-77776-aaaba-cai/Wiki/100%25.md"
 );
 assert.equal(
   hrefForPath("t63gs-up777-77776-aaaba-cai", "/Wiki/space name.md", "raw"),
-  "/t63gs-up777-77776-aaaba-cai/Wiki/space%20name.md?view=raw"
+  "/w/t63gs-up777-77776-aaaba-cai/Wiki/space%20name.md?view=raw"
 );
 assert.equal(
   hrefForSearch("t63gs-up777-77776-aaaba-cai", "", "path"),
-  "/t63gs-up777-77776-aaaba-cai/search?kind=path"
+  "/w/t63gs-up777-77776-aaaba-cai/search?kind=path"
 );
 assert.equal(
   hrefForSearch("t63gs-up777-77776-aaaba-cai", "alpha beta", "path"),
-  "/t63gs-up777-77776-aaaba-cai/search?q=alpha+beta&kind=path"
+  "/w/t63gs-up777-77776-aaaba-cai/search?q=alpha+beta&kind=path"
 );
 assert.equal(
   hrefForSearch("t63gs-up777-77776-aaaba-cai", "alpha beta", "full"),
-  "/t63gs-up777-77776-aaaba-cai/search?q=alpha+beta&kind=full"
+  "/w/t63gs-up777-77776-aaaba-cai/search?q=alpha+beta&kind=full"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "/Wiki/beam-full-reset/7/index.md", "facts.md"),
-  "/t63gs-up777-77776-aaaba-cai/Wiki/beam-full-reset/7/facts.md"
+  "/w/t63gs-up777-77776-aaaba-cai/Wiki/beam-full-reset/7/facts.md"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "/Wiki/beam-full-reset/7/index.md", "/Wiki/demo.md#evidence"),
-  "/t63gs-up777-77776-aaaba-cai/Wiki/demo.md#evidence"
+  "/w/t63gs-up777-77776-aaaba-cai/Wiki/demo.md#evidence"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "/Wiki/demo/index.md", "https://example.com"),

@@ -5,6 +5,8 @@ import ts from "typescript";
 const { collectLintHints, provenancePathFor, rawSourceLinksFor } = await importTs("../lib/lint-hints.ts");
 const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
+const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
+const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -71,6 +73,26 @@ assert.deepEqual(hit, {
   score: 0.75,
   matchReasons: ["content"]
 });
+
+assert.deepEqual(
+  splitMarkdownPreviewSections("Intro\n\n# One\nBody\n## Two\nMore").map((section) => section.split("\n")[0]),
+  ["Intro", "# One", "## Two"]
+);
+assert.deepEqual(
+  splitMarkdownPreviewSections("# One\n```md\n# Not heading\n```\n## Two").map((section) => section.split("\n")[0]),
+  ["# One", "## Two"]
+);
+assert.deepEqual(
+  splitMarkdownPreviewSections("# One\n~~~md\n# Not heading\n~~~\n## Two").map((section) => section.split("\n")[0]),
+  ["# One", "## Two"]
+);
+assert.equal(splitMarkdownPreviewSections("No headings\nOnly prose").length, 1);
+assert.notEqual(nodeRequestKey("aaaaa-aa", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "/Wiki/index.md"));
+assert.notEqual(
+  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 1),
+  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 2)
+);
+assert.equal(graphRequestKey("aaaaa-aa", null, 1), null);
 
 console.log("UI helper checks OK");
 

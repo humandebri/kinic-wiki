@@ -1,31 +1,44 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { Actor, HttpAgent } from "@dfinity/agent";
+import { Principal } from "@dfinity/principal";
 
 const url = readUrl();
 const targetUrl = new URL(url);
-const canisterId = targetUrl.pathname.split("/")[1];
-const nodePath = `/${targetUrl.pathname.split("/").slice(2).join("/")}`;
-const searchUrl = `${targetUrl.origin}/${encodeURIComponent(canisterId)}/search`;
+const canisterId = targetUrl.pathname.split("/")[2];
+const nodePath = `/${targetUrl.pathname.split("/").slice(3).join("/")}`;
+const searchUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/search`;
+const graphUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/graph?center=${encodeURIComponent(nodePath)}&depth=1`;
+const emptyGraphUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/graph`;
 const smokeWaitMs = 30_000;
 const pollMs = 500;
-const targetNode = await readTargetNode();
+const targetContext = await readTargetContext();
+const targetNode = targetContext.node;
 const contentProbe = contentProbeFor(targetNode.content);
 const pathQuery = pathQueryFor(nodePath);
 const fullQuery = fullTextQueryFor(targetNode.content);
 
+assertNodeContextShape(targetContext);
 run("open", [url]);
 assertSnapshotIncludes(contentProbe);
+assertSnapshotIncludes("Incoming Links");
 run("open", [`${url}?view=raw`]);
 assertSnapshotIncludes(contentProbe);
 run("open", [`${searchUrl}?q=${encodeURIComponent(pathQuery)}&kind=path`]);
-assertSnapshotIncludes("path_substring");
+assertSnapshotIncludes(contentProbe);
 run("open", [`${searchUrl}?q=${encodeURIComponent(fullQuery)}&kind=full`]);
-assertSnapshotIncludes("content_fts");
+assertSnapshotIncludes(nodePath);
 assertSnapshotIncludes("Full text");
 run("open", [`${url}?tab=recent`]);
 assertSnapshotIncludes("Recent");
 run("open", [`${url}?tab=lint`]);
 assertSnapshotIncludes("Lint Hints");
+run("open", [graphUrl]);
+assertSnapshotIncludes("Local link graph");
+assertSnapshotIncludes(nodePath);
+run("open", [emptyGraphUrl]);
+assertSnapshotIncludes("Open Graph from a wiki page to inspect its local neighborhood.");
+assertNoSnapshotText("Cannot reach IC host");
 
 console.log(`Wiki browser smoke OK: ${canisterId} ${nodePath}`);
 
@@ -51,16 +64,45 @@ function assertSnapshotIncludes(text) {
   throw new Error(`snapshot missing ${text}\n${lastOutput}`);
 }
 
-async function readTargetNode() {
-  const response = await fetch(`${targetUrl.origin}/api/wiki/${encodeURIComponent(canisterId)}/node?path=${encodeURIComponent(nodePath)}`);
-  if (!response.ok) {
-    throw new Error(`smoke target node is not readable: ${response.status} ${await response.text()}`);
+async function readTargetContext() {
+  const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
+  const agent = HttpAgent.createSync({ host });
+  if (isLocalHost(host)) {
+    await agent.fetchRootKey();
   }
-  const node = await response.json();
+  const actor = Actor.createActor(idlFactory, {
+    agent,
+    canisterId: Principal.fromText(canisterId)
+  });
+  const result = await actor.read_node_context({ path: nodePath, link_limit: 20 });
+  if ("Err" in result) {
+    throw new Error(`smoke target node context is not readable: ${result.Err}`);
+  }
+  const raw = result.Ok[0];
+  if (!raw) {
+    throw new Error(`smoke target node context is missing: ${nodePath}`);
+  }
+  return normalizeNodeContext(raw);
+}
+
+function assertNodeContextShape(context) {
+  if (!context || typeof context !== "object" || !context.node) {
+    throw new Error("node-context response must contain node");
+  }
+  if (!Array.isArray(context.incomingLinks) || !Array.isArray(context.outgoingLinks)) {
+    throw new Error("node-context response must contain incomingLinks and outgoingLinks arrays");
+  }
+  const node = context.node;
   if (node.kind !== "file" || typeof node.content !== "string" || !node.content.trim()) {
     throw new Error(`smoke target must be an existing file with content: ${nodePath}`);
   }
-  return node;
+}
+
+function assertNoSnapshotText(text) {
+  const output = snapshotText();
+  if (output.includes(text)) {
+    throw new Error(`snapshot unexpectedly included ${text}\n${output}`);
+  }
 }
 
 function contentProbeFor(content) {
@@ -110,4 +152,51 @@ function run(command, args) {
 
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function normalizeNodeContext(raw) {
+  return {
+    node: {
+      path: raw.node.path,
+      kind: "File" in raw.node.kind ? "file" : "source",
+      content: raw.node.content
+    },
+    incomingLinks: raw.incoming_links,
+    outgoingLinks: raw.outgoing_links
+  };
+}
+
+function isLocalHost(host) {
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(:\d+)?/i.test(host);
+}
+
+function idlFactory({ IDL: idl }) {
+  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
+  const LinkEdge = idl.Record({
+    source_path: idl.Text,
+    target_path: idl.Text,
+    raw_href: idl.Text,
+    link_text: idl.Text,
+    link_kind: idl.Text,
+    updated_at: idl.Int64
+  });
+  const Node = idl.Record({
+    path: idl.Text,
+    kind: NodeKind,
+    content: idl.Text,
+    created_at: idl.Int64,
+    updated_at: idl.Int64,
+    etag: idl.Text,
+    metadata_json: idl.Text
+  });
+  const NodeContext = idl.Record({
+    incoming_links: idl.Vec(LinkEdge),
+    node: Node,
+    outgoing_links: idl.Vec(LinkEdge)
+  });
+  const NodeContextRequest = idl.Record({ path: idl.Text, link_limit: idl.Nat32 });
+  const ResultNodeContext = idl.Variant({ Ok: idl.Opt(NodeContext), Err: idl.Text });
+  return idl.Service({
+    read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"])
+  });
 }

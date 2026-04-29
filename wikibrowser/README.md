@@ -13,17 +13,17 @@ pnpm dev
 Open a canister with:
 
 ```text
-http://localhost:3000/<canister-id>/Wiki
+http://localhost:3000/w/<canister-id>/Wiki
 ```
 
-`WIKI_IC_HOST` controls the agent host:
+`NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host:
 
 ```bash
 # local icp network
-WIKI_IC_HOST=http://127.0.0.1:8000
+NEXT_PUBLIC_WIKI_IC_HOST=http://127.0.0.1:8000
 
 # mainnet / Vercel
-WIKI_IC_HOST=https://icp0.io
+NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io
 ```
 
 ## Scope
@@ -32,6 +32,7 @@ WIKI_IC_HOST=https://icp0.io
 - Render Markdown preview and raw content
 - Search by path or full text
 - Show recent nodes
+- Show incoming backlinks and a lightweight graph view
 - Show lightweight lint hints
 - Inspect path, etag, update time, size, role, outgoing links, and inferred raw sources
 - Show route-level 404 and VFS not-found states
@@ -60,7 +61,7 @@ pnpm dev
 Run the browser smoke against an existing file node:
 
 ```bash
-pnpm smoke -- --url http://127.0.0.1:3000/<canister-id>/Wiki/<existing-file>.md
+pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/Wiki/<existing-file>.md
 ```
 
 The URL must point to a readable file node. Directory paths and missing files intentionally fail.
@@ -86,22 +87,28 @@ Covered methods:
 
 - `read_node`
 - `list_children`
+- `incoming_links`
+- `outgoing_links`
+- `graph_links`
+- `graph_neighborhood`
+- `read_node_context`
 - `recent_nodes`
 - `search_node_paths`
 - `search_nodes`
 
 ## Public MVP
 
-Initial deployment target is Vercel with `WIKI_IC_HOST=https://icp0.io`.
+Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`.
 The app is public read-only and accepts arbitrary canister IDs.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
+The `/w/<canister-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway.
 
 ## Troubleshooting
 
-- Local canister not found: the canister ID does not exist on `WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
+- Local canister not found: the canister ID does not exist on `NEXT_PUBLIC_WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
 - Mainnet canister not found: confirm that the URL canister ID exists on `https://icp0.io`.
 - Method missing / wrong canister: use a Kinic Wiki canister that exposes the Wiki VFS methods covered by `lib/vfs-idl.ts`.
-- Host unreachable: confirm `WIKI_IC_HOST` and network access to the local replica or IC gateway.
+- Host unreachable: confirm `NEXT_PUBLIC_WIKI_IC_HOST` and network access to the local replica or IC gateway.
 
 ## Vercel Deploy
 
@@ -114,7 +121,8 @@ Dashboard settings:
 - Install Command: `pnpm install`
 - Build Command: `pnpm build`
 - Output Directory: Vercel default
-- Environment Variables: `WIKI_IC_HOST=https://icp0.io` for Preview and Production
+- Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` for Preview and Production
+- Routing: keep `vercel.json` so `/w/:segments*` rewrites to the static `/w` shell
 
 CLI deploy from this directory:
 
