@@ -12,7 +12,7 @@ use vfs_types::{
     SearchPreviewMode, Status, WriteNodeRequest, WriteNodeResult,
 };
 
-use crate::agent_tools::{
+use vfs_cli::agent_tools::{
     create_anthropic_tools, create_openai_tools, handle_anthropic_tool_call,
     handle_openai_tool_call,
 };

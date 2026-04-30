@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+use vfs_cli::connection::ResolvedConnection;
 
 use super::dataset::BeamQuestionClass;
 use super::question_types::{canonical_note_candidates, normalize_question_type};
-use crate::connection::ResolvedConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {
@@ -537,8 +537,8 @@ fn sum_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 mod tests {
     use super::{CodexQuestionContext, codex_prompt, next_codex_schema_path};
     use crate::beam_bench::dataset::BeamQuestionClass;
-    use crate::connection::ResolvedConnection;
     use std::collections::HashSet;
+    use vfs_cli::connection::ResolvedConnection;
 
     fn test_context<'a>() -> CodexQuestionContext<'a> {
         test_context_with_type("information_extraction")

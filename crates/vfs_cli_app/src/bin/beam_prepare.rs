@@ -4,9 +4,9 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use vfs_cli::connection::resolve_connection;
 use vfs_cli_app::beam_bench::{BeamPrepareArgs, run_beam_prepare};
 use vfs_cli_app::cli::ConnectionArgs;
-use vfs_cli_app::connection::resolve_connection;
 
 #[derive(Parser, Debug)]
 #[command(name = "beam-prepare")]
