@@ -7,6 +7,11 @@ type AppendNodeRequest = record {
   metadata_json : opt text;
 };
 type CanisterHealth = record { cycles_balance : nat };
+type CanonicalRole = record {
+  name : text;
+  path_pattern : text;
+  purpose : text;
+};
 type ChildNode = record {
   updated_at : opt int64;
   etag : opt text;
@@ -84,6 +89,20 @@ type LinkEdge = record {
 };
 type ListChildrenRequest = record { path : text };
 type ListNodesRequest = record { recursive : bool; prefix : text };
+type MemoryCapability = record { name : text; description : text };
+type MemoryManifest = record {
+  recommended_entrypoint : text;
+  api_version : text;
+  capabilities : vec MemoryCapability;
+  write_policy : text;
+  budget_unit : text;
+  canonical_roles : vec CanonicalRole;
+  max_depth : nat32;
+  max_query_limit : nat32;
+  purpose : text;
+  roots : vec MemoryRoot;
+};
+type MemoryRoot = record { kind : text; path : text };
 type MkdirNodeRequest = record { path : text };
 type MkdirNodeResult = record { created : bool; path : text };
 type MoveNodeRequest = record {
@@ -133,6 +152,23 @@ type NodeMutationAck = record {
   kind : NodeKind;
   path : text;
 };
+type QueryContext = record {
+  truncated : bool;
+  task : text;
+  evidence : vec SourceEvidence;
+  nodes : vec NodeContext;
+  graph_links : vec LinkEdge;
+  search_hits : vec SearchNodeHit;
+  namespace : text;
+};
+type QueryContextRequest = record {
+  task : text;
+  include_evidence : bool;
+  entities : vec text;
+  budget_tokens : nat32;
+  depth : nat32;
+  namespace : opt text;
+};
 type RecentNodeHit = record {
   updated_at : int64;
   etag : text;
@@ -143,10 +179,12 @@ type RecentNodesRequest = record { path : opt text; limit : nat32 };
 type Result = variant { Ok : WriteNodeResult; Err : text };
 type Result_1 = variant { Ok : DeleteNodeResult; Err : text };
 type Result_10 = variant { Ok : MoveNodeResult; Err : text };
-type Result_11 = variant { Ok : opt Node; Err : text };
-type Result_12 = variant { Ok : opt NodeContext; Err : text };
-type Result_13 = variant { Ok : vec RecentNodeHit; Err : text };
-type Result_14 = variant { Ok : vec SearchNodeHit; Err : text };
+type Result_11 = variant { Ok : QueryContext; Err : text };
+type Result_12 = variant { Ok : opt Node; Err : text };
+type Result_13 = variant { Ok : opt NodeContext; Err : text };
+type Result_14 = variant { Ok : vec RecentNodeHit; Err : text };
+type Result_15 = variant { Ok : vec SearchNodeHit; Err : text };
+type Result_16 = variant { Ok : SourceEvidence; Err : text };
 type Result_2 = variant { Ok : EditNodeResult; Err : text };
 type Result_3 = variant { Ok : ExportSnapshotResponse; Err : text };
 type Result_4 = variant { Ok : FetchUpdatesResponse; Err : text };
@@ -183,6 +221,14 @@ type SearchPreview = record {
 };
 type SearchPreviewField = variant { Path; Content };
 type SearchPreviewMode = variant { Light; ContentStart; None };
+type SourceEvidence = record { node_path : text; refs : vec SourceEvidenceRef };
+type SourceEvidenceRef = record {
+  link_text : text;
+  via_path : text;
+  source_path : text;
+  raw_href : text;
+};
+type SourceEvidenceRequest = record { node_path : text };
 type Status = record { source_count : nat64; file_count : nat64 };
 type WriteNodeRequest = record {
   content : text;
@@ -205,15 +251,18 @@ service : () -> {
   incoming_links : (IncomingLinksRequest) -> (Result_6) query;
   list_children : (ListChildrenRequest) -> (Result_7) query;
   list_nodes : (ListNodesRequest) -> (Result_8) query;
+  memory_manifest : () -> (MemoryManifest) query;
   mkdir_node : (MkdirNodeRequest) -> (Result_9) query;
   move_node : (MoveNodeRequest) -> (Result_10);
   multi_edit_node : (MultiEditNodeRequest) -> (Result_2);
   outgoing_links : (OutgoingLinksRequest) -> (Result_6) query;
-  read_node : (text) -> (Result_11) query;
-  read_node_context : (NodeContextRequest) -> (Result_12) query;
-  recent_nodes : (RecentNodesRequest) -> (Result_13) query;
-  search_node_paths : (SearchNodePathsRequest) -> (Result_14) query;
-  search_nodes : (SearchNodesRequest) -> (Result_14) query;
+  query_context : (QueryContextRequest) -> (Result_11) query;
+  read_node : (text) -> (Result_12) query;
+  read_node_context : (NodeContextRequest) -> (Result_13) query;
+  recent_nodes : (RecentNodesRequest) -> (Result_14) query;
+  search_node_paths : (SearchNodePathsRequest) -> (Result_15) query;
+  search_nodes : (SearchNodesRequest) -> (Result_15) query;
+  source_evidence : (SourceEvidenceRequest) -> (Result_16) query;
   status : () -> (Status) query;
   write_node : (WriteNodeRequest) -> (Result);
 }

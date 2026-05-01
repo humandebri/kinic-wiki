@@ -12,14 +12,16 @@ use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, CanisterHealth, ChildNode, DeleteNodeRequest, DeleteNodeResult,
-    EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
-    FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
-    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
-    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
-    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
-    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
-    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DeleteNodeRequest,
+    DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
+    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
+    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
+    ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
+    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
+    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
+    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
+    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -52,6 +54,31 @@ fn status() -> Status {
 fn canister_health() -> CanisterHealth {
     CanisterHealth {
         cycles_balance: ic_cdk::api::canister_cycle_balance(),
+    }
+}
+
+#[query]
+fn memory_manifest() -> MemoryManifest {
+    MemoryManifest {
+        api_version: "agent-memory-v1".to_string(),
+        purpose: "Canister-backed long-term wiki memory for agents".to_string(),
+        roots: vec![
+            MemoryRoot {
+                path: "/Wiki".to_string(),
+                kind: "wiki".to_string(),
+            },
+            MemoryRoot {
+                path: "/Sources".to_string(),
+                kind: "raw_sources".to_string(),
+            },
+        ],
+        capabilities: memory_capabilities(),
+        canonical_roles: canonical_roles(),
+        write_policy: "agent_memory_read_only".to_string(),
+        recommended_entrypoint: "query_context".to_string(),
+        max_depth: 2,
+        max_query_limit: 100,
+        budget_unit: "approx_chars_from_tokens".to_string(),
     }
 }
 
@@ -140,6 +167,16 @@ fn graph_neighborhood(request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>
 #[query]
 fn read_node_context(request: NodeContextRequest) -> Result<Option<NodeContext>, String> {
     with_service(|service| service.read_node_context(request))
+}
+
+#[query]
+fn query_context(request: QueryContextRequest) -> Result<QueryContext, String> {
+    with_service(|service| service.query_context(request))
+}
+
+#[query]
+fn source_evidence(request: SourceEvidenceRequest) -> Result<SourceEvidence, String> {
+    with_service(|service| service.source_evidence(request))
 }
 
 #[update]
@@ -233,6 +270,70 @@ where
     })
 }
 
+fn memory_capabilities() -> Vec<MemoryCapability> {
+    [
+        (
+            "query_context",
+            "Primary agent-memory entrypoint for task-scoped context bundles",
+        ),
+        ("source_evidence", "Read source-path evidence for one node"),
+        (
+            "memory_manifest",
+            "Discover memory API shape, limits, and policy",
+        ),
+        (
+            "read_node_context",
+            "Auxiliary node read with incoming and outgoing links",
+        ),
+        ("search_nodes", "Auxiliary search with lightweight previews"),
+        (
+            "graph_neighborhood",
+            "Auxiliary local link graph around one node",
+        ),
+        ("recent_nodes", "Auxiliary recent live-node listing"),
+    ]
+    .into_iter()
+    .map(|(name, description)| MemoryCapability {
+        name: name.to_string(),
+        description: description.to_string(),
+    })
+    .collect()
+}
+
+fn canonical_roles() -> Vec<CanonicalRole> {
+    [
+        (
+            "index",
+            "index.md",
+            "Content-oriented catalog of pages in a scope",
+        ),
+        (
+            "overview",
+            "overview.md",
+            "Corpus-level synthesis maintained by agents",
+        ),
+        ("log", "log.md", "Append-only chronological mutation log"),
+        (
+            "schema",
+            "schema.md",
+            "Scope-local conventions and write rules",
+        ),
+        ("topics", "topics/*.md", "Topic-level synthesis pages"),
+        (
+            "provenance",
+            "provenance.md",
+            "Source-path provenance for a scope or node",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, path_pattern, purpose)| CanonicalRole {
+        name: name.to_string(),
+        path_pattern: path_pattern.to_string(),
+        purpose: purpose.to_string(),
+    })
+    .collect()
+}
+
 fn validate_append_source_path(
     service: &VfsService,
     request: &AppendNodeRequest,
@@ -277,6 +378,10 @@ fn normalize_candid_interface(interface: String) -> String {
         .replace(
             "mkdir_node : (DeleteNodeResult) -> (Result_9) query;",
             "mkdir_node : (MkdirNodeRequest) -> (Result_9) query;",
+        )
+        .replace(
+            "mkdir_node : (DeleteNodeResult) -> (Result_10) query;",
+            "mkdir_node : (MkdirNodeRequest) -> (Result_10) query;",
         )
         .replace(
             "outgoing_links : (IncomingLinksRequest) -> (Result_6) query;",

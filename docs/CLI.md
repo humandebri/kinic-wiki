@@ -2,6 +2,10 @@
 
 `vfs-cli` is the shell interface for the canister-backed VFS.
 
+The canister also exposes read-only Agent Memory API methods such as `memory_manifest`, `query_context`, and `source_evidence`.
+Those are direct canister/client methods, not CLI commands in this document.
+Use the CLI commands below for shell workflows and local mirror operations.
+
 ## Connection
 
 Use `--canister-id` to select a canister explicitly.

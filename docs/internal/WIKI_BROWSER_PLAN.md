@@ -1,5 +1,7 @@
 # Wiki Browser Implementation Plan
 
+> Archived historical plan. This document predates the current static `/w` shell, browser-direct IC queries, and Agent Memory API v1. Treat it as implementation history, not the current WikiBrowser specification.
+
 ## Summary
 
 `wikibrowser/` に Next.js App Router の public read-only UI を追加する。UI は VSC 風 3 ペインで、任意 canister ID の `/Wiki` / `/Sources` を閲覧・検索できる。初期は認証なし、編集導線なし。将来 Internet Identity と asset canister deploy を追加できる構造にする。
@@ -111,4 +113,3 @@ URL state:
 - 任意 canister ID を許可する。read-only proxy になるリスクは許容する。
 - `list_children` は既存 node path 情報から計算し、DB schema は変更しない。
 - shadcn/ui の導入に必要な frontend 依存は `wikibrowser/` 内に閉じる。
-

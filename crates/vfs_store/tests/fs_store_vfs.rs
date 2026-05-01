@@ -5,8 +5,8 @@ use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest,
     GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
-    NodeEntryKind, NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest,
-    SearchPreviewMode,
+    NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
+    SearchNodePathsRequest, SearchPreviewMode, SourceEvidenceRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -422,6 +422,208 @@ fn node_context_returns_node_and_indexed_links() {
         })
         .expect("missing context should load");
     assert!(missing.is_none());
+}
+
+#[test]
+fn memory_queries_return_context_and_scope_evidence() {
+    let (_dir, store) = new_store();
+    for (path, content, now) in [
+        (
+            "/Wiki/scope/index.md",
+            "# Index\n\n- [Overview](overview.md)\n- [Alpha](alpha.md)",
+            10,
+        ),
+        (
+            "/Wiki/scope/overview.md",
+            "# Overview\n\nalpha synthesis [Raw](/Sources/raw/a/a.md)",
+            11,
+        ),
+        ("/Wiki/scope/schema.md", "# Schema\n\nread-only", 12),
+        (
+            "/Wiki/scope/provenance.md",
+            "# Provenance\n\n[Raw](/Sources/raw/a/a.md)",
+            13,
+        ),
+        (
+            "/Wiki/scope/alpha.md",
+            "# Alpha\n\nbeam full reset detail [Raw](/Sources/raw/a/a.md)",
+            14,
+        ),
+        ("/Wiki/scope/topics/foo.md", "# Foo\n\ntopic detail", 15),
+        ("/Sources/raw/a/a.md", "raw source", 16),
+    ] {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: Some(if path.starts_with("/Sources/") {
+                        NodeKind::Source
+                    } else {
+                        NodeKind::File
+                    }),
+                },
+                now,
+            )
+            .expect("node write should succeed");
+    }
+
+    let context = store
+        .query_context(QueryContextRequest {
+            task: "beam reset".to_string(),
+            entities: vec!["alpha".to_string()],
+            namespace: Some("/Wiki/scope".to_string()),
+            budget_tokens: 1_000,
+            include_evidence: true,
+            depth: 1,
+        })
+        .expect("context should load");
+    assert_eq!(context.namespace, "/Wiki/scope");
+    assert!(
+        context
+            .nodes
+            .iter()
+            .any(|node| node.node.path == "/Wiki/scope/alpha.md")
+    );
+    assert!(!context.search_hits.is_empty());
+    assert!(!context.graph_links.is_empty());
+    assert!(context.evidence.iter().any(|evidence| {
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    }));
+
+    let evidence = store
+        .source_evidence(SourceEvidenceRequest {
+            node_path: "/Wiki/scope/overview.md".to_string(),
+        })
+        .expect("evidence should load");
+    assert_eq!(evidence.node_path, "/Wiki/scope/overview.md");
+    assert!(
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    );
+
+    let topic_evidence = store
+        .source_evidence(SourceEvidenceRequest {
+            node_path: "/Wiki/scope/topics/foo.md".to_string(),
+        })
+        .expect("topic evidence should load");
+    assert!(topic_evidence.refs.iter().any(|item| {
+        item.via_path == "/Wiki/scope/provenance.md" && item.source_path == "/Sources/raw/a/a.md"
+    }));
+
+    let small_context = store
+        .query_context(QueryContextRequest {
+            task: "summary".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/scope".to_string()),
+            budget_tokens: 1,
+            include_evidence: true,
+            depth: 1,
+        })
+        .expect("small context should load");
+    assert!(small_context.truncated);
+
+    let invalid_depth = store.query_context(QueryContextRequest {
+        task: "beam".to_string(),
+        entities: Vec::new(),
+        namespace: Some("/Wiki/scope".to_string()),
+        budget_tokens: 1_000,
+        include_evidence: false,
+        depth: 3,
+    });
+    assert_eq!(
+        invalid_depth.expect_err("invalid depth should fail"),
+        "depth must be 0, 1, or 2"
+    );
+}
+
+#[test]
+fn query_context_trims_search_hits_and_preserves_candidate_order() {
+    let (_dir, store) = new_store();
+    for (path, content, now) in [
+        ("/Wiki/order/index.md", "# Index", 10),
+        ("/Wiki/order/overview.md", "# Overview", 11),
+        ("/Wiki/order/schema.md", "# Schema", 12),
+        ("/Wiki/order/aaa.md", "# Aaa\n\nneedle alpha detail", 13),
+        ("/Wiki/order/zzz.md", "# Zzz\n\nneedle zeta detail", 14),
+    ] {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: Some(NodeKind::File),
+                },
+                now,
+            )
+            .expect("node write should succeed");
+    }
+
+    let ordered = store
+        .query_context(QueryContextRequest {
+            task: "needle".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/order".to_string()),
+            budget_tokens: 1_000,
+            include_evidence: false,
+            depth: 0,
+        })
+        .expect("context should load");
+    let ordered_paths = ordered
+        .nodes
+        .iter()
+        .map(|context| context.node.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &ordered_paths[..3],
+        [
+            "/Wiki/order/index.md",
+            "/Wiki/order/overview.md",
+            "/Wiki/order/schema.md",
+        ]
+    );
+    assert!(ordered_paths.contains(&"/Wiki/order/aaa.md"));
+
+    let (_dir, budget_store) = new_store();
+    budget_store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/budget/long.md".to_string(),
+                content: "# Long\n\nneedle detail that cannot fit in a one token budget"
+                    .to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: Some(NodeKind::File),
+            },
+            20,
+        )
+        .expect("node write should succeed");
+
+    let small = budget_store
+        .query_context(QueryContextRequest {
+            task: "needle".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/budget".to_string()),
+            budget_tokens: 1,
+            include_evidence: false,
+            depth: 0,
+        })
+        .expect("small context should load");
+    assert!(small.search_hits.is_empty());
+    assert!(small.nodes.is_empty());
+    assert!(small.truncated);
 }
 
 #[test]

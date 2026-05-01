@@ -10,10 +10,11 @@ use vfs_types::{
     EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
     FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
-    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
-    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
-    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
-    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    ListNodesRequest, MemoryManifest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest,
+    MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext,
+    NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[async_trait]
@@ -21,6 +22,9 @@ pub trait VfsApi: Sync {
     async fn status(&self) -> Result<Status>;
     async fn canister_health(&self) -> Result<CanisterHealth> {
         Err(anyhow!("canister_health is not implemented by this client"))
+    }
+    async fn memory_manifest(&self) -> Result<MemoryManifest> {
+        Err(anyhow!("memory_manifest is not implemented by this client"))
     }
     async fn read_node(&self, path: &str) -> Result<Option<Node>>;
     async fn read_node_context(&self, _request: NodeContextRequest) -> Result<Option<NodeContext>> {
@@ -57,6 +61,12 @@ pub trait VfsApi: Sync {
     }
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult>;
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>>;
+    async fn query_context(&self, _request: QueryContextRequest) -> Result<QueryContext> {
+        Err(anyhow!("query_context is not implemented by this client"))
+    }
+    async fn source_evidence(&self, _request: SourceEvidenceRequest) -> Result<SourceEvidence> {
+        Err(anyhow!("source_evidence is not implemented by this client"))
+    }
     async fn search_node_paths(
         &self,
         request: SearchNodePathsRequest,
@@ -134,6 +144,10 @@ impl VfsApi for CanisterVfsClient {
 
     async fn canister_health(&self) -> Result<CanisterHealth> {
         self.query("canister_health", &()).await
+    }
+
+    async fn memory_manifest(&self) -> Result<MemoryManifest> {
+        self.query("memory_manifest", &()).await
     }
 
     async fn read_node(&self, path: &str) -> Result<Option<Node>> {
@@ -229,6 +243,17 @@ impl VfsApi for CanisterVfsClient {
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
         let result: Result<Vec<SearchNodeHit>, String> =
             self.query("search_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn query_context(&self, request: QueryContextRequest) -> Result<QueryContext> {
+        let result: Result<QueryContext, String> = self.query("query_context", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn source_evidence(&self, request: SourceEvidenceRequest) -> Result<SourceEvidence> {
+        let result: Result<SourceEvidence, String> =
+            self.query("source_evidence", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

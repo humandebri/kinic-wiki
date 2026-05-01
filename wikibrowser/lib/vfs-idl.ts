@@ -64,6 +64,44 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     score: idl.Float32,
     match_reasons: idl.Vec(idl.Text)
   });
+  const MemoryCapability = idl.Record({ name: idl.Text, description: idl.Text });
+  const MemoryRoot = idl.Record({ path: idl.Text, kind: idl.Text });
+  const CanonicalRole = idl.Record({
+    name: idl.Text,
+    path_pattern: idl.Text,
+    purpose: idl.Text
+  });
+  const MemoryManifest = idl.Record({
+    api_version: idl.Text,
+    purpose: idl.Text,
+    roots: idl.Vec(MemoryRoot),
+    capabilities: idl.Vec(MemoryCapability),
+    canonical_roles: idl.Vec(CanonicalRole),
+    write_policy: idl.Text,
+    recommended_entrypoint: idl.Text,
+    max_depth: idl.Nat32,
+    max_query_limit: idl.Nat32,
+    budget_unit: idl.Text
+  });
+  const SourceEvidenceRef = idl.Record({
+    source_path: idl.Text,
+    via_path: idl.Text,
+    raw_href: idl.Text,
+    link_text: idl.Text
+  });
+  const SourceEvidence = idl.Record({
+    node_path: idl.Text,
+    refs: idl.Vec(SourceEvidenceRef)
+  });
+  const QueryContext = idl.Record({
+    namespace: idl.Text,
+    task: idl.Text,
+    search_hits: idl.Vec(SearchNodeHit),
+    nodes: idl.Vec(NodeContext),
+    graph_links: idl.Vec(LinkEdge),
+    evidence: idl.Vec(SourceEvidence),
+    truncated: idl.Bool
+  });
   const ListChildrenRequest = idl.Record({ path: idl.Text });
   const RecentNodesRequest = idl.Record({ path: idl.Opt(idl.Text), limit: idl.Nat32 });
   const IncomingLinksRequest = idl.Record({ path: idl.Text, limit: idl.Nat32 });
@@ -83,24 +121,38 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     top_k: idl.Nat32,
     preview_mode: idl.Opt(SearchPreviewMode)
   });
+  const QueryContextRequest = idl.Record({
+    task: idl.Text,
+    entities: idl.Vec(idl.Text),
+    namespace: idl.Opt(idl.Text),
+    budget_tokens: idl.Nat32,
+    include_evidence: idl.Bool,
+    depth: idl.Nat32
+  });
+  const SourceEvidenceRequest = idl.Record({ node_path: idl.Text });
   const ResultNode = idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text });
   const ResultChildren = idl.Variant({ Ok: idl.Vec(ChildNode), Err: idl.Text });
   const ResultRecent = idl.Variant({ Ok: idl.Vec(RecentNodeHit), Err: idl.Text });
   const ResultLinks = idl.Variant({ Ok: idl.Vec(LinkEdge), Err: idl.Text });
   const ResultNodeContext = idl.Variant({ Ok: idl.Opt(NodeContext), Err: idl.Text });
   const ResultSearch = idl.Variant({ Ok: idl.Vec(SearchNodeHit), Err: idl.Text });
+  const ResultQueryContext = idl.Variant({ Ok: QueryContext, Err: idl.Text });
+  const ResultSourceEvidence = idl.Variant({ Ok: SourceEvidence, Err: idl.Text });
 
   return idl.Service({
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
     incoming_links: idl.Func([IncomingLinksRequest], [ResultLinks], ["query"]),
+    memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
+    query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
     read_node: idl.Func([idl.Text], [ResultNode], ["query"]),
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"]),
     list_children: idl.Func([ListChildrenRequest], [ResultChildren], ["query"]),
     outgoing_links: idl.Func([OutgoingLinksRequest], [ResultLinks], ["query"]),
     recent_nodes: idl.Func([RecentNodesRequest], [ResultRecent], ["query"]),
     search_node_paths: idl.Func([SearchNodePathsRequest], [ResultSearch], ["query"]),
-    search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"])
+    search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"]),
+    source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"])
   });
 };

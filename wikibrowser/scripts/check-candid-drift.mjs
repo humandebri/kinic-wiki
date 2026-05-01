@@ -185,10 +185,12 @@ function normalizeResultAlias(value) {
   const normalized = normalizeShape(value);
   if (normalized === "Result_6") return "ResultLinks";
   if (normalized === "Result_7") return "ResultChildren";
-  if (normalized === "Result_11") return "ResultNode";
-  if (normalized === "Result_12") return "ResultNodeContext";
-  if (normalized === "Result_13") return "ResultRecent";
-  if (normalized === "Result_14") return "ResultSearch";
+  if (normalized === "Result_11") return "ResultQueryContext";
+  if (normalized === "Result_12") return "ResultNode";
+  if (normalized === "Result_13") return "ResultNodeContext";
+  if (normalized === "Result_14") return "ResultRecent";
+  if (normalized === "Result_15") return "ResultSearch";
+  if (normalized === "Result_16") return "ResultSourceEvidence";
   return normalized;
 }
 

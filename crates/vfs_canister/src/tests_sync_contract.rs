@@ -282,5 +282,13 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_9) query;"),
             "mkdir_node must not collapse to DeleteNodeResult",
         );
+        assert!(
+            !did.contains("recent_changes :"),
+            "recent_changes should not be part of agent memory v1",
+        );
+        assert!(
+            !did.contains("memory_summary :"),
+            "memory_summary should not be part of agent memory v1",
+        );
     }
 }

@@ -11,8 +11,9 @@ use vfs_types::{
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
-    OutgoingLinksRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
-    SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -122,6 +123,17 @@ impl VfsService {
         request: NodeContextRequest,
     ) -> Result<Option<NodeContext>, String> {
         self.fs_store.read_node_context(request)
+    }
+
+    pub fn query_context(&self, request: QueryContextRequest) -> Result<QueryContext, String> {
+        self.fs_store.query_context(request)
+    }
+
+    pub fn source_evidence(
+        &self,
+        request: SourceEvidenceRequest,
+    ) -> Result<SourceEvidence, String> {
+        self.fs_store.source_evidence(request)
     }
 
     pub fn multi_edit_node(

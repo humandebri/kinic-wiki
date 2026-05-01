@@ -1,5 +1,9 @@
 export const expectedTypes = {
   CanisterHealth: { kind: "record", fields: { cycles_balance: "nat" } },
+  CanonicalRole: {
+    kind: "record",
+    fields: { name: "text", path_pattern: "text", purpose: "text" }
+  },
   ChildNode: {
     kind: "record",
     fields: {
@@ -27,6 +31,46 @@ export const expectedTypes = {
   },
   NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null" } },
   NodeKind: { kind: "variant", cases: { File: "null", Source: "null" } },
+  MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
+  MemoryManifest: {
+    kind: "record",
+    fields: {
+      api_version: "text",
+      budget_unit: "text",
+      capabilities: "vec MemoryCapability",
+      max_depth: "nat32",
+      max_query_limit: "nat32",
+      recommended_entrypoint: "text",
+      write_policy: "text",
+      canonical_roles: "vec CanonicalRole",
+      purpose: "text",
+      roots: "vec MemoryRoot"
+    }
+  },
+  MemoryRoot: { kind: "record", fields: { kind: "text", path: "text" } },
+  QueryContext: {
+    kind: "record",
+    fields: {
+      truncated: "bool",
+      task: "text",
+      evidence: "vec SourceEvidence",
+      nodes: "vec NodeContext",
+      graph_links: "vec LinkEdge",
+      search_hits: "vec SearchNodeHit",
+      namespace: "text"
+    }
+  },
+  QueryContextRequest: {
+    kind: "record",
+    fields: {
+      task: "text",
+      include_evidence: "bool",
+      entities: "vec text",
+      budget_tokens: "nat32",
+      depth: "nat32",
+      namespace: "opt text"
+    }
+  },
   RecentNodeHit: {
     kind: "record",
     fields: { updated_at: "int64", etag: "text", kind: "NodeKind", path: "text" }
@@ -56,8 +100,10 @@ export const expectedTypes = {
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
+  ResultQueryContext: { kind: "variant", cases: { Ok: "QueryContext", Err: "text" } },
   ResultRecent: { kind: "variant", cases: { Ok: "vec RecentNodeHit", Err: "text" } },
   ResultSearch: { kind: "variant", cases: { Ok: "vec SearchNodeHit", Err: "text" } },
+  ResultSourceEvidence: { kind: "variant", cases: { Ok: "SourceEvidence", Err: "text" } },
   SearchNodeHit: {
     kind: "record",
     fields: {
@@ -97,16 +143,32 @@ export const expectedTypes = {
     }
   },
   SearchPreviewField: { kind: "variant", cases: { Path: "null", Content: "null" } },
-  SearchPreviewMode: { kind: "variant", cases: { Light: "null", ContentStart: "null", None: "null" } }
+  SearchPreviewMode: { kind: "variant", cases: { Light: "null", ContentStart: "null", None: "null" } },
+  SourceEvidence: {
+    kind: "record",
+    fields: { node_path: "text", refs: "vec SourceEvidenceRef" }
+  },
+  SourceEvidenceRef: {
+    kind: "record",
+    fields: {
+      link_text: "text",
+      via_path: "text",
+      source_path: "text",
+      raw_href: "text"
+    }
+  },
+  SourceEvidenceRequest: { kind: "record", fields: { node_path: "text" } }
 };
 
 export const didTypeAliases = {
   ResultChildren: "Result_7",
   ResultLinks: "Result_6",
-  ResultNode: "Result_11",
-  ResultNodeContext: "Result_12",
-  ResultRecent: "Result_13",
-  ResultSearch: "Result_14"
+  ResultNode: "Result_12",
+  ResultNodeContext: "Result_13",
+  ResultQueryContext: "Result_11",
+  ResultRecent: "Result_14",
+  ResultSearch: "Result_15",
+  ResultSourceEvidence: "Result_16"
 };
 
 export const expectedMethods = {
@@ -115,10 +177,13 @@ export const expectedMethods = {
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
   incoming_links: { input: ["IncomingLinksRequest"], output: "ResultLinks", mode: "query" },
   list_children: { input: ["ListChildrenRequest"], output: "ResultChildren", mode: "query" },
+  memory_manifest: { input: [], output: "MemoryManifest", mode: "query" },
   outgoing_links: { input: ["OutgoingLinksRequest"], output: "ResultLinks", mode: "query" },
+  query_context: { input: ["QueryContextRequest"], output: "ResultQueryContext", mode: "query" },
   read_node: { input: ["text"], output: "ResultNode", mode: "query" },
   read_node_context: { input: ["NodeContextRequest"], output: "ResultNodeContext", mode: "query" },
   recent_nodes: { input: ["RecentNodesRequest"], output: "ResultRecent", mode: "query" },
   search_node_paths: { input: ["SearchNodePathsRequest"], output: "ResultSearch", mode: "query" },
-  search_nodes: { input: ["SearchNodesRequest"], output: "ResultSearch", mode: "query" }
+  search_nodes: { input: ["SearchNodesRequest"], output: "ResultSearch", mode: "query" },
+  source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" }
 };

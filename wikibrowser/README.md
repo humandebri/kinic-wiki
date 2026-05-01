@@ -1,6 +1,6 @@
 # Wiki Browser
 
-Read-only browser for Kinic Wiki canisters. The app is a lightweight knowledge IDE, not a database admin UI.
+Read-only browser for Kinic Wiki canisters. The app is a lightweight knowledge IDE and debug UI, not the primary Agent Memory API surface and not a database admin UI.
 
 ## Local
 
@@ -35,6 +35,7 @@ NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io
 - Show incoming backlinks and a lightweight graph view
 - Show lightweight lint hints
 - Inspect path, etag, update time, size, role, outgoing links, and inferred raw sources
+- Read canister health and Agent Memory API metadata through the hand-written Candid subset
 - Show route-level 404 and VFS not-found states
 
 No editing, auth, write API, permission model, or full lint workflow is included.
@@ -85,6 +86,7 @@ Run `pnpm test` whenever the canister interface changes.
 
 Covered methods:
 
+- `canister_health`
 - `read_node`
 - `list_children`
 - `incoming_links`
@@ -92,6 +94,9 @@ Covered methods:
 - `graph_links`
 - `graph_neighborhood`
 - `read_node_context`
+- `memory_manifest`
+- `query_context`
+- `source_evidence`
 - `recent_nodes`
 - `search_node_paths`
 - `search_nodes`
@@ -107,7 +112,7 @@ The `/w/<canister-id>/...` URLs are served by a static `/w` shell through `verce
 
 - Local canister not found: the canister ID does not exist on `NEXT_PUBLIC_WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
 - Mainnet canister not found: confirm that the URL canister ID exists on `https://icp0.io`.
-- Method missing / wrong canister: use a Kinic Wiki canister that exposes the Wiki VFS methods covered by `lib/vfs-idl.ts`.
+- Method missing / wrong canister: use a Kinic Wiki canister that exposes the VFS, health, and Agent Memory methods covered by `lib/vfs-idl.ts`.
 - Host unreachable: confirm `NEXT_PUBLIC_WIKI_IC_HOST` and network access to the local replica or IC gateway.
 
 ## Vercel Deploy

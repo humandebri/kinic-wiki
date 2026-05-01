@@ -347,3 +347,76 @@ pub struct FetchUpdatesResponse {
     pub removed_paths: Vec<String>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryRoot {
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryCapability {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct CanonicalRole {
+    pub name: String,
+    pub path_pattern: String,
+    pub purpose: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryManifest {
+    pub api_version: String,
+    pub purpose: String,
+    pub roots: Vec<MemoryRoot>,
+    pub capabilities: Vec<MemoryCapability>,
+    pub canonical_roles: Vec<CanonicalRole>,
+    pub write_policy: String,
+    pub recommended_entrypoint: String,
+    pub max_depth: u32,
+    pub max_query_limit: u32,
+    pub budget_unit: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct QueryContextRequest {
+    pub task: String,
+    pub entities: Vec<String>,
+    pub namespace: Option<String>,
+    pub budget_tokens: u32,
+    pub include_evidence: bool,
+    pub depth: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
+pub struct QueryContext {
+    pub namespace: String,
+    pub task: String,
+    pub search_hits: Vec<SearchNodeHit>,
+    pub nodes: Vec<NodeContext>,
+    pub graph_links: Vec<LinkEdge>,
+    pub evidence: Vec<SourceEvidence>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidenceRequest {
+    pub node_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidenceRef {
+    pub source_path: String,
+    pub via_path: String,
+    pub raw_href: String,
+    pub link_text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidence {
+    pub node_path: String,
+    pub refs: Vec<SourceEvidenceRef>,
+}

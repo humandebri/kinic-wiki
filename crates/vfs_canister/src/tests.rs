@@ -8,15 +8,17 @@ use vfs_types::{
     FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
-    NodeEntryKind, NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest,
-    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
+    NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
+    SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, SourceEvidenceRequest,
+    WriteNodeRequest,
 };
 
 use super::{
     SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    graph_links, graph_neighborhood, incoming_links, list_children, list_nodes, mkdir_node,
-    move_node, multi_edit_node, outgoing_links, read_node, read_node_context, recent_nodes,
-    search_node_paths, search_nodes, status, write_node,
+    graph_links, graph_neighborhood, incoming_links, list_children, list_nodes, memory_manifest,
+    mkdir_node, move_node, multi_edit_node, outgoing_links, query_context, read_node,
+    read_node_context, recent_nodes, search_node_paths, search_nodes, source_evidence, status,
+    write_node,
 };
 
 fn install_test_service() {
@@ -37,6 +39,73 @@ fn status_stays_available_after_fs_migrations() {
 
     assert_eq!(current.file_count, 0);
     assert_eq!(current.source_count, 0);
+}
+
+#[test]
+fn memory_entrypoints_return_agent_memory_contract() {
+    install_test_service();
+
+    let manifest = memory_manifest();
+    assert_eq!(manifest.api_version, "agent-memory-v1");
+    assert_eq!(manifest.write_policy, "agent_memory_read_only");
+    assert_eq!(manifest.recommended_entrypoint, "query_context");
+    assert_eq!(manifest.max_depth, 2);
+    assert!(manifest.roots.iter().any(|root| root.path == "/Wiki"));
+
+    for (path, content) in [
+        ("/Wiki/scope/index.md", "# Index\n\n[Overview](overview.md)"),
+        (
+            "/Wiki/scope/overview.md",
+            "# Overview\n\nbeam memory [Raw](/Sources/raw/a/a.md)",
+        ),
+        ("/Wiki/scope/schema.md", "# Schema\n\nread-only"),
+        (
+            "/Wiki/scope/provenance.md",
+            "# Provenance\n\n[Raw](/Sources/raw/a/a.md)",
+        ),
+        ("/Sources/raw/a/a.md", "raw source"),
+    ] {
+        write_node(WriteNodeRequest {
+            path: path.to_string(),
+            kind: if path.starts_with("/Sources/") {
+                NodeKind::Source
+            } else {
+                NodeKind::File
+            },
+            content: content.to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .expect("write should succeed");
+    }
+
+    let context = query_context(QueryContextRequest {
+        task: "beam memory".to_string(),
+        entities: Vec::new(),
+        namespace: Some("/Wiki/scope".to_string()),
+        budget_tokens: 1_000,
+        include_evidence: true,
+        depth: 1,
+    })
+    .expect("query context should load");
+    assert!(
+        context
+            .nodes
+            .iter()
+            .any(|node| node.node.path == "/Wiki/scope/overview.md")
+    );
+    assert!(!context.evidence.is_empty());
+
+    let evidence = source_evidence(SourceEvidenceRequest {
+        node_path: "/Wiki/scope/overview.md".to_string(),
+    })
+    .expect("evidence should load");
+    assert!(
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    );
 }
 
 #[test]
