@@ -14,6 +14,7 @@ mod commands_maintenance_tests;
 mod commands_sync_tests;
 #[cfg(test)]
 mod commands_vfs_tests;
+pub mod conversation_wiki;
 mod facts_policy;
 pub mod lint_local;
 pub mod maintenance;
