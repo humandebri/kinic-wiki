@@ -28,6 +28,7 @@ Detailed structure map:
 - Search, snapshot export, and delta sync
 - Link graph and node-context queries for wiki navigation
 - Agent Memory API v1 for canister-backed long-term context reads
+- Skill Registry preview for VFS-backed `SKILL.md` packages with provenance metadata
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -77,6 +78,7 @@ Use `--local` to target the local replica. Otherwise the default host is `https:
 
 Use `vfs-cli` when working from a shell or script.
 See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
+See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Registry layout, manifest fields, audit behavior, and Browser support.
 
 Main commands:
 
@@ -105,6 +107,11 @@ Main commands:
 - `status`
 - `pull`
 - `push`
+- `skill import`
+- `skill inspect`
+- `skill list`
+- `skill audit`
+- `skill install`
 
 ### Library Tool Calling
 

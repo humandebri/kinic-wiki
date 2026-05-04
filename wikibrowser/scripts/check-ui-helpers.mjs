@@ -8,6 +8,7 @@ const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
+const { isSkillRegistryPath, manifestPathForSkillRegistryFile, parseSkillManifest } = await importTs("../lib/skill-manifest.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -102,6 +103,41 @@ assert.equal(cycleTone(5_000_000_000_000n), "blue");
 assert.equal(cycleTone(1_000_000_000_000n), "amber");
 assert.equal(cycleTone(999_999_999_999n), "red");
 assert.equal(cycleTone(null), "gray");
+const skillManifest = parseSkillManifest(`---
+kind: kinic.skill
+schema_version: 1
+id: acme/legal-review
+version: 0.1.0
+publisher: acme
+entry: SKILL.md
+knowledge:
+  - /Wiki/legal/contracts.md
+permissions:
+  file_read: true
+  network: false
+  shell: false
+provenance:
+  source: github.com/acme/legal
+  source_ref: abc123
+---
+# Manifest
+`);
+assert.equal(skillManifest.id, "acme/legal-review");
+assert.deepEqual(skillManifest.knowledge, ["/Wiki/legal/contracts.md"]);
+assert.equal(skillManifest.permissions.network, "false");
+assert.equal(skillManifest.provenance.source, "github.com/acme/legal");
+assert.equal(parseSkillManifest("# Missing"), null);
+assert.equal(isSkillRegistryPath("/Wiki/skills/acme/legal-review/manifest.md"), true);
+assert.equal(isSkillRegistryPath("/Wiki/other.md"), false);
+assert.equal(
+  manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/SKILL.md"),
+  "/Wiki/skills/acme/legal-review/manifest.md"
+);
+assert.equal(
+  manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/provenance.md"),
+  "/Wiki/skills/acme/legal-review/manifest.md"
+);
+assert.equal(manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/manifest.md"), null);
 
 console.log("UI helper checks OK");
 

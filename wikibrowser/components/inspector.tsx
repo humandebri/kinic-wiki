@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, GitBranch, Info, Sparkles } from "lucide-react";
+import { AlertTriangle, GitBranch, Info, PackageCheck, Sparkles } from "lucide-react";
 import { collectLintHints, provenancePathFor, rawSourceLinksFor } from "@/lib/lint-hints";
 import { hrefForPath } from "@/lib/paths";
+import { isSkillRegistryPath, manifestPathForSkillRegistryFile, parseSkillManifest, type SkillManifest } from "@/lib/skill-manifest";
 import type { ChildNode, LinkEdge, WikiNode } from "@/lib/types";
 import { InspectorCard, Meta } from "@/components/panel";
 
@@ -12,6 +13,12 @@ type ProvenanceState = {
   path: string | null;
   links: string[];
 };
+
+type SkillManifestState = {
+  path: string | null;
+  manifest: SkillManifest | null;
+};
+
 export function Inspector({
   canisterId,
   path,
@@ -33,6 +40,12 @@ export function Inspector({
 }) {
   const kind = node?.kind ?? "directory";
   const size = node ? `${new TextEncoder().encode(node.content).length}` : null;
+  const directSkillManifest = node ? parseSkillManifest(node.content) : null;
+  const expectedSkillManifestPath = node && !directSkillManifest ? manifestPathForSkillRegistryFile(path) : null;
+  const [skillManifestState, setSkillManifestState] = useState<SkillManifestState>({ path: null, manifest: null });
+  const skillManifest =
+    directSkillManifest ??
+    (skillManifestState.path === expectedSkillManifestPath ? skillManifestState.manifest : null);
   const hints = node ? collectLintHints(path, node.content) : [];
   const directRawSourceLinks = node ? rawSourceLinksFor(path, node.content) : [];
   const expectedProvenancePath = node && directRawSourceLinks.length === 0 ? provenancePathFor(path) : null;
@@ -66,6 +79,31 @@ export function Inspector({
     };
   }, [canisterId, expectedProvenancePath]);
 
+  useEffect(() => {
+    if (!expectedSkillManifestPath) {
+      return;
+    }
+    let cancelled = false;
+    import("@/lib/vfs-client")
+      .then(({ readNode }) => readNode(canisterId, expectedSkillManifestPath))
+      .then((manifestNode) => {
+        if (!cancelled) {
+          setSkillManifestState({
+            path: expectedSkillManifestPath,
+            manifest: manifestNode ? parseSkillManifest(manifestNode.content) : null
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSkillManifestState({ path: expectedSkillManifestPath, manifest: null });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canisterId, expectedSkillManifestPath]);
+
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
       <InspectorCard title="Identity" icon={<Info size={15} />}>
@@ -78,6 +116,17 @@ export function Inspector({
         <Meta label="updated_at" value={node?.updatedAt ?? "virtual"} />
         <Meta label="etag" value={node?.etag ?? "virtual"} />
       </InspectorCard>
+      {isSkillRegistryPath(path) ? (
+        <InspectorCard title="Skill" icon={<PackageCheck size={15} />}>
+          <Meta label="id" value={skillManifest?.id ?? null} />
+          <Meta label="publisher" value={skillManifest?.publisher ?? null} />
+          <Meta label="version" value={skillManifest?.version ?? null} />
+          <Meta label="entry" value={skillManifest?.entry ?? null} />
+          <Meta label="permissions" value={skillManifest ? formatRecord(skillManifest.permissions) : null} />
+          <Meta label="knowledge" value={skillManifest?.knowledge.join(", ") || null} />
+          <Meta label="provenance" value={skillManifest ? formatRecord(skillManifest.provenance) : null} />
+        </InspectorCard>
+      ) : null}
       <InspectorCard title="Lint Hints" icon={<AlertTriangle size={15} />}>
         {hints.length > 0 ? (
           <ul className="space-y-2">
@@ -151,4 +200,10 @@ export function Inspector({
       </InspectorCard>
     </div>
   );
+}
+
+function formatRecord(record: Record<string, string>): string | null {
+  const entries = Object.entries(record);
+  if (entries.length === 0) return null;
+  return entries.map(([key, value]) => `${key}=${value}`).join(", ");
 }

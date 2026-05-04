@@ -12,6 +12,7 @@ use crate::mirror::{
     tracked_nodes_from_snapshot, update_local_node_metadata, write_conflict_file,
     write_snapshot_mirror,
 };
+use crate::skill_registry::run_skill_command;
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -28,6 +29,9 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
         return run_vfs_command(client, vfs_command).await;
     }
     match command {
+        Command::Skill { command } => {
+            run_skill_command(client, command).await?;
+        }
         Command::RebuildIndex => {
             rebuild_index(client).await?;
             println!("index rebuilt");

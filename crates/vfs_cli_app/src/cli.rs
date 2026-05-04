@@ -1,11 +1,11 @@
 // Where: crates/vfs_cli_app/src/cli.rs
 // What: clap definitions for the FS-first CLI surface.
 // Why: Agents need direct node operations and path-based mirror sync commands.
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
 pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg};
-use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
+use wiki_domain::{DEFAULT_MIRROR_ROOT, SKILL_REGISTRY_ROOT, WIKI_ROOT_PATH};
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -20,6 +20,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
     RebuildIndex,
     RebuildScopeIndex {
         #[arg(long)]
@@ -258,6 +262,57 @@ pub enum Command {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillCommand {
+    Import {
+        #[arg(
+            long,
+            help = "Local skill directory containing SKILL.md; remote fetch is not part of v1"
+        )]
+        source: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Inspect {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long, default_value = SKILL_REGISTRY_ROOT)]
+        prefix: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Audit {
+        id: String,
+        #[arg(long, value_enum)]
+        fail_on: Option<AuditFailOnArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    Install {
+        id: String,
+        #[arg(long, help = "Exact output directory for the installed skill files")]
+        output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Skills root; writes to <skills-dir>/<publisher>/<name>. Use either --output or --skills-dir."
+        )]
+        skills_dir: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditFailOnArg {
+    Error,
+    Warning,
+}
+
 impl Command {
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
@@ -463,6 +518,21 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(!help.contains("beam-bench"));
+    }
+
+    #[test]
+    fn skill_install_help_explains_output_choices() {
+        let mut command = Cli::command();
+        let skill = command
+            .find_subcommand_mut("skill")
+            .expect("skill subcommand should exist");
+        let install = skill
+            .find_subcommand_mut("install")
+            .expect("install subcommand should exist");
+        let help = install.render_long_help().to_string();
+
+        assert!(help.contains("Exact output directory"));
+        assert!(help.contains("Use either --output or --skills-dir"));
     }
 
     #[test]

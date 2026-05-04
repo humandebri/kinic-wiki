@@ -11,13 +11,13 @@ Use the CLI commands below for shell workflows and local mirror operations.
 Use `--canister-id` to select a canister explicitly.
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> status
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> status
 ```
 
 Use `--local` for the local replica host.
 
 ```bash
-cargo run -p vfs-cli -- --local status
+cargo run -p vfs-cli --bin vfs-cli -- --local status
 ```
 
 Without `--canister-id`, the CLI reads configuration from:
@@ -31,13 +31,13 @@ Without `--canister-id`, the CLI reads configuration from:
 Full-text search uses `search-remote`.
 
 ```bash
-cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli --bin vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
 Path search uses `search-path-remote`.
 
 ```bash
-cargo run -p vfs-cli -- search-path-remote "meeting" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli --bin vfs-cli -- search-path-remote "meeting" --prefix /Wiki --top-k 10 --json
 ```
 
 `--preview-mode` is optional. If omitted, canister defaults are preserved:
@@ -54,8 +54,8 @@ Available preview modes:
 Use `content-start` when the caller needs the first 200 normalized body characters without an extra `read-node` call.
 
 ```bash
-cargo run -p vfs-cli -- search-path-remote "meeting" --prefix /Wiki --preview-mode content-start --json
-cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --preview-mode content-start --json
+cargo run -p vfs-cli --bin vfs-cli -- search-path-remote "meeting" --prefix /Wiki --preview-mode content-start --json
+cargo run -p vfs-cli --bin vfs-cli -- search-remote "budget" --prefix /Wiki --preview-mode content-start --json
 ```
 
 ## Node Operations
@@ -78,16 +78,16 @@ Common read and write commands:
 Use `read-node-context` when the caller needs a node plus incoming and outgoing links in one response.
 
 ```bash
-cargo run -p vfs-cli -- read-node-context --path /Wiki/file.md --link-limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- read-node-context --path /Wiki/file.md --link-limit 20 --json
 ```
 
 Use graph commands for explicit link inspection.
 
 ```bash
-cargo run -p vfs-cli -- graph-neighborhood --center-path /Wiki/file.md --depth 1 --limit 100 --json
-cargo run -p vfs-cli -- graph-links --prefix /Wiki --limit 100 --json
-cargo run -p vfs-cli -- incoming-links --path /Wiki/file.md --limit 20 --json
-cargo run -p vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- graph-neighborhood --center-path /Wiki/file.md --depth 1 --limit 100 --json
+cargo run -p vfs-cli --bin vfs-cli -- graph-links --prefix /Wiki --limit 100 --json
+cargo run -p vfs-cli --bin vfs-cli -- incoming-links --path /Wiki/file.md --limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
 ```
 
 ## Mirror Operations
@@ -95,6 +95,32 @@ cargo run -p vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
 Use `pull` and `push` for local mirror sync.
 
 ```bash
-cargo run -p vfs-cli -- pull --vault-path ./vault
-cargo run -p vfs-cli -- push --vault-path ./vault
+cargo run -p vfs-cli --bin vfs-cli -- pull --vault-path ./vault
+cargo run -p vfs-cli --bin vfs-cli -- push --vault-path ./vault
 ```
+
+## Skill Registry Preview
+
+Skill Registry commands store `SKILL.md` packages as ordinary VFS wiki nodes under `/Wiki/skills`.
+They do not add a canister schema or a dedicated registry API.
+In v1, `skill import --source` accepts a local directory containing `SKILL.md`; remote GitHub fetch is not implemented.
+See [`SKILL_REGISTRY.md`](SKILL_REGISTRY.md) for the manifest contract and audit behavior.
+
+```bash
+cargo run -p vfs-cli --bin vfs-cli -- skill import --source ./skills/legal-review --id acme/legal-review
+cargo run -p vfs-cli --bin vfs-cli -- skill inspect acme/legal-review --json
+cargo run -p vfs-cli --bin vfs-cli -- skill list --prefix /Wiki/skills --json
+cargo run -p vfs-cli --bin vfs-cli -- skill audit acme/legal-review --fail-on error --json
+cargo run -p vfs-cli --bin vfs-cli -- skill install acme/legal-review --output ./installed/legal-review
+cargo run -p vfs-cli --bin vfs-cli -- skill install acme/legal-review --skills-dir ~/.codex/skills
+```
+
+The registry writes:
+
+- `/Wiki/skills/<publisher>/<name>/manifest.md`
+- `/Wiki/skills/<publisher>/<name>/SKILL.md`
+- `/Wiki/skills/<publisher>/<name>/provenance.md`
+- `/Wiki/skills/<publisher>/<name>/evals.md`
+- `/Sources/raw/skill-imports/<id>/<id>.md`
+
+`manifest.md` uses Markdown with YAML frontmatter. The Rust CLI parses normal YAML for v1 validation. The Browser inspector uses a small read-only parser for the v1 display subset.

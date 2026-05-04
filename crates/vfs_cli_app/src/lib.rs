@@ -21,3 +21,4 @@ pub mod maintenance;
 pub mod mirror;
 #[cfg(test)]
 mod mirror_fs_tests;
+pub mod skill_registry;

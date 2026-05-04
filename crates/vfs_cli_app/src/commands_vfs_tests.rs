@@ -5,10 +5,12 @@ use tempfile::tempdir;
 use vfs_types::{NodeKind, SearchPreviewMode};
 
 use crate::cli::{
-    Cli, Command, ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+    AuditFailOnArg, Cli, Command, ConnectionArgs, GlobNodeTypeArg, NodeKindArg,
+    SearchPreviewModeArg, SkillCommand,
 };
 use crate::commands::run_command;
 use crate::commands_fs_tests::MockClient;
+use crate::skill_registry::parse_skill_manifest;
 
 fn test_cli(command: Command) -> Cli {
     Cli {
@@ -74,6 +76,400 @@ async fn write_node_command_supports_source_kind() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].path, "/Sources/raw/source/source.md");
     assert_eq!(writes[0].kind, NodeKind::Source);
+}
+
+#[tokio::test]
+async fn skill_import_writes_registry_nodes() {
+    let dir = tempdir().expect("temp dir should exist");
+    std::fs::write(dir.path().join("SKILL.md"), "# Skill\n\nUse wiki evidence.")
+        .expect("skill should write");
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Import {
+                source: dir.path().to_string_lossy().into_owned(),
+                id: "acme/legal-review".to_string(),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill import should succeed");
+
+    let writes = client.writes.lock().expect("writes should lock");
+    assert_eq!(writes.len(), 5);
+    assert!(
+        writes
+            .iter()
+            .any(|write| write.path == "/Wiki/skills/acme/legal-review/SKILL.md")
+    );
+    assert!(
+        writes
+            .iter()
+            .any(|write| write.path == "/Wiki/skills/acme/legal-review/manifest.md")
+    );
+}
+
+#[tokio::test]
+async fn skill_import_preserves_source_manifest_and_optional_files() {
+    let dir = tempdir().expect("temp dir should exist");
+    std::fs::write(
+        dir.path().join("SKILL.md"),
+        "# Skill\n\nUse source manifest.",
+    )
+    .expect("skill should write");
+    std::fs::write(
+        dir.path().join("manifest.md"),
+        "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 9.9.9\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: pinned\n---\n# Source Manifest\n",
+    )
+    .expect("manifest should write");
+    std::fs::write(dir.path().join("provenance.md"), "# Source Provenance\n")
+        .expect("provenance should write");
+    std::fs::write(dir.path().join("evals.md"), "# Source Evals\n").expect("evals should write");
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Import {
+                source: dir.path().to_string_lossy().into_owned(),
+                id: "acme/legal-review".to_string(),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill import should succeed");
+
+    let writes = client.writes.lock().expect("writes should lock");
+    let manifest = writes
+        .iter()
+        .find(|write| write.path == "/Wiki/skills/acme/legal-review/manifest.md")
+        .expect("manifest write should exist");
+    assert!(manifest.content.contains("version: 9.9.9"));
+    let provenance = writes
+        .iter()
+        .find(|write| write.path == "/Wiki/skills/acme/legal-review/provenance.md")
+        .expect("provenance write should exist");
+    assert_eq!(provenance.content, "# Source Provenance\n");
+    let evals = writes
+        .iter()
+        .find(|write| write.path == "/Wiki/skills/acme/legal-review/evals.md")
+        .expect("evals write should exist");
+    assert_eq!(evals.content, "# Source Evals\n");
+}
+
+#[tokio::test]
+async fn skill_import_quotes_generated_manifest_source() {
+    let dir = tempdir().expect("temp dir should exist");
+    let source_dir = dir.path().join("true # source");
+    std::fs::create_dir(&source_dir).expect("source dir should write");
+    std::fs::write(source_dir.join("SKILL.md"), "# Skill\n").expect("skill should write");
+    let source = source_dir.to_string_lossy().into_owned();
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Import {
+                source: source.clone(),
+                id: "acme/legal-review".to_string(),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill import should succeed");
+
+    let writes = client.writes.lock().expect("writes should lock");
+    let manifest = writes
+        .iter()
+        .find(|write| write.path == "/Wiki/skills/acme/legal-review/manifest.md")
+        .expect("manifest write should exist");
+    let manifest = parse_skill_manifest(&manifest.content).expect("manifest should parse");
+
+    assert_eq!(
+        manifest.provenance.get("source").map(String::as_str),
+        Some(source.as_str())
+    );
+}
+
+#[tokio::test]
+async fn skill_import_rejects_manifest_id_mismatch() {
+    let dir = tempdir().expect("temp dir should exist");
+    std::fs::write(dir.path().join("SKILL.md"), "# Skill").expect("skill should write");
+    std::fs::write(
+        dir.path().join("manifest.md"),
+        "---\nkind: kinic.skill\nschema_version: 1\nid: other/legal-review\nversion: 0.1.0\npublisher: other\nentry: SKILL.md\n---\n# Manifest\n",
+    )
+    .expect("manifest should write");
+    let client = MockClient::default();
+
+    let error = run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Import {
+                source: dir.path().to_string_lossy().into_owned(),
+                id: "acme/legal-review".to_string(),
+                json: false,
+            },
+        }),
+    )
+    .await
+    .expect_err("mismatched manifest id should fail");
+
+    assert!(error.to_string().contains("source manifest id must match"));
+}
+
+#[tokio::test]
+async fn skill_inspect_reports_missing_optional_files() {
+    let client = MockClient {
+        nodes: vec![vfs_types::Node {
+            path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: local\n---\n# Manifest\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Inspect {
+                id: "acme/legal-review".to_string(),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill inspect should succeed");
+}
+
+#[tokio::test]
+async fn skill_audit_fail_on_error_returns_error_for_missing_files() {
+    let client = MockClient {
+        nodes: vec![vfs_types::Node {
+            path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: local\n---\n# Manifest\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Audit {
+                id: "acme/legal-review".to_string(),
+                fail_on: Some(AuditFailOnArg::Error),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect_err("fail-on error should fail for missing files");
+
+    assert!(error.to_string().contains("skill audit failed"));
+}
+
+#[tokio::test]
+async fn skill_audit_fail_on_warning_returns_error_for_permission_warning() {
+    let client = MockClient {
+        nodes: vec![
+            vfs_types::Node {
+                path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
+                kind: NodeKind::File,
+                content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: local\n---\n# Manifest\n".to_string(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            vfs_types::Node {
+                path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Skill\n\nFetch https://example.com before review.\n".to_string(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            vfs_types::Node {
+                path: "/Wiki/skills/acme/legal-review/provenance.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Provenance\n".to_string(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            vfs_types::Node {
+                path: "/Wiki/skills/acme/legal-review/evals.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Evals\n".to_string(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "etag".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Audit {
+                id: "acme/legal-review".to_string(),
+                fail_on: Some(AuditFailOnArg::Warning),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect_err("fail-on warning should fail for permission warning");
+
+    assert!(error.to_string().contains("skill audit failed"));
+}
+
+#[tokio::test]
+async fn skill_install_supports_skills_dir() {
+    let dir = tempdir().expect("temp dir should exist");
+    let client = MockClient {
+        nodes: vec![vfs_types::Node {
+            path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Skill\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Install {
+                id: "acme/legal-review".to_string(),
+                output: None,
+                skills_dir: Some(dir.path().join("skills")),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill install should succeed");
+
+    assert!(
+        dir.path()
+            .join("skills/acme/legal-review/SKILL.md")
+            .is_file()
+    );
+}
+
+#[tokio::test]
+async fn skill_install_rejects_output_and_skills_dir_together() {
+    let dir = tempdir().expect("temp dir should exist");
+    let client = MockClient::default();
+
+    let error = run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Install {
+                id: "acme/legal-review".to_string(),
+                output: Some(dir.path().join("out")),
+                skills_dir: Some(dir.path().join("skills")),
+                json: false,
+            },
+        }),
+    )
+    .await
+    .expect_err("output and skills-dir should conflict");
+
+    assert!(
+        error
+            .to_string()
+            .contains("either --output or --skills-dir")
+    );
+}
+
+#[tokio::test]
+async fn skill_install_missing_skill_does_not_create_output() {
+    let dir = tempdir().expect("temp dir should exist");
+    let output = dir.path().join("out");
+    let client = MockClient {
+        nodes: vec![vfs_types::Node {
+            path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: local\n---\n# Manifest\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::Install {
+                id: "acme/legal-review".to_string(),
+                output: Some(output.clone()),
+                skills_dir: None,
+                json: false,
+            },
+        }),
+    )
+    .await
+    .expect_err("missing SKILL.md should fail");
+
+    assert!(error.to_string().contains("SKILL.md missing"));
+    assert!(!output.exists());
+}
+
+#[tokio::test]
+async fn skill_list_reads_manifest_nodes() {
+    let client = MockClient {
+        nodes: vec![vfs_types::Node {
+            path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge: []\npermissions:\n  file_read: true\n  network: false\n  shell: false\nprovenance:\n  source: local\n  source_ref: local\n---\n# Manifest\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        test_cli(Command::Skill {
+            command: SkillCommand::List {
+                prefix: "/Wiki/skills".to_string(),
+                json: true,
+            },
+        }),
+    )
+    .await
+    .expect("skill list should succeed");
+
+    let lists = client.lists.lock().expect("lists should lock");
+    assert_eq!(lists[0].prefix, "/Wiki/skills");
+    assert!(lists[0].recursive);
 }
 
 #[tokio::test]
