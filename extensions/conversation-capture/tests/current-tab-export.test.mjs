@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   advanceState,
   createExportState,
+  exportTarget,
   fetchConversationCapture,
   fetchRecentConversationTargets,
   isValidState,
@@ -98,6 +99,54 @@ test("fetchConversationCapture converts payloads and rejects empty messages", as
   assert.match(empty.error, /no conversation messages/);
 });
 
+test("exportTarget saves immediately after fetching a valid conversation", async () => {
+  const calls = [];
+  const target = { id: "abc", title: "Project", url: "https://chatgpt.com/c/abc" };
+  const event = await exportTarget(
+    target,
+    { canisterId: "canister", host: "http://127.0.0.1:8001" },
+    async (message) => {
+      calls.push(["save", message.capture.conversationTitle]);
+      return { result: { path: "/Sources/raw/chatgpt-abc/chatgpt-abc.md", created: true } };
+    },
+    async () => {
+      calls.push(["fetch", target.id]);
+      return jsonResponse(conversationPayload("abc", "Project"));
+    }
+  );
+
+  assert.deepEqual(calls, [
+    ["fetch", "abc"],
+    ["save", "Project"]
+  ]);
+  assert.equal(event.ok, true);
+  assert.equal(event.captureMethod, "direct api");
+});
+
+test("exportTarget does not save API failures or empty conversations", async () => {
+  let saveCount = 0;
+  const failed = await exportTarget(
+    { id: "fail", title: "Fail", url: "https://chatgpt.com/c/fail" },
+    {},
+    async () => {
+      saveCount += 1;
+    },
+    async () => jsonResponse({}, false, 500)
+  );
+  const empty = await exportTarget(
+    { id: "empty", title: "Empty", url: "https://chatgpt.com/c/empty" },
+    {},
+    async () => {
+      saveCount += 1;
+    },
+    async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } })
+  );
+
+  assert.equal(saveCount, 0);
+  assert.equal(failed.ok, false);
+  assert.equal(empty.ok, false);
+});
+
 test("advanceState records direct-api success and errors in order", () => {
   let state = createExportState({
     limit: 2,
@@ -159,6 +208,19 @@ function jsonResponse(payload, ok = true, status = 200) {
     status,
     async json() {
       return payload;
+    }
+  };
+}
+
+function conversationPayload(id, title) {
+  return {
+    conversation_id: id,
+    title,
+    current_node: "assistant1",
+    mapping: {
+      root: node(null, null),
+      user1: node("root", message("user", "Hello")),
+      assistant1: node("user1", message("assistant", "Hi"))
     }
   };
 }

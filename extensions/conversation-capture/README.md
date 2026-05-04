@@ -2,6 +2,8 @@
 
 MV3 Chrome extension for saving recent ChatGPT conversations as Kinic Wiki raw sources.
 
+See [USAGE.md](./USAGE.md) for local canister setup and Chrome loading steps.
+
 ## Build
 
 ```bash

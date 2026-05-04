@@ -194,7 +194,7 @@ function statusText() {
   const value = progress.value;
   if (status.value === "idle") return "Ready";
   if (status.value === "exporting" && phase.value === "fetching") return `Fetching conversations... 0/${value.total}.`;
-  if (status.value === "exporting") return `Saving sources ${value.done}/${value.total}. Success ${value.ok}, failed ${value.failed}.`;
+  if (status.value === "exporting") return `Exporting sources ${value.done}/${value.total}. Success ${value.ok}, failed ${value.failed}.`;
   if (status.value === "done") return `Export complete. Success ${value.ok}.`;
   if (status.value === "partial") return `Export complete with errors. Success ${value.ok}, failed ${value.failed}.`;
   if (status.value === "cancelled") return `Export cancelled. Success ${value.ok}, failed ${value.failed}.`;
