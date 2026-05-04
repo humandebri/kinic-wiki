@@ -6,8 +6,7 @@ import { captureFromChatGptResponse } from "./chatgpt-response.js";
 const STATE_KEY = "kinic-current-tab-export-v1";
 const STATE_VERSION = 1;
 const STATE_TTL_MS = 30 * 60 * 1000;
-const FETCH_CONCURRENCY = 3;
-const SAVE_CONCURRENCY = 2;
+const EXPORT_CONCURRENCY = 2;
 const CONVERSATION_LIST_PAGE_SIZE = 28;
 
 export function createExportState({ limit, config, originalUrl, startedAt = new Date().toISOString() }) {
@@ -87,13 +86,12 @@ async function processDirectExport(callbacks) {
   let state = readExportState();
   if (!state || state.status !== "exporting") return;
   hydrate(callbacks, state);
-
   try {
     const targets = await fetchRecentConversationTargets(state.limit);
     state = {
       ...(readExportState() || state),
       targets,
-      phase: "saving",
+      phase: "exporting",
       progress: { total: targets.length, done: 0, ok: 0, failed: 0 }
     };
     writeExportState(state);
@@ -105,27 +103,14 @@ async function processDirectExport(callbacks) {
     if (!targets.length) {
       throw new Error("No recent ChatGPT conversations found.");
     }
-
-    const captures = await mapWithConcurrency(targets, FETCH_CONCURRENCY, async (target) => fetchConversationCapture(target));
-    if (readExportState()?.status === "cancelled") {
-      hydrate(callbacks, readExportState());
+    let latest = await processExportTargets(targets, state, callbacks);
+    const storedState = readExportState();
+    if (storedState?.status === "cancelled") {
+      hydrate(callbacks, storedState);
       clearExportState();
       return;
     }
-    let latest = readExportState() || state;
-    await mapWithConcurrency(captures, SAVE_CONCURRENCY, async (result) => {
-      const event = await saveCaptureResult(result, state.config, callbacks.send);
-      latest = advanceState(readExportState() || latest, event);
-      writeExportState(latest);
-      hydrate(callbacks, latest);
-      return event;
-    });
-    if (readExportState()?.status === "cancelled") {
-      hydrate(callbacks, readExportState());
-      clearExportState();
-      return;
-    }
-    state = readExportState() || latest;
+    state = latest;
     state = { ...state, status: state.progress.failed ? "partial" : "done" };
     writeExportState(state);
     hydrate(callbacks, state);
@@ -140,6 +125,28 @@ async function processDirectExport(callbacks) {
     hydrate(callbacks, failed);
     clearExportState();
   }
+}
+
+export async function processExportTargets(targets, state, callbacks, concurrency = EXPORT_CONCURRENCY) {
+  let latest = readExportState() || state;
+  function recordEvent(event) {
+    latest = advanceState(latest, event);
+    writeExportState(latest);
+    hydrate(callbacks, latest);
+  }
+  await mapWithConcurrency(targets, concurrency, async (target) => {
+    if (exportIsCancelled()) return null;
+    const event = await exportTarget(target, latest.config, callbacks.send);
+    if (exportIsCancelled()) return null;
+    recordEvent(event);
+    return event;
+  });
+  return latest;
+}
+
+export async function exportTarget(target, config, send, fetchImpl = fetch) {
+  const result = await fetchConversationCapture(target, fetchImpl);
+  return saveCaptureResult(result, config, send);
 }
 
 export async function fetchRecentConversationTargets(limit, fetchImpl = fetch, loc = location) {
