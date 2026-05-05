@@ -103,7 +103,9 @@ export const expectedTypes = {
   ResultQueryContext: { kind: "variant", cases: { Ok: "QueryContext", Err: "text" } },
   ResultRecent: { kind: "variant", cases: { Ok: "vec RecentNodeHit", Err: "text" } },
   ResultSearch: { kind: "variant", cases: { Ok: "vec SearchNodeHit", Err: "text" } },
+  ResultPathPolicyEntries: { kind: "variant", cases: { Ok: "vec PathPolicyEntry", Err: "text" } },
   ResultSourceEvidence: { kind: "variant", cases: { Ok: "SourceEvidence", Err: "text" } },
+  ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
   SearchNodeHit: {
     kind: "record",
     fields: {
@@ -144,6 +146,8 @@ export const expectedTypes = {
   },
   SearchPreviewField: { kind: "variant", cases: { Path: "null", Content: "null" } },
   SearchPreviewMode: { kind: "variant", cases: { Light: "null", ContentStart: "null", None: "null" } },
+  PathPolicyEntry: { kind: "record", fields: { principal: "text", roles: "vec text" } },
+  PathPolicy: { kind: "record", fields: { mode: "text", path: "text", roles: "vec text" } },
   SourceEvidence: {
     kind: "record",
     fields: { node_path: "text", refs: "vec SourceEvidenceRef" }
@@ -161,29 +165,36 @@ export const expectedTypes = {
 };
 
 export const didTypeAliases = {
-  ResultChildren: "Result_7",
-  ResultLinks: "Result_6",
-  ResultNode: "Result_12",
-  ResultNodeContext: "Result_13",
-  ResultQueryContext: "Result_11",
-  ResultRecent: "Result_14",
-  ResultSearch: "Result_15",
-  ResultSourceEvidence: "Result_16"
+  ResultChildren: "Result_9",
+  ResultLinks: "Result_8",
+  ResultNode: "Result_15",
+  ResultNodeContext: "Result_16",
+  ResultPathPolicyEntries: "Result_13",
+  ResultQueryContext: "Result_14",
+  ResultRecent: "Result_17",
+  ResultSearch: "Result_18",
+  ResultSourceEvidence: "Result_19",
+  ResultUnit: "Result_7"
 };
 
 export const expectedMethods = {
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
+  grant_path_policy_role: { input: ["text", "text", "text"], output: "ResultUnit", mode: "update" },
   incoming_links: { input: ["IncomingLinksRequest"], output: "ResultLinks", mode: "query" },
   list_children: { input: ["ListChildrenRequest"], output: "ResultChildren", mode: "query" },
   memory_manifest: { input: [], output: "MemoryManifest", mode: "query" },
+  my_path_policy_roles: { input: ["text"], output: "PrincipalRoles", mode: "query" },
   outgoing_links: { input: ["OutgoingLinksRequest"], output: "ResultLinks", mode: "query" },
   query_context: { input: ["QueryContextRequest"], output: "ResultQueryContext", mode: "query" },
   read_node: { input: ["text"], output: "ResultNode", mode: "query" },
   read_node_context: { input: ["NodeContextRequest"], output: "ResultNodeContext", mode: "query" },
   recent_nodes: { input: ["RecentNodesRequest"], output: "ResultRecent", mode: "query" },
+  revoke_path_policy_role: { input: ["text", "text", "text"], output: "ResultUnit", mode: "update" },
   search_node_paths: { input: ["SearchNodePathsRequest"], output: "ResultSearch", mode: "query" },
   search_nodes: { input: ["SearchNodesRequest"], output: "ResultSearch", mode: "query" },
+  path_policy_entries: { input: ["text"], output: "ResultPathPolicyEntries", mode: "query" },
+  path_policy: { input: ["text"], output: "PathPolicy", mode: "query" },
   source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" }
 };

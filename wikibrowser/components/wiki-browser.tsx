@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GitBranch, Network, PanelRight, Search } from "lucide-react";
+import { GitBranch, LogIn, LogOut, Network, PanelRight, Search } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -244,9 +244,47 @@ function TopBar({
           Graph
         </Link>
         <CycleBattery canisterId={canisterId} />
+        <IdentityControl />
         <HeaderSearch canisterId={canisterId} query={query} searchKind={searchKind} />
       </div>
     </header>
+  );
+}
+
+function IdentityControl() {
+  const [state, setState] = useState({ principal: "2vxsx-fae", authenticated: false });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cleanup = () => {};
+    import("@/lib/ii-auth")
+      .then(({ subscribeAuth }) => {
+        cleanup = subscribeAuth(setState);
+      })
+      .catch(() => {});
+    return () => cleanup();
+  }, []);
+
+  function toggleAuth() {
+    setBusy(true);
+    import("@/lib/ii-auth")
+      .then(({ loginWithInternetIdentity, logoutInternetIdentity }) =>
+        state.authenticated ? logoutInternetIdentity() : loginWithInternetIdentity()
+      )
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <button
+      type="button"
+      className="hidden max-w-[220px] items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink md:flex"
+      onClick={toggleAuth}
+      disabled={busy}
+      title={state.principal}
+    >
+      {state.authenticated ? <LogOut size={15} /> : <LogIn size={15} />}
+      <span className="truncate font-mono">{state.authenticated ? shortPrincipal(state.principal) : "anonymous"}</span>
+    </button>
   );
 }
 
@@ -410,6 +448,11 @@ function validateCanisterText(canisterId: string): string | null {
     return "canister id contains unsupported characters";
   }
   return null;
+}
+
+function shortPrincipal(principal: string): string {
+  if (principal.length <= 16) return principal;
+  return `${principal.slice(0, 8)}...${principal.slice(-5)}`;
 }
 
 function parseWikiRoute(pathname: string): { canisterId: string | null; nodePath: string } {

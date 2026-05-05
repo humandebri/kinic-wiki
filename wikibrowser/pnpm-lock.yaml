@@ -11,6 +11,9 @@ importers:
       '@dfinity/agent':
         specifier: 3.4.0
         version: 3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0)
+      '@dfinity/auth-client':
+        specifier: 3.4.0
+        version: 3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/identity@3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/curves@1.9.7)(@noble/hashes@1.8.0))(@dfinity/principal@3.4.0)
       '@dfinity/candid':
         specifier: 3.4.0
         version: 3.4.0(@dfinity/principal@3.4.0)
@@ -145,6 +148,14 @@ packages:
       '@dfinity/principal': 3.4.0
       '@noble/hashes': ^1.8.0
 
+  '@dfinity/auth-client@3.4.0':
+    resolution: {integrity: sha512-ldY/YEsVwNRrboPRRpaHqMx7H791RfaEivLxggXyhc+piC49A5rwo0ufQImDETbfQS8ewWX4QXRx7sqIIuJyHA==}
+    deprecated: This package has been deprecated. Its functionality is now part of `@icp-sdk/auth` (https://js.icp.build/auth), under the `client` submodule.
+    peerDependencies:
+      '@dfinity/agent': 3.4.0
+      '@dfinity/identity': 3.4.0
+      '@dfinity/principal': 3.4.0
+
   '@dfinity/candid@3.4.0':
     resolution: {integrity: sha512-wDcaSotjo9cfsw5YbsYK2Bwvnge4h+Fa+3qSN4iPPSwwKhE7P9JWBYxKLl4G7v4gNKVLbAkpG+CZ2hOabD0fQw==}
     deprecated: 'This package has been deprecated. Use @icp-sdk/core/candid instead. Migration guide: https://js.icp.build/core/latest/upgrading/v5'
@@ -153,6 +164,16 @@ packages:
 
   '@dfinity/cbor@0.2.3':
     resolution: {integrity: sha512-5GX+9tAf29r94Pxv8nCzrv2/t+AkOfem/c/G61+FA2Wadq7THvc5cvr/AVLH0LpukVfNSWRRHvl1fkCdiB9MMQ==}
+
+  '@dfinity/identity@3.4.0':
+    resolution: {integrity: sha512-w532nzzuOEIwj5iSdQ1qR+o1bEbfITOLD4V4vdsxvejAN0WbZqq9lzTcm2oGR3/CujwRfg0QRB2TBOLhhB6xGw==}
+    deprecated: 'This package has been deprecated. Use @icp-sdk/core/identity instead. Migration guide: https://js.icp.build/core/latest/upgrading/v5'
+    peerDependencies:
+      '@dfinity/agent': 3.4.0
+      '@dfinity/candid': 3.4.0
+      '@dfinity/principal': 3.4.0
+      '@noble/curves': ^1.9.2
+      '@noble/hashes': ^1.8.0
 
   '@dfinity/principal@3.4.0':
     resolution: {integrity: sha512-KhgKbgasqpbYfkojFCXsUIfvHXAWxU0rB2RNTjny4Reo6eCVRlfEegsWgbDkZCV1ddKrf/o3D1Z7W43PBDYKvg==}
@@ -1308,6 +1329,9 @@ packages:
   html-url-attributes@3.0.1:
     resolution: {integrity: sha512-ol6UPyBWqsrO6EJySPz2O7ZSr856WDrEzM5zMqp+FJJLGMW35cLYmmZnl0vztAZxRUoNZJFTCohfjuIJ8I4QBQ==}
 
+  idb@7.1.1:
+    resolution: {integrity: sha512-gchesWBzyvGHRO9W8tzUWFDycow5gwjvFKfyV9FF32Y7F50yZMp7mP+T2mJIWFx49zicqyC4uefHM17o6xKIVQ==}
+
   ignore@5.3.2:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
@@ -2403,11 +2427,26 @@ snapshots:
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
 
+  '@dfinity/auth-client@3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/identity@3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/curves@1.9.7)(@noble/hashes@1.8.0))(@dfinity/principal@3.4.0)':
+    dependencies:
+      '@dfinity/agent': 3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0)
+      '@dfinity/identity': 3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)
+      '@dfinity/principal': 3.4.0
+      idb: 7.1.1
+
   '@dfinity/candid@3.4.0(@dfinity/principal@3.4.0)':
     dependencies:
       '@dfinity/principal': 3.4.0
 
   '@dfinity/cbor@0.2.3': {}
+
+  '@dfinity/identity@3.4.0(@dfinity/agent@3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)':
+    dependencies:
+      '@dfinity/agent': 3.4.0(@dfinity/candid@3.4.0(@dfinity/principal@3.4.0))(@dfinity/principal@3.4.0)(@noble/hashes@1.8.0)
+      '@dfinity/candid': 3.4.0(@dfinity/principal@3.4.0)
+      '@dfinity/principal': 3.4.0
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
 
   '@dfinity/principal@3.4.0':
     dependencies:
@@ -3658,6 +3697,8 @@ snapshots:
       hermes-estree: 0.25.1
 
   html-url-attributes@3.0.1: {}
+
+  idb@7.1.1: {}
 
   ignore@5.3.2: {}
 

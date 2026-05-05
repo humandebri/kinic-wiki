@@ -51,9 +51,9 @@ function parseDidFields(body) {
   for (const raw of body.split(";")) {
     const line = raw.trim();
     if (!line) continue;
-    const match = line.match(/^(\w+)\s*(?::\s*(.+))?$/);
+    const match = line.match(/^(?:"(\w+)"|(\w+))\s*(?::\s*(.+))?$/);
     if (!match) continue;
-    fields[match[1]] = normalizeShape(match[2] ?? "null");
+    fields[match[1] ?? match[2]] = normalizeShape(match[3] ?? "null");
   }
   return fields;
 }
@@ -118,11 +118,11 @@ function parseIdlFields(body) {
 function parseIdlMethods(source) {
   const service = source.match(/return\s+idl\.Service\(\{([^]*?)\n\s*\}\);/m)?.[1] ?? "";
   const methods = {};
-  for (const match of service.matchAll(/^\s*(\w+):\s*idl\.Func\(\[\s*([^\]]*)\s*\],\s*\[\s*(\w+)\s*\],\s*\[\s*"(\w+)"\s*\]\)/gm)) {
+  for (const match of service.matchAll(/^\s*(\w+):\s*idl\.Func\(\[\s*([^\]]*)\s*\],\s*\[\s*(\w+)\s*\],\s*\[(?:\s*"(\w+)"\s*)?\]\)/gm)) {
     methods[match[1]] = {
       input: splitIdlInputs(match[2]),
       output: match[3],
-      mode: match[4]
+      mode: match[4] ?? "update"
     };
   }
   return methods;
@@ -183,14 +183,17 @@ function normalizeShape(value) {
 
 function normalizeResultAlias(value) {
   const normalized = normalizeShape(value);
-  if (normalized === "Result_6") return "ResultLinks";
-  if (normalized === "Result_7") return "ResultChildren";
-  if (normalized === "Result_11") return "ResultQueryContext";
-  if (normalized === "Result_12") return "ResultNode";
-  if (normalized === "Result_13") return "ResultNodeContext";
-  if (normalized === "Result_14") return "ResultRecent";
-  if (normalized === "Result_15") return "ResultSearch";
-  if (normalized === "Result_16") return "ResultSourceEvidence";
+  if (normalized === "Result_7") return "ResultUnit";
+  if (normalized === "Result_8") return "ResultLinks";
+  if (normalized === "Result_9") return "ResultChildren";
+  if (normalized === "Result_13") return "ResultPathPolicyEntries";
+  if (normalized === "Result_14") return "ResultQueryContext";
+  if (normalized === "Result_15") return "ResultNode";
+  if (normalized === "Result_16") return "ResultNodeContext";
+  if (normalized === "Result_17") return "ResultRecent";
+  if (normalized === "Result_18") return "ResultSearch";
+  if (normalized === "Result_19") return "ResultSourceEvidence";
+  if (normalized === "vec text") return "PrincipalRoles";
   return normalized;
 }
 

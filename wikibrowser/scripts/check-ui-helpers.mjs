@@ -8,7 +8,15 @@ const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
-const { isSkillRegistryPath, manifestPathForSkillRegistryFile, parseSkillManifest } = await importTs("../lib/skill-manifest.ts");
+const {
+  formatSkillAccessCapabilities,
+  isPublicSkillRegistryPath,
+  isSkillRegistryPath,
+  manifestPathForSkillRegistryFile,
+  parseSkillManifest,
+  skillAccessCapabilities,
+  skillAccessHint
+} = await importTs("../lib/skill-manifest.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -129,15 +137,25 @@ assert.equal(skillManifest.provenance.source, "github.com/acme/legal");
 assert.equal(parseSkillManifest("# Missing"), null);
 assert.equal(isSkillRegistryPath("/Wiki/skills/acme/legal-review/manifest.md"), true);
 assert.equal(isSkillRegistryPath("/Wiki/other.md"), false);
+assert.equal(isPublicSkillRegistryPath("/Wiki/public-skills/acme/legal-review/manifest.md"), true);
 assert.equal(
   manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/SKILL.md"),
   "/Wiki/skills/acme/legal-review/manifest.md"
+);
+assert.equal(
+  manifestPathForSkillRegistryFile("/Wiki/public-skills/acme/legal-review/SKILL.md"),
+  "/Wiki/public-skills/acme/legal-review/manifest.md"
 );
 assert.equal(
   manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/provenance.md"),
   "/Wiki/skills/acme/legal-review/manifest.md"
 );
 assert.equal(manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/manifest.md"), null);
+assert.deepEqual(skillAccessCapabilities(["Reader", "Writer"]), { read: true, publish: true, admin: false });
+assert.equal(formatSkillAccessCapabilities({ read: true, publish: false, admin: false }), "read:yes publish:no admin:no");
+assert.equal(skillAccessHint("restricted", [], false), "restricted namespace: anonymous caller; log in with Internet Identity");
+assert.equal(skillAccessHint("restricted", [], true), "restricted namespace: missing Reader, Writer, or Admin role");
+assert.equal(skillAccessHint("open", [], false), null);
 
 console.log("UI helper checks OK");
 

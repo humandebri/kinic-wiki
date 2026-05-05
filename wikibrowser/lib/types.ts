@@ -64,3 +64,14 @@ export type SearchNodeHit = {
   score: number;
   matchReasons: string[];
 };
+
+export type PathPolicy = {
+  path: string;
+  mode: string;
+  roles: string[];
+};
+
+export type PathPolicyEntry = {
+  principal: string;
+  roles: string[];
+};

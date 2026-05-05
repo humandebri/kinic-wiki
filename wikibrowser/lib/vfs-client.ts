@@ -1,10 +1,11 @@
 import { Actor, HttpAgent } from "@dfinity/agent";
+import type { Identity } from "@dfinity/agent";
 import { Principal } from "@dfinity/principal";
 import { classifyApiError, invalidCanisterIdError } from "@/lib/api-errors";
 import { sortChildNodes } from "@/lib/child-sort";
 import { normalizeSearchHit, type RawSearchHit } from "@/lib/search-normalizer";
 import { idlFactory } from "@/lib/vfs-idl";
-import type { CanisterHealth, ChildNode, LinkEdge, NodeContext, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, WikiNode } from "@/lib/types";
+import type { CanisterHealth, ChildNode, LinkEdge, NodeContext, NodeEntryKind, NodeKind, RecentNode, SearchNodeHit, PathPolicyEntry, PathPolicy, WikiNode } from "@/lib/types";
 import { ApiError } from "@/lib/wiki-helpers";
 
 type Variant = Record<string, null>;
@@ -55,6 +56,17 @@ type RawNodeContext = {
   outgoing_links: RawLinkEdge[];
 };
 
+type RawPathPolicy = {
+  path: string;
+  mode: string;
+  roles: string[];
+};
+
+type RawPathPolicyEntry = {
+  principal: string;
+  roles: string[];
+};
+
 type VfsActor = {
   canister_health: () => Promise<RawCanisterHealth>;
   read_node: (path: string) => Promise<{ Ok: [] | [RawNode] } | { Err: string }>;
@@ -79,6 +91,11 @@ type VfsActor = {
     top_k: number;
     preview_mode: [] | [Variant];
   }) => Promise<{ Ok: RawSearchHit[] } | { Err: string }>;
+  my_path_policy_roles: (path: string) => Promise<string[]>;
+  path_policy_entries: (path: string) => Promise<{ Ok: RawPathPolicyEntry[] } | { Err: string }>;
+  path_policy: (path: string) => Promise<RawPathPolicy>;
+  grant_path_policy_role: (path: string, principal: string, role: string) => Promise<{ Ok: null } | { Err: string }>;
+  revoke_path_policy_role: (path: string, principal: string, role: string) => Promise<{ Ok: null } | { Err: string }>;
 };
 
 export function validateCanisterId(canisterId: string): Principal | string {
@@ -99,24 +116,33 @@ export async function createVfsActor(canisterId: string): Promise<VfsActor> {
     throw new ApiError(error.error, 400, error.hint, error.code);
   }
   const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
-  const cacheKey = `${host}\n${canisterId}`;
+  const identity = await import("@/lib/ii-auth").then(({ currentIdentity }) => currentIdentity());
+  const principalText = identity?.getPrincipal().toText() ?? "2vxsx-fae";
+  const cacheKey = `${host}\n${canisterId}\n${principalText}`;
   const cached = actorCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const actorPromise = createActor(principal, host);
+  const actorPromise = createActor(principal, host, identity);
   actorCache.set(cacheKey, actorPromise);
   return actorPromise;
 }
 
-async function createActor(principal: Principal, host: string): Promise<VfsActor> {
-  const agent = HttpAgent.createSync({ host });
+async function createActor(principal: Principal, host: string, identity: Identity | undefined): Promise<VfsActor> {
+  const agent = HttpAgent.createSync({ host, identity });
   if (isLocalHost(host)) {
     await agent.fetchRootKey();
   }
   return Actor.createActor<VfsActor>((idl) => idlFactory(idl), {
     agent,
     canisterId: principal
+  });
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("kinic-auth-change", () => {
+    actorCache.clear();
+    healthCache.clear();
   });
 }
 
@@ -286,6 +312,51 @@ export async function searchNodes(
   });
 }
 
+export async function myPathPolicyRoles(canisterId: string, policyPath: string): Promise<string[]> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    return actor.my_path_policy_roles(policyPath);
+  });
+}
+
+export async function pathPolicy(canisterId: string, policyPath: string): Promise<PathPolicy> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    return normalizePathPolicy(await actor.path_policy(policyPath));
+  });
+}
+
+export async function pathPolicyEntries(canisterId: string, policyPath: string): Promise<PathPolicyEntry[]> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.path_policy_entries(policyPath);
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
+    return result.Ok.map((entry) => ({ principal: entry.principal, roles: entry.roles }));
+  });
+}
+
+export async function grantPathPolicyRole(canisterId: string, policyPath: string, principal: string, role: string): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.grant_path_policy_role(policyPath, principal, role);
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
+  });
+}
+
+export async function revokePathPolicyRole(canisterId: string, policyPath: string, principal: string, role: string): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.revoke_path_policy_role(policyPath, principal, role);
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
+  });
+}
+
 function normalizeNode(raw: RawNode): WikiNode {
   return {
     path: raw.path,
@@ -332,6 +403,14 @@ function normalizeNodeContext(raw: RawNodeContext): NodeContext {
     node: normalizeNode(raw.node),
     incomingLinks: raw.incoming_links.map(normalizeLinkEdge),
     outgoingLinks: raw.outgoing_links.map(normalizeLinkEdge)
+  };
+}
+
+function normalizePathPolicy(raw: RawPathPolicy): PathPolicy {
+  return {
+    path: raw.path,
+    mode: raw.mode,
+    roles: raw.roles
   };
 }
 

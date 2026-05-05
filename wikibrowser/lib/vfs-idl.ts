@@ -64,6 +64,16 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     score: idl.Float32,
     match_reasons: idl.Vec(idl.Text)
   });
+  const PathPolicyEntry = idl.Record({
+    principal: idl.Text,
+    roles: idl.Vec(idl.Text)
+  });
+  const PathPolicy = idl.Record({
+    path: idl.Text,
+    mode: idl.Text,
+    roles: idl.Vec(idl.Text)
+  });
+  const PrincipalRoles = idl.Vec(idl.Text);
   const MemoryCapability = idl.Record({ name: idl.Text, description: idl.Text });
   const MemoryRoot = idl.Record({ path: idl.Text, kind: idl.Text });
   const CanonicalRole = idl.Record({
@@ -136,6 +146,9 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultLinks = idl.Variant({ Ok: idl.Vec(LinkEdge), Err: idl.Text });
   const ResultNodeContext = idl.Variant({ Ok: idl.Opt(NodeContext), Err: idl.Text });
   const ResultSearch = idl.Variant({ Ok: idl.Vec(SearchNodeHit), Err: idl.Text });
+  const ResultPathPolicyEntries = idl.Variant({ Ok: idl.Vec(PathPolicyEntry), Err: idl.Text });
+  const ResultPathPolicy = idl.Variant({ Ok: PathPolicy, Err: idl.Text });
+  const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
   const ResultQueryContext = idl.Variant({ Ok: QueryContext, Err: idl.Text });
   const ResultSourceEvidence = idl.Variant({ Ok: SourceEvidence, Err: idl.Text });
 
@@ -145,14 +158,19 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
     incoming_links: idl.Func([IncomingLinksRequest], [ResultLinks], ["query"]),
     memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
+    my_path_policy_roles: idl.Func([idl.Text], [PrincipalRoles], ["query"]),
+    grant_path_policy_role: idl.Func([idl.Text, idl.Text, idl.Text], [ResultUnit], []),
     query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
     read_node: idl.Func([idl.Text], [ResultNode], ["query"]),
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"]),
     list_children: idl.Func([ListChildrenRequest], [ResultChildren], ["query"]),
     outgoing_links: idl.Func([OutgoingLinksRequest], [ResultLinks], ["query"]),
     recent_nodes: idl.Func([RecentNodesRequest], [ResultRecent], ["query"]),
+    revoke_path_policy_role: idl.Func([idl.Text, idl.Text, idl.Text], [ResultUnit], []),
     search_node_paths: idl.Func([SearchNodePathsRequest], [ResultSearch], ["query"]),
     search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"]),
+    path_policy_entries: idl.Func([idl.Text], [ResultPathPolicyEntries], ["query"]),
+    path_policy: idl.Func([idl.Text], [PathPolicy], ["query"]),
     source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"])
   });
 };

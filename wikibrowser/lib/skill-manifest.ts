@@ -10,6 +10,12 @@ export type SkillManifest = {
   provenance: Record<string, string>;
 };
 
+export type SkillAccessCapabilities = {
+  read: boolean;
+  publish: boolean;
+  admin: boolean;
+};
+
 // Browser rendering intentionally supports only the v1 frontmatter subset used by Skill Registry.
 // Rust CLI owns full YAML parsing and validation.
 export function parseSkillManifest(content: string): SkillManifest | null {
@@ -40,8 +46,16 @@ export function isSkillRegistryPath(path: string): boolean {
   return path === "/Wiki/skills" || path.startsWith("/Wiki/skills/");
 }
 
+export function isPublicSkillRegistryPath(path: string): boolean {
+  return path === "/Wiki/public-skills" || path.startsWith("/Wiki/public-skills/");
+}
+
+export function isAnySkillRegistryPath(path: string): boolean {
+  return isSkillRegistryPath(path) || isPublicSkillRegistryPath(path);
+}
+
 export function manifestPathForSkillRegistryFile(path: string): string | null {
-  if (!isSkillRegistryPath(path) || path.endsWith("/manifest.md")) return null;
+  if (!isAnySkillRegistryPath(path) || path.endsWith("/manifest.md")) return null;
   for (const file of ["/SKILL.md", "/provenance.md", "/evals.md"]) {
     if (path.endsWith(file)) {
       return `${path.slice(0, -file.length)}/manifest.md`;
@@ -50,11 +64,36 @@ export function manifestPathForSkillRegistryFile(path: string): string | null {
   return null;
 }
 
+export function skillAccessCapabilities(roles: string[]): SkillAccessCapabilities {
+  const admin = roles.includes("Admin");
+  const publisher = admin || roles.includes("Writer");
+  return {
+    read: publisher || roles.includes("Reader"),
+    publish: publisher,
+    admin
+  };
+}
+
+export function formatSkillAccessCapabilities(capabilities: SkillAccessCapabilities): string {
+  return `read:${formatBoolean(capabilities.read)} publish:${formatBoolean(capabilities.publish)} admin:${formatBoolean(capabilities.admin)}`;
+}
+
+export function skillAccessHint(mode: string | null, roles: string[], authenticated: boolean): string | null {
+  if (mode !== "restricted" || roles.length > 0) return null;
+  return authenticated
+    ? "restricted namespace: missing Reader, Writer, or Admin role"
+    : "restricted namespace: anonymous caller; log in with Internet Identity";
+}
+
 function extractFrontmatter(content: string): string | null {
   if (!content.startsWith("---\n")) return null;
   const rest = content.slice(4);
   const end = rest.indexOf("\n---");
   return end >= 0 ? rest.slice(0, end) : null;
+}
+
+function formatBoolean(value: boolean): string {
+  return value ? "yes" : "no";
 }
 
 function parseFrontmatter(frontmatter: string): Record<string, string[]> {
