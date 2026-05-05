@@ -66,7 +66,7 @@ const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
 const SNAPSHOT_SESSION_TTL_SECS: i64 = 300;
 const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
-SELECT path, kind, updated_at, etag, length(content)
+SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
 FROM fs_nodes
 WHERE path >= ?1
   AND path < ?2
@@ -153,6 +153,9 @@ impl FsStore {
         }
         let rows = load_child_rows(&conn, &path)?;
         let virtual_names = load_virtual_child_names(&conn, &path)?;
+        if rows.is_empty() && virtual_names.is_empty() && !allows_empty_directory_listing(&path) {
+            return Err(format!("path not found: {path}"));
+        }
         build_child_nodes(&path, rows, virtual_names)
     }
 
@@ -1336,6 +1339,10 @@ fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, Strin
     .map_err(|error| error.to_string())?
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| error.to_string())
+}
+
+fn allows_empty_directory_listing(path: &str) -> bool {
+    matches!(path, "/" | "/Wiki" | "/Sources")
 }
 
 fn load_virtual_child_names(conn: &Connection, path: &str) -> Result<Vec<String>, String> {

@@ -1,5 +1,5 @@
-import { IDL } from "@dfinity/candid";
-import { Actor } from "@dfinity/agent";
+import { Actor } from "@icp-sdk/core/agent";
+import { IDL } from "@icp-sdk/core/candid";
 
 type ActorInterfaceFactory = Parameters<typeof Actor.createActor>[0];
 

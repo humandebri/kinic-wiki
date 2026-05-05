@@ -370,23 +370,24 @@ fn normalize_candid_interface(interface: String) -> String {
     // What: Restore public nominal request names for path-only queries.
     // Why: candid::export_service() deduplicates identical record shapes and
     //      rewrites path-only requests to DeleteNodeResult.
-    let normalized = interface
-        .replace(
-            "list_children : (DeleteNodeResult) -> (Result_7) query;",
-            "list_children : (ListChildrenRequest) -> (Result_7) query;",
-        )
-        .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_9) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_9) query;",
-        )
-        .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_10) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_10) query;",
-        )
-        .replace(
-            "outgoing_links : (IncomingLinksRequest) -> (Result_6) query;",
-            "outgoing_links : (OutgoingLinksRequest) -> (Result_6) query;",
-        );
+    let normalized = normalize_candid_method_input(
+        &interface,
+        "list_children",
+        "DeleteNodeResult",
+        "ListChildrenRequest",
+    );
+    let normalized = normalize_candid_method_input(
+        &normalized,
+        "mkdir_node",
+        "DeleteNodeResult",
+        "MkdirNodeRequest",
+    );
+    let normalized = normalize_candid_method_input(
+        &normalized,
+        "outgoing_links",
+        "IncomingLinksRequest",
+        "OutgoingLinksRequest",
+    );
     let normalized = if normalized.contains("type ListChildrenRequest = record { path : text };") {
         normalized
     } else {
@@ -402,6 +403,34 @@ fn normalize_candid_interface(interface: String) -> String {
         "type MkdirNodeResult = record { created : bool; path : text };",
         "type MkdirNodeRequest = record { path : text };\ntype MkdirNodeResult = record { created : bool; path : text };",
     ))
+}
+
+fn normalize_candid_method_input(
+    interface: &str,
+    method: &str,
+    exported_input: &str,
+    public_input: &str,
+) -> String {
+    let mut normalized = interface
+        .lines()
+        .map(|line| {
+            let prefix = format!("  {method} : ({exported_input}) -> (");
+            if line.starts_with(&prefix) && line.ends_with(" query;") {
+                line.replacen(
+                    &format!("{method} : ({exported_input})"),
+                    &format!("{method} : ({public_input})"),
+                    1,
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if interface.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 fn ensure_outgoing_links_request(interface: String) -> String {

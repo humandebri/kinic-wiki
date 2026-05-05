@@ -28,7 +28,7 @@ import {
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "lint"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "search", "recent", "lint"];
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
   ssr: false,
   loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
@@ -208,6 +208,7 @@ function LeftPane({
   node: WikiNode | null;
   autoExpandExplorer: boolean;
 }) {
+  if (tab === "search") return <SearchPanel canisterId={canisterId} query="" initialKind="path" />;
   if (tab === "recent") return <RecentPanel canisterId={canisterId} />;
   if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} />;
   return <ExplorerTree canisterId={canisterId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} />;
@@ -314,7 +315,7 @@ function ModeTabs({
 }) {
   return (
     <nav className="border-b border-line px-3 py-2" aria-label="Left sidebar mode">
-      <div className="grid grid-cols-3 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
+      <div className="grid grid-cols-4 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
         {SIDEBAR_TABS.map((value) => (
           <Link
             key={value}
@@ -330,13 +331,14 @@ function ModeTabs({
 }
 
 function tabTitle(tab: ModeTab): string {
+  if (tab === "search") return "Search";
   if (tab === "recent") return "Recent";
   if (tab === "lint") return "Lint Hints";
   return "Explorer";
 }
 
 function parseTab(value: string | null): ModeTab {
-  if (value === "recent" || value === "lint" || value === "explorer") {
+  if (value === "recent" || value === "lint" || value === "search" || value === "explorer") {
     return value;
   }
   return "explorer";

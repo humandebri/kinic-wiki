@@ -172,7 +172,7 @@ fn list_children_queries_use_path_index_range_scans() {
 
     let direct_plan = explain_query_plan_dynamic(
         &conn,
-        "SELECT path, kind, updated_at, etag, length(content)
+        "SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
          FROM fs_nodes
          WHERE path >= ?1
            AND path < ?2
@@ -952,6 +952,55 @@ fn list_children_returns_direct_children_with_virtual_directories() {
     assert_eq!(tree.etag.as_deref(), Some(tree_etag.as_str()));
     assert_eq!(tree.size_bytes, Some("content revision 12".len() as u64));
     assert!(!tree.is_virtual);
+}
+
+#[test]
+fn list_children_reports_missing_directory_paths() {
+    let (_dir, store) = new_store();
+
+    let missing_error = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/no-such-dir".to_string(),
+        })
+        .expect_err("missing directory should be rejected");
+    assert_eq!(missing_error, "path not found: /Wiki/no-such-dir");
+
+    for path in ["/", "/Wiki", "/Sources"] {
+        let children = store
+            .list_children(ListChildrenRequest {
+                path: path.to_string(),
+            })
+            .expect("root-like directory should allow empty listing");
+        assert!(children.is_empty());
+    }
+}
+
+#[test]
+fn list_children_reports_utf8_content_size_in_bytes() {
+    let (_dir, store) = new_store();
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/japanese.md".to_string(),
+                kind: NodeKind::File,
+                content: "こんにちは".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            10,
+        )
+        .expect("write should succeed");
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki".to_string(),
+        })
+        .expect("children should list");
+    let child = children
+        .iter()
+        .find(|child| child.path == "/Wiki/japanese.md")
+        .expect("file child should exist");
+    assert_eq!(child.size_bytes, Some("こんにちは".len() as u64));
 }
 
 #[test]

@@ -1,46 +1,68 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { Actor, HttpAgent } from "@dfinity/agent";
-import { Principal } from "@dfinity/principal";
+import { pathToFileURL } from "node:url";
+import { Actor, HttpAgent } from "@icp-sdk/core/agent";
+import { Principal } from "@icp-sdk/core/principal";
 
-const url = readUrl();
-const targetUrl = new URL(url);
-const canisterId = targetUrl.pathname.split("/")[2];
-const nodePath = `/${targetUrl.pathname.split("/").slice(3).join("/")}`;
-const searchUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/search`;
-const graphUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/graph?center=${encodeURIComponent(nodePath)}&depth=1`;
-const emptyGraphUrl = `${targetUrl.origin}/w/${encodeURIComponent(canisterId)}/graph`;
 const smokeWaitMs = 30_000;
 const pollMs = 500;
-const targetContext = await readTargetContext();
-const targetNode = targetContext.node;
-const contentProbe = contentProbeFor(targetNode.content);
-const pathQuery = pathQueryFor(nodePath);
-const fullQuery = fullTextQueryFor(targetNode.content);
 
-assertNodeContextShape(targetContext);
-run("open", [url]);
-assertSnapshotIncludes(contentProbe);
-assertSnapshotIncludes("Incoming Links");
-run("open", [`${url}?view=raw`]);
-assertSnapshotIncludes(contentProbe);
-run("open", [`${searchUrl}?q=${encodeURIComponent(pathQuery)}&kind=path`]);
-assertSnapshotIncludes(contentProbe);
-run("open", [`${searchUrl}?q=${encodeURIComponent(fullQuery)}&kind=full`]);
-assertSnapshotIncludes(nodePath);
-assertSnapshotIncludes("Full text");
-run("open", [`${url}?tab=recent`]);
-assertSnapshotIncludes("Recent");
-run("open", [`${url}?tab=lint`]);
-assertSnapshotIncludes("Lint Hints");
-run("open", [graphUrl]);
-assertSnapshotIncludes("Local link graph");
-assertSnapshotIncludes(nodePath);
-run("open", [emptyGraphUrl]);
-assertSnapshotIncludes("Open Graph from a wiki page to inspect its local neighborhood.");
-assertNoSnapshotText("Cannot reach IC host");
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}
 
-console.log(`Wiki browser smoke OK: ${canisterId} ${nodePath}`);
+async function main() {
+  const url = readUrl();
+  const target = parseSmokeTargetUrl(url);
+  const searchUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/search`;
+  const graphUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/graph?center=${encodeURIComponent(target.nodePath)}&depth=1`;
+  const emptyGraphUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/graph`;
+  const targetContext = await readTargetContext(target.canisterId, target.nodePath);
+  const targetNode = targetContext.node;
+  const contentProbe = contentProbeFor(targetNode.content);
+  const pathQuery = pathQueryFor(target.nodePath);
+  const fullQuery = fullTextQueryFor(targetNode.content);
+
+  assertNodeContextShape(targetContext, target.nodePath);
+  run("open", [url]);
+  assertSnapshotIncludes(contentProbe);
+  assertSnapshotIncludes("Incoming Links");
+  run("open", [`${url}?view=raw`]);
+  assertSnapshotIncludes(contentProbe);
+  run("open", [`${searchUrl}?q=${encodeURIComponent(pathQuery)}&kind=path`]);
+  assertSnapshotIncludes(contentProbe);
+  run("open", [`${searchUrl}?q=${encodeURIComponent(fullQuery)}&kind=full`]);
+  assertSnapshotIncludes(target.nodePath);
+  assertSnapshotIncludes("Full text");
+  run("open", [`${url}?tab=recent`]);
+  assertSnapshotIncludes("Recent");
+  run("open", [`${url}?tab=lint`]);
+  assertSnapshotIncludes("Lint Hints");
+  run("open", [graphUrl]);
+  assertSnapshotIncludes("Local link graph");
+  assertSnapshotIncludes(target.nodePath);
+  run("open", [emptyGraphUrl]);
+  assertSnapshotIncludes("Open Graph from a wiki page to inspect its local neighborhood.");
+  assertNoSnapshotText("Cannot reach IC host");
+
+  console.log(`Wiki browser smoke OK: ${target.canisterId} ${target.nodePath}`);
+}
+
+export function parseSmokeTargetUrl(url) {
+  const targetUrl = new URL(url);
+  const segments = targetUrl.pathname.split("/").filter(Boolean);
+  const canisterId = decodePathSegment(segments[1] ?? "");
+  const path = segments
+    .slice(2)
+    .filter(Boolean)
+    .map(decodePathSegment)
+    .join("/");
+  return {
+    origin: targetUrl.origin,
+    canisterId,
+    nodePath: path ? `/${path}` : "/Wiki"
+  };
+}
 
 function readUrl() {
   const argIndex = process.argv.indexOf("--url");
@@ -64,7 +86,7 @@ function assertSnapshotIncludes(text) {
   throw new Error(`snapshot missing ${text}\n${lastOutput}`);
 }
 
-async function readTargetContext() {
+async function readTargetContext(canisterId, nodePath) {
   const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
   const agent = HttpAgent.createSync({ host });
   if (isLocalHost(host)) {
@@ -85,7 +107,7 @@ async function readTargetContext() {
   return normalizeNodeContext(raw);
 }
 
-function assertNodeContextShape(context) {
+function assertNodeContextShape(context, nodePath) {
   if (!context || typeof context !== "object" || !context.node) {
     throw new Error("node-context response must contain node");
   }
@@ -168,6 +190,14 @@ function normalizeNodeContext(raw) {
 
 function isLocalHost(host) {
   return /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(:\d+)?/i.test(host);
+}
+
+function decodePathSegment(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 function idlFactory({ IDL: idl }) {
