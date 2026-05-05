@@ -28,7 +28,7 @@ Detailed structure map:
 - Search, snapshot export, and delta sync
 - Link graph and node-context queries for wiki navigation
 - Agent Memory API v1 for canister-backed long-term context reads
-- Skill Registry preview for VFS-backed `SKILL.md` packages with provenance metadata
+- Skill Registry preview for private/team `SKILL.md` packages plus Admin-curated public catalog
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -108,10 +108,16 @@ Main commands:
 - `pull`
 - `push`
 - `skill import`
+- `skill update`
 - `skill inspect`
 - `skill list`
 - `skill audit`
 - `skill install`
+- `skill local`
+- `skill versions`
+- `skill public`
+- `skill policy`
+- `github ingest`
 
 ### Library Tool Calling
 
