@@ -267,19 +267,19 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             "list_children request type must stay nominal in the public interface",
         );
         assert!(
-            did.contains("list_children : (ListChildrenRequest) -> (Result_7) query;"),
+            did.contains("list_children : (ListChildrenRequest) -> (Result_9) query;"),
             "list_children must consume ListChildrenRequest at the interface boundary",
         );
         assert!(
-            did.contains("mkdir_node : (MkdirNodeRequest) -> (Result_9) query;"),
+            did.contains("mkdir_node : (MkdirNodeRequest) -> (Result_11) query;"),
             "mkdir_node must consume MkdirNodeRequest at the interface boundary",
         );
         assert!(
-            !did.contains("list_children : (DeleteNodeResult) -> (Result_7) query;"),
+            !did.contains("list_children : (DeleteNodeResult) -> (Result_9) query;"),
             "list_children must not collapse to DeleteNodeResult",
         );
         assert!(
-            !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_9) query;"),
+            !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_11) query;"),
             "mkdir_node must not collapse to DeleteNodeResult",
         );
         assert!(

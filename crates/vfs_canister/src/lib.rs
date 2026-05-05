@@ -6,7 +6,7 @@ use std::fs::create_dir_all;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use candid::export_service;
+use candid::{Principal, export_service};
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
@@ -19,20 +19,40 @@ use vfs_types::{
     ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
     MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
-    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    PathPolicy, PathPolicyEntry, QueryContext, QueryContextRequest, RecentNodeHit,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
+
+mod path_policy;
+use path_policy::{
+    SKILL_REGISTRY_ROOT, can_read_policy_store_node, enable_policy_for, ensure_admin,
+    ensure_namespace_publish, ensure_namespace_read, ensure_not_policy_store_node,
+    ensure_policy_store_node_read, filter_children, filter_entries, filter_export_snapshot,
+    filter_fetch_updates, filter_glob_hits, filter_links, filter_node_context,
+    filter_query_context, filter_recent_hits, filter_search_hits, filter_source_evidence,
+    grant_role, load_path_policy, namespace_only_prefix, namespace_path, namespace_roles,
+    normalize_policy_role, policy_from_state, revoke_role, roles_for, save_path_policy,
+};
 
 const DB_PATH: &str = "./DB/wiki.sqlite3";
 const FS_MEMORY_RANGE: Range<u8> = 200..210;
 const DB_MEMORY_ID: u8 = 210;
 
+#[derive(Clone, Copy)]
+struct PathPolicyReadAccess {
+    restricted: Principal,
+    policy_store: bool,
+    inherited: bool,
+}
+
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
     static SERVICE: RefCell<Option<VfsService>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static TEST_CALLER: RefCell<Principal> = const { RefCell::new(Principal::anonymous()) };
 }
 
 #[init]
@@ -84,28 +104,66 @@ fn memory_manifest() -> MemoryManifest {
 
 #[query]
 fn read_node(path: String) -> Result<Option<Node>, String> {
-    with_service(|service| service.read_node(&path))
+    with_service(|service| {
+        ensure_policy_store_node_read(service, current_caller(), &path)?;
+        ensure_namespace_read(service, current_caller(), &path)?;
+        service.read_node(&path)
+    })
 }
 
 #[query]
 fn list_nodes(request: ListNodesRequest) -> Result<Vec<NodeEntry>, String> {
-    with_service(|service| service.list_nodes(request))
+    with_service(|service| {
+        if namespace_only_prefix(request.prefix.as_str()) {
+            ensure_namespace_read(service, current_caller(), &request.prefix)?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.list_nodes(request).map(|entries| {
+            filter_entries(
+                entries,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
-    with_service(|service| service.list_children(request))
+    with_service(|service| {
+        if namespace_path(request.path.as_str()) {
+            ensure_namespace_read(service, current_caller(), &request.path)?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.list_children(request).map(|children| {
+            filter_children(
+                children,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[update]
 fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
+    ensure_not_policy_store_node(&request.path)?;
     validate_source_path_for_kind(&request.path, &request.kind)?;
-    with_service(|service| service.write_node(request, now_millis()))
+    with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
+        service.write_node(request, now_millis())
+    })
 }
 
 #[update]
 fn append_node(request: AppendNodeRequest) -> Result<WriteNodeResult, String> {
+    ensure_not_policy_store_node(&request.path)?;
     with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
         validate_append_source_path(service, &request)?;
         service.append_node(request, now_millis())
     })
@@ -113,17 +171,29 @@ fn append_node(request: AppendNodeRequest) -> Result<WriteNodeResult, String> {
 
 #[update]
 fn edit_node(request: EditNodeRequest) -> Result<EditNodeResult, String> {
-    with_service(|service| service.edit_node(request, now_millis()))
+    ensure_not_policy_store_node(&request.path)?;
+    with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
+        service.edit_node(request, now_millis())
+    })
 }
 
 #[update]
 fn delete_node(request: DeleteNodeRequest) -> Result<DeleteNodeResult, String> {
-    with_service(|service| service.delete_node(request, now_millis()))
+    ensure_not_policy_store_node(&request.path)?;
+    with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
+        service.delete_node(request, now_millis())
+    })
 }
 
 #[update]
 fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
+    ensure_not_policy_store_node(&request.from_path)?;
+    ensure_not_policy_store_node(&request.to_path)?;
     with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.from_path)?;
+        ensure_namespace_publish(service, current_caller(), &request.to_path)?;
         validate_move_source_path(service, &request)?;
         service.move_node(request, now_millis())
     })
@@ -131,77 +201,350 @@ fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
 
 #[query]
 fn mkdir_node(request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
-    with_service(|service| service.mkdir_node(request))
+    ensure_not_policy_store_node(&request.path)?;
+    with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
+        service.mkdir_node(request)
+    })
 }
 
 #[query]
 fn glob_nodes(request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>, String> {
-    with_service(|service| service.glob_nodes(request))
+    with_service(|service| {
+        if request.path.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.path.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.glob_nodes(request).map(|hits| {
+            filter_glob_hits(
+                hits,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn recent_nodes(request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
-    with_service(|service| service.recent_nodes(request))
+    with_service(|service| {
+        if request.path.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.path.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.recent_nodes(request).map(|hits| {
+            filter_recent_hits(
+                hits,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn incoming_links(request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| service.incoming_links(request))
+    with_service(|service| {
+        ensure_namespace_read(service, current_caller(), &request.path)?;
+        let access = path_policy_read_access(service)?;
+        service.incoming_links(request).map(|links| {
+            filter_links(
+                links,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn outgoing_links(request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| service.outgoing_links(request))
+    with_service(|service| {
+        ensure_namespace_read(service, current_caller(), &request.path)?;
+        let access = path_policy_read_access(service)?;
+        service.outgoing_links(request).map(|links| {
+            filter_links(
+                links,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn graph_links(request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| service.graph_links(request))
+    with_service(|service| {
+        if namespace_only_prefix(request.prefix.as_str()) {
+            ensure_namespace_read(service, current_caller(), &request.prefix)?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.graph_links(request).map(|links| {
+            filter_links(
+                links,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn graph_neighborhood(request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| service.graph_neighborhood(request))
+    with_service(|service| {
+        ensure_namespace_read(service, current_caller(), &request.center_path)?;
+        let access = path_policy_read_access(service)?;
+        service.graph_neighborhood(request).map(|links| {
+            filter_links(
+                links,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn read_node_context(request: NodeContextRequest) -> Result<Option<NodeContext>, String> {
-    with_service(|service| service.read_node_context(request))
+    with_service(|service| {
+        ensure_namespace_read(service, current_caller(), &request.path)?;
+        let access = path_policy_read_access(service)?;
+        service.read_node_context(request).map(|context| {
+            context.and_then(|item| {
+                filter_node_context(
+                    item,
+                    access.restricted,
+                    access.policy_store,
+                    access.inherited,
+                    service,
+                )
+            })
+        })
+    })
 }
 
 #[query]
 fn query_context(request: QueryContextRequest) -> Result<QueryContext, String> {
-    with_service(|service| service.query_context(request))
+    with_service(|service| {
+        if request
+            .namespace
+            .as_deref()
+            .is_some_and(namespace_only_prefix)
+        {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.namespace.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.query_context(request).map(|context| {
+            filter_query_context(
+                context,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn source_evidence(request: SourceEvidenceRequest) -> Result<SourceEvidence, String> {
-    with_service(|service| service.source_evidence(request))
+    with_service(|service| {
+        ensure_namespace_read(service, current_caller(), &request.node_path)?;
+        let access = path_policy_read_access(service)?;
+        service.source_evidence(request).map(|evidence| {
+            filter_source_evidence(
+                evidence,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[update]
 fn multi_edit_node(request: MultiEditNodeRequest) -> Result<MultiEditNodeResult, String> {
-    with_service(|service| service.multi_edit_node(request, now_millis()))
+    ensure_not_policy_store_node(&request.path)?;
+    with_service(|service| {
+        ensure_namespace_publish(service, current_caller(), &request.path)?;
+        service.multi_edit_node(request, now_millis())
+    })
 }
 
 #[query]
 fn search_nodes(request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {
-    with_service(|service| service.search_nodes(request))
+    with_service(|service| {
+        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.prefix.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.search_nodes(request).map(|hits| {
+            filter_search_hits(
+                hits,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn search_node_paths(request: SearchNodePathsRequest) -> Result<Vec<SearchNodeHit>, String> {
-    with_service(|service| service.search_node_paths(request))
+    with_service(|service| {
+        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.prefix.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.search_node_paths(request).map(|hits| {
+            filter_search_hits(
+                hits,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[update]
 fn export_snapshot(request: ExportSnapshotRequest) -> Result<ExportSnapshotResponse, String> {
-    with_service(|service| service.export_fs_snapshot(request))
+    with_service(|service| {
+        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.prefix.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.export_fs_snapshot(request).map(|snapshot| {
+            filter_export_snapshot(
+                snapshot,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
 }
 
 #[query]
 fn fetch_updates(request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse, String> {
-    with_service(|service| service.fetch_fs_updates(request))
+    with_service(|service| {
+        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
+            ensure_namespace_read(
+                service,
+                current_caller(),
+                request.prefix.as_deref().unwrap_or("/Wiki"),
+            )?;
+        }
+        let access = path_policy_read_access(service)?;
+        service.fetch_fs_updates(request).map(|updates| {
+            filter_fetch_updates(
+                updates,
+                access.restricted,
+                access.policy_store,
+                access.inherited,
+                service,
+            )
+        })
+    })
+}
+
+#[update]
+fn enable_path_policy(path: String) -> Result<PathPolicy, String> {
+    with_service(|service| enable_policy_for(service, current_caller(), path, now_millis()))
+}
+
+#[query]
+fn my_path_policy_roles(_path: String) -> Vec<String> {
+    with_service(|service| {
+        let policy = load_path_policy(service, &_path)?;
+        Ok(roles_for(&policy, current_caller()).into_iter().collect())
+    })
+    .unwrap_or_default()
+}
+
+#[query]
+fn path_policy_entries(_path: String) -> Result<Vec<PathPolicyEntry>, String> {
+    with_service(|service| {
+        let policy = load_path_policy(service, &_path)?;
+        ensure_admin(&policy, current_caller())?;
+        Ok(policy.entries)
+    })
+}
+
+#[update]
+fn grant_path_policy_role(path: String, principal: String, role: String) -> Result<(), String> {
+    with_service(|service| {
+        let mut policy = load_path_policy(service, &path)?;
+        ensure_admin(&policy, current_caller())?;
+        let role = normalize_policy_role(&role)?;
+        Principal::from_text(&principal).map_err(|error| format!("invalid principal: {error}"))?;
+        grant_role(&mut policy, principal, role);
+        save_path_policy(service, &policy, now_millis())
+    })
+}
+
+#[update]
+fn revoke_path_policy_role(path: String, principal: String, role: String) -> Result<(), String> {
+    with_service(|service| {
+        let mut policy = load_path_policy(service, &path)?;
+        ensure_admin(&policy, current_caller())?;
+        let role = normalize_policy_role(&role)?;
+        revoke_role(&mut policy, &principal, &role);
+        save_path_policy(service, &policy, now_millis())
+    })
+}
+
+#[query]
+fn path_policy(_path: String) -> PathPolicy {
+    with_service(|service| {
+        let policy = load_path_policy(service, &_path)?;
+        Ok(policy_from_state(&policy))
+    })
+    .unwrap_or_else(|_| PathPolicy {
+        path: SKILL_REGISTRY_ROOT.to_string(),
+        mode: "open".to_string(),
+        roles: namespace_roles(),
+    })
 }
 
 fn initialize_or_trap() {
@@ -267,6 +610,31 @@ where
             .as_ref()
             .ok_or_else(|| "wiki service is not initialized".to_string())?;
         f(service)
+    })
+}
+
+fn current_caller() -> Principal {
+    #[cfg(test)]
+    {
+        TEST_CALLER.with(|caller| *caller.borrow())
+    }
+    #[cfg(not(test))]
+    {
+        ic_cdk::api::msg_caller()
+    }
+}
+
+#[cfg(test)]
+fn set_test_caller(principal: Principal) {
+    TEST_CALLER.with(|caller| *caller.borrow_mut() = principal);
+}
+
+fn path_policy_read_access(service: &VfsService) -> Result<PathPolicyReadAccess, String> {
+    let caller = current_caller();
+    Ok(PathPolicyReadAccess {
+        restricted: caller,
+        policy_store: can_read_policy_store_node(service, caller)?,
+        inherited: true,
     })
 }
 
@@ -376,6 +744,10 @@ fn normalize_candid_interface(interface: String) -> String {
             "list_children : (ListChildrenRequest) -> (Result_7) query;",
         )
         .replace(
+            "list_children : (DeleteNodeResult) -> (Result_9) query;",
+            "list_children : (ListChildrenRequest) -> (Result_9) query;",
+        )
+        .replace(
             "mkdir_node : (DeleteNodeResult) -> (Result_9) query;",
             "mkdir_node : (MkdirNodeRequest) -> (Result_9) query;",
         )
@@ -384,8 +756,16 @@ fn normalize_candid_interface(interface: String) -> String {
             "mkdir_node : (MkdirNodeRequest) -> (Result_10) query;",
         )
         .replace(
+            "mkdir_node : (DeleteNodeResult) -> (Result_11) query;",
+            "mkdir_node : (MkdirNodeRequest) -> (Result_11) query;",
+        )
+        .replace(
             "outgoing_links : (IncomingLinksRequest) -> (Result_6) query;",
             "outgoing_links : (OutgoingLinksRequest) -> (Result_6) query;",
+        )
+        .replace(
+            "outgoing_links : (IncomingLinksRequest) -> (Result_8) query;",
+            "outgoing_links : (OutgoingLinksRequest) -> (Result_8) query;",
         );
     let normalized = if normalized.contains("type ListChildrenRequest = record { path : text };") {
         normalized

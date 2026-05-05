@@ -275,6 +275,19 @@ pub struct SearchNodePathsRequest {
     pub preview_mode: Option<SearchPreviewMode>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct PathPolicyEntry {
+    pub principal: String,
+    pub roles: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct PathPolicy {
+    pub path: String,
+    pub mode: String,
+    pub roles: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
 pub struct SearchNodeHit {
     pub path: String,

@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-canbench-rs = ["dep:canbench-rs", "dep:serde_json"]
+canbench-rs = ["dep:canbench-rs"]
 bench-disable-fts = ["vfs-runtime/bench-disable-fts"]
 
 [dependencies]
@@ -15,8 +15,10 @@ canbench-rs = { version = "0.4.1", optional = true }
 candid = "0.10.26"
 ic-cdk = "0.20.0"
 ic-stable-structures = "0.7.2"
-ic-wasi-polyfill = "0.12.0"
-serde_json = { version = "1.0.145", optional = true }
+ic-wasi-polyfill = "0.13.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_yaml = "0.9.34"
 vfs-runtime = { path = "../vfs_runtime" }
 vfs-types = { path = "../vfs_types" }
 wiki-domain = { path = "../wiki_domain" }
