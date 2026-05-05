@@ -14,8 +14,9 @@ use vfs_types::{
     ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
     GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
     MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    NodeKind, NodeMutationAck, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest, WriteNodeResult,
+    NodeKind, NodeMutationAck, PathPolicy, PathPolicyEntry, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
 };
 
 #[derive(Default)]
@@ -47,6 +48,10 @@ const SNAPSHOT_REVISION_1: &str = "v5:1:2f57696b69";
 
 #[async_trait]
 impl VfsApi for MockClient {
+    fn local_principal(&self) -> Result<String> {
+        Ok("aaaaa-aa".to_string())
+    }
+
     async fn status(&self) -> Result<Status> {
         Ok(Status {
             file_count: 0,
@@ -274,6 +279,33 @@ impl VfsApi for MockClient {
             removed_paths: Vec::new(),
             next_cursor: None,
         })
+    }
+
+    async fn path_policy(&self, _path: &str) -> Result<PathPolicy> {
+        Ok(PathPolicy {
+            path: "/Wiki/skills".to_string(),
+            mode: "open".to_string(),
+            roles: vec![
+                "Admin".to_string(),
+                "Writer".to_string(),
+                "Reader".to_string(),
+            ],
+        })
+    }
+
+    async fn my_path_policy_roles(&self, _path: &str) -> Result<Vec<String>> {
+        Ok(vec![
+            "Admin".to_string(),
+            "Writer".to_string(),
+            "Reader".to_string(),
+        ])
+    }
+
+    async fn path_policy_entries(&self, _path: &str) -> Result<Vec<PathPolicyEntry>> {
+        Ok(vec![PathPolicyEntry {
+            principal: "aaaaa-aa".to_string(),
+            roles: vec!["Admin".to_string()],
+        }])
     }
 }
 
@@ -540,6 +572,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
                 connection: ConnectionArgs {
                     local: false,
                     canister_id: None,
+                    identity_pem: None,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -579,6 +612,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
                 connection: ConnectionArgs {
                     local: false,
                     canister_id: None,
+                    identity_pem: None,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),

@@ -16,6 +16,8 @@ mod commands_sync_tests;
 mod commands_vfs_tests;
 pub mod conversation_wiki;
 mod facts_policy;
+pub mod github_ingest;
+pub mod github_source;
 pub mod lint_local;
 pub mod maintenance;
 pub mod mirror;

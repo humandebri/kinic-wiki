@@ -23,6 +23,7 @@ fn test_cli(command: Command) -> Cli {
         connection: ConnectionArgs {
             local: false,
             canister_id: Some("aaaaa-aa".to_string()),
+            identity_pem: None,
         },
         command,
     }
