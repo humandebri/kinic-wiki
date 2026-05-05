@@ -3,6 +3,7 @@
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
 use crate::cli::{Cli, Command};
 use crate::conversation_wiki::generate_conversation_wiki;
+use crate::github_ingest::run_github_command;
 use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
 use crate::mirror::{
@@ -31,6 +32,9 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
     match command {
         Command::Skill { command } => {
             run_skill_command(client, command).await?;
+        }
+        Command::Github { command } => {
+            run_github_command(client, command).await?;
         }
         Command::RebuildIndex => {
             rebuild_index(client).await?;
