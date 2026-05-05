@@ -45,7 +45,10 @@ fn resolve_connection_from_sources(
     let replica_host = if local {
         LOCAL_REPLICA_HOST.to_string()
     } else {
-        MAINNET_REPLICA_HOST.to_string()
+        config
+            .as_ref()
+            .and_then(|value| value.replica_host.clone())
+            .unwrap_or_else(|| MAINNET_REPLICA_HOST.to_string())
     };
     let canister_id = canister_id_arg
         .or(canister_id_env)

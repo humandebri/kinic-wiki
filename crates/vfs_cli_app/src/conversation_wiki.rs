@@ -203,7 +203,7 @@ async fn log_document(
     );
     Ok(WikiDocument {
         path,
-        content: format!("{}{}", current.trim_end(), format!("\n{entry}")),
+        content: format!("{}\n{entry}", current.trim_end()),
     })
 }
 
