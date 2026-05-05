@@ -4,7 +4,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use vfs_types::{GlobNodeType, NodeKind, SearchPreviewMode};
-use wiki_domain::WIKI_ROOT_PATH;
+
+pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -35,7 +36,7 @@ pub enum VfsCommand {
         json: bool,
     },
     ListNodes {
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         prefix: String,
         #[arg(long)]
         recursive: bool,
@@ -43,7 +44,7 @@ pub enum VfsCommand {
         json: bool,
     },
     ListChildren {
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -126,7 +127,7 @@ pub enum VfsCommand {
     },
     GlobNodes {
         pattern: String,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         path: String,
         #[arg(long, value_enum)]
         node_type: Option<GlobNodeTypeArg>,
@@ -136,7 +137,7 @@ pub enum VfsCommand {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -160,7 +161,7 @@ pub enum VfsCommand {
         json: bool,
     },
     GraphLinks {
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 100)]
         limit: u32,
@@ -195,7 +196,7 @@ pub enum VfsCommand {
     },
     SearchRemote {
         query_text: String,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,
@@ -206,7 +207,7 @@ pub enum VfsCommand {
     },
     SearchPathRemote {
         query_text: String,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,

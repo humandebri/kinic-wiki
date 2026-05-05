@@ -18,10 +18,10 @@ use vfs_types::{
     GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
     ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
     MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
-    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, NodeKind,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -99,14 +99,14 @@ fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String>
 
 #[update]
 fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
-    validate_source_path_for_kind(&request.path, &request.kind)?;
+    validate_wiki_source_write(&request)?;
     with_service(|service| service.write_node(request, now_millis()))
 }
 
 #[update]
 fn append_node(request: AppendNodeRequest) -> Result<WriteNodeResult, String> {
     with_service(|service| {
-        validate_append_source_path(service, &request)?;
+        validate_wiki_source_append(service, &request)?;
         service.append_node(request, now_millis())
     })
 }
@@ -124,7 +124,7 @@ fn delete_node(request: DeleteNodeRequest) -> Result<DeleteNodeResult, String> {
 #[update]
 fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
     with_service(|service| {
-        validate_move_source_path(service, &request)?;
+        validate_wiki_source_move(service, &request)?;
         service.move_node(request, now_millis())
     })
 }
@@ -334,29 +334,37 @@ fn canonical_roles() -> Vec<CanonicalRole> {
     .collect()
 }
 
-fn validate_append_source_path(
+fn validate_wiki_source_write(request: &WriteNodeRequest) -> Result<(), String> {
+    validate_wiki_source_path_for_kind(&request.path, &request.kind)
+}
+
+fn validate_wiki_source_append(
     service: &VfsService,
     request: &AppendNodeRequest,
 ) -> Result<(), String> {
     if let Some(kind) = request.kind.as_ref() {
-        validate_source_path_for_kind(&request.path, kind)?;
+        validate_wiki_source_path_for_kind(&request.path, kind)?;
         return Ok(());
     }
     let existing = service.read_node(&request.path)?;
     if let Some(node) = existing {
-        validate_source_path_for_kind(&request.path, &node.kind)?;
+        validate_wiki_source_path_for_kind(&request.path, &node.kind)?;
     }
     Ok(())
 }
 
-fn validate_move_source_path(
+fn validate_wiki_source_move(
     service: &VfsService,
     request: &MoveNodeRequest,
 ) -> Result<(), String> {
     let current = service
         .read_node(&request.from_path)?
         .ok_or_else(|| format!("node does not exist: {}", request.from_path))?;
-    validate_source_path_for_kind(&request.to_path, &current.kind)
+    validate_wiki_source_path_for_kind(&request.to_path, &current.kind)
+}
+
+fn validate_wiki_source_path_for_kind(path: &str, kind: &NodeKind) -> Result<(), String> {
+    validate_source_path_for_kind(path, kind)
 }
 
 export_service!();

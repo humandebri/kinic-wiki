@@ -22,6 +22,7 @@ struct ToolMockClient {
     edit_requests: std::sync::Mutex<Vec<EditNodeRequest>>,
     mkdir_requests: std::sync::Mutex<Vec<MkdirNodeRequest>>,
     move_requests: std::sync::Mutex<Vec<MoveNodeRequest>>,
+    list_requests: std::sync::Mutex<Vec<ListNodesRequest>>,
     glob_requests: std::sync::Mutex<Vec<GlobNodesRequest>>,
     recent_requests: std::sync::Mutex<Vec<RecentNodesRequest>>,
     context_requests: std::sync::Mutex<Vec<vfs_types::NodeContextRequest>>,
@@ -62,7 +63,11 @@ impl VfsApi for ToolMockClient {
         }))
     }
 
-    async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+    async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        self.list_requests
+            .lock()
+            .expect("list lock should succeed")
+            .push(request);
         Ok(Vec::new())
     }
 
@@ -265,6 +270,67 @@ impl VfsApi for ToolMockClient {
             next_cursor: None,
         })
     }
+}
+
+#[tokio::test]
+async fn agent_tools_default_read_scopes_to_vfs_root() {
+    let client = ToolMockClient::default();
+    for (name, input) in [
+        ("ls", serde_json::json!({})),
+        ("glob", serde_json::json!({ "pattern": "**/*.md" })),
+        ("recent", serde_json::json!({ "limit": 5 })),
+        ("search", serde_json::json!({ "query_text": "nested" })),
+        (
+            "search_paths",
+            serde_json::json!({ "query_text": "nested" }),
+        ),
+    ] {
+        let result = handle_anthropic_tool_call(&client, name, input)
+            .await
+            .expect("tool should succeed");
+        assert!(!result.is_error);
+    }
+
+    assert_eq!(
+        client
+            .list_requests
+            .lock()
+            .expect("list lock should succeed")[0]
+            .prefix,
+        "/"
+    );
+    assert_eq!(
+        client
+            .glob_requests
+            .lock()
+            .expect("glob lock should succeed")[0]
+            .path,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .recent_requests
+            .lock()
+            .expect("recent lock should succeed")[0]
+            .path,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .search_requests
+            .lock()
+            .expect("search lock should succeed")[0]
+            .prefix,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .path_search_requests
+            .lock()
+            .expect("path search lock should succeed")[0]
+            .prefix,
+        Some("/".to_string())
+    );
 }
 
 #[test]

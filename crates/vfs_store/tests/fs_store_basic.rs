@@ -2,10 +2,10 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, ListChildrenRequest, ListNodesRequest,
-    MoveNodeRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest, RecentNodesRequest,
-    SearchNodePathsRequest, SearchNodesRequest, SearchPreviewField, SearchPreviewMode,
-    WriteNodeRequest,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListChildrenRequest,
+    ListNodesRequest, MoveNodeRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest,
+    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, SearchPreviewField,
+    SearchPreviewMode, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -139,7 +139,7 @@ fn list_and_recent_queries_use_covering_indexes() {
         &conn,
         "SELECT path, kind, updated_at, etag
          FROM fs_nodes
-         WHERE path = ?1 OR path LIKE ?2
+         WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'
          ORDER BY path ASC",
         ["/Wiki", "/Wiki/%"],
     );
@@ -152,7 +152,7 @@ fn list_and_recent_queries_use_covering_indexes() {
         &conn,
         "SELECT path, kind, updated_at, etag
          FROM fs_nodes
-         WHERE path = ?1 OR path LIKE ?2
+         WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'
          ORDER BY updated_at DESC, path ASC
          LIMIT 10",
         ["/Wiki", "/Wiki/%"],
@@ -207,6 +207,150 @@ fn list_children_queries_use_path_index_range_scans() {
         virtual_plan.contains("USING") && virtual_plan.contains("path>? AND path<?"),
         "virtual child query should use path range scan: {virtual_plan}"
     );
+}
+
+#[test]
+fn prefix_filters_escape_sql_like_wildcards() {
+    assert_prefix_scope_with_wildcards("/Wiki/a_b", "/Wiki/a_b/page.md", "/Wiki/axb/page.md", 100);
+    assert_prefix_scope_with_wildcards(
+        "/Wiki/a%b",
+        "/Wiki/a%b/page.md",
+        "/Wiki/azzzb/page.md",
+        200,
+    );
+}
+
+fn assert_prefix_scope_with_wildcards(
+    prefix: &str,
+    expected_path: &str,
+    lookalike_path: &str,
+    now_base: i64,
+) {
+    let (_dir, store) = new_store();
+    let expected_etag = write_searchable_file(&store, expected_path, now_base);
+    let lookalike_etag = write_searchable_file(&store, lookalike_path, now_base + 1);
+    write_searchable_file(&store, "/Wiki/a_b/other.md", now_base + 2);
+    write_searchable_file(&store, "/Wiki/a%b/other.md", now_base + 3);
+
+    let list_paths = store
+        .list_nodes(ListNodesRequest {
+            prefix: prefix.to_string(),
+            recursive: true,
+        })
+        .expect("list should succeed")
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect::<Vec<_>>();
+    assert!(list_paths.contains(&expected_path.to_string()));
+    assert!(!list_paths.contains(&lookalike_path.to_string()));
+
+    let recent_paths = store
+        .recent_nodes(RecentNodesRequest {
+            path: Some(prefix.to_string()),
+            limit: 100,
+        })
+        .expect("recent should succeed")
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<Vec<_>>();
+    assert!(recent_paths.contains(&expected_path.to_string()));
+    assert!(!recent_paths.contains(&lookalike_path.to_string()));
+
+    let search_paths = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "wildcard-token".to_string(),
+            prefix: Some(prefix.to_string()),
+            top_k: 100,
+            preview_mode: Some(SearchPreviewMode::None),
+        })
+        .expect("search should succeed")
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<Vec<_>>();
+    assert!(search_paths.contains(&expected_path.to_string()));
+    assert!(!search_paths.contains(&lookalike_path.to_string()));
+
+    let path_search_paths = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "page".to_string(),
+            prefix: Some(prefix.to_string()),
+            top_k: 100,
+            preview_mode: None,
+        })
+        .expect("path search should succeed")
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<Vec<_>>();
+    assert!(path_search_paths.contains(&expected_path.to_string()));
+    assert!(!path_search_paths.contains(&lookalike_path.to_string()));
+
+    let snapshot = store
+        .export_snapshot(ExportSnapshotRequest {
+            prefix: Some(prefix.to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect("snapshot should succeed");
+    let snapshot_paths = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.path.clone())
+        .collect::<Vec<_>>();
+    assert!(snapshot_paths.contains(&expected_path.to_string()));
+    assert!(!snapshot_paths.contains(&lookalike_path.to_string()));
+
+    update_searchable_file(&store, expected_path, &expected_etag, now_base + 10);
+    update_searchable_file(&store, lookalike_path, &lookalike_etag, now_base + 11);
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            known_snapshot_revision: snapshot.snapshot_revision,
+            prefix: Some(prefix.to_string()),
+            limit: 100,
+            cursor: None,
+            target_snapshot_revision: None,
+        })
+        .expect("updates should succeed");
+    let update_paths = updates
+        .changed_nodes
+        .into_iter()
+        .map(|node| node.path)
+        .collect::<Vec<_>>();
+    assert!(update_paths.contains(&expected_path.to_string()));
+    assert!(!update_paths.contains(&lookalike_path.to_string()));
+}
+
+fn write_searchable_file(store: &FsStore, path: &str, now: i64) -> String {
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: path.to_string(),
+                kind: NodeKind::File,
+                content: "wildcard-token body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            now,
+        )
+        .expect("write should succeed")
+        .node
+        .etag
+}
+
+fn update_searchable_file(store: &FsStore, path: &str, etag: &str, now: i64) {
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: path.to_string(),
+                kind: NodeKind::File,
+                content: format!("wildcard-token updated {now}"),
+                metadata_json: "{}".to_string(),
+                expected_etag: Some(etag.to_string()),
+            },
+            now,
+        )
+        .expect("update should succeed");
 }
 
 fn explain_query_plan(conn: &Connection, sql: &str, params: [&str; 2]) -> String {
@@ -1063,6 +1207,43 @@ fn list_children_collapses_many_descendants_to_direct_entries() {
     );
 }
 
+#[test]
+fn root_prefix_searches_all_nodes() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/root-search.md", None, 10);
+    write_file(&store, "/Other/root-search.md", None, 11);
+
+    let search_hits = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "root-search".to_string(),
+            prefix: Some("/".to_string()),
+            top_k: 10,
+            preview_mode: Some(SearchPreviewMode::None),
+        })
+        .expect("root search should succeed");
+    let search_paths = search_hits
+        .iter()
+        .map(|hit| hit.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(search_paths.contains(&"/Wiki/root-search.md"));
+    assert!(search_paths.contains(&"/Other/root-search.md"));
+
+    let path_hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "root-search".to_string(),
+            prefix: Some("/".to_string()),
+            top_k: 10,
+            preview_mode: None,
+        })
+        .expect("root path search should succeed");
+    let path_search_paths = path_hits
+        .iter()
+        .map(|hit| hit.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(path_search_paths.contains(&"/Wiki/root-search.md"));
+    assert!(path_search_paths.contains(&"/Other/root-search.md"));
+}
+
 fn assert_v5_snapshot_revision_without_state_hash(snapshot_revision: &str) {
     let parts = snapshot_revision.split(':').collect::<Vec<_>>();
     assert_eq!(parts.len(), 3);
@@ -1763,10 +1944,10 @@ fn move_node_accepts_canonical_target_for_source_nodes() {
 }
 
 #[test]
-fn source_nodes_reject_prefix_lookalike_paths() {
+fn source_nodes_allow_domain_specific_prefix_lookalike_paths() {
     let (_dir, store) = new_store();
     for path in ["/Sources/rawfoo/foo.md", "/Sources/sessions-foo/x.md"] {
-        let error = store
+        let result = store
             .write_node(
                 WriteNodeRequest {
                     path: path.to_string(),
@@ -1777,9 +1958,9 @@ fn source_nodes_reject_prefix_lookalike_paths() {
                 },
                 1_930,
             )
-            .expect_err("write should fail");
+            .expect("generic store should not enforce wiki source policy");
 
-        assert!(error.contains("source path must stay under"));
+        assert_eq!(result.node.path, path);
     }
 }
 
