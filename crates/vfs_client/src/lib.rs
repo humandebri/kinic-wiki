@@ -4,7 +4,12 @@
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use candid::{Decode, Encode};
-use ic_agent::{Agent, export::Principal};
+use ic_agent::{
+    Agent,
+    export::Principal,
+    identity::{BasicIdentity, Secp256k1Identity},
+};
+use std::path::Path;
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, ChildNode, DeleteNodeRequest, DeleteNodeResult,
     EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
@@ -12,13 +17,18 @@ use vfs_types::{
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MemoryManifest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest,
     MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext,
-    NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    NodeContextRequest, NodeEntry, OutgoingLinksRequest, PathPolicy, PathPolicyEntry, QueryContext,
+    QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
+    SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest,
+    WriteNodeResult,
 };
 
 #[async_trait]
 pub trait VfsApi: Sync {
+    fn local_principal(&self) -> Result<String> {
+        Ok("2vxsx-fae".to_string())
+    }
+
     async fn status(&self) -> Result<Status>;
     async fn canister_health(&self) -> Result<CanisterHealth> {
         Err(anyhow!("canister_health is not implemented by this client"))
@@ -76,6 +86,44 @@ pub trait VfsApi: Sync {
         request: ExportSnapshotRequest,
     ) -> Result<ExportSnapshotResponse>;
     async fn fetch_updates(&self, request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse>;
+    async fn enable_path_policy(&self, _path: &str) -> Result<PathPolicy> {
+        Err(anyhow!(
+            "enable_path_policy is not implemented by this client"
+        ))
+    }
+    async fn my_path_policy_roles(&self, _path: &str) -> Result<Vec<String>> {
+        Err(anyhow!(
+            "my_path_policy_roles is not implemented by this client"
+        ))
+    }
+    async fn path_policy_entries(&self, _path: &str) -> Result<Vec<PathPolicyEntry>> {
+        Err(anyhow!(
+            "path_policy_entries is not implemented by this client"
+        ))
+    }
+    async fn grant_path_policy_role(
+        &self,
+        _path: &str,
+        _principal: String,
+        _role: String,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "grant_path_policy_role is not implemented by this client"
+        ))
+    }
+    async fn revoke_path_policy_role(
+        &self,
+        _path: &str,
+        _principal: String,
+        _role: String,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "revoke_path_policy_role is not implemented by this client"
+        ))
+    }
+    async fn path_policy(&self, _path: &str) -> Result<PathPolicy> {
+        Err(anyhow!("path_policy is not implemented by this client"))
+    }
 }
 
 #[derive(Clone)]
@@ -86,10 +134,19 @@ pub struct CanisterVfsClient {
 
 impl CanisterVfsClient {
     pub async fn new(replica_host: &str, canister_id: &str) -> Result<Self> {
-        let agent = Agent::builder()
-            .with_url(replica_host)
-            .build()
-            .context("failed to build IC agent")?;
+        Self::new_with_identity(replica_host, canister_id, None).await
+    }
+
+    pub async fn new_with_identity(
+        replica_host: &str,
+        canister_id: &str,
+        identity_pem: Option<&Path>,
+    ) -> Result<Self> {
+        let mut builder = Agent::builder().with_url(replica_host);
+        if let Some(path) = identity_pem {
+            builder = builder.with_boxed_identity(load_identity(path)?);
+        }
+        let agent = builder.build().context("failed to build IC agent")?;
         if is_local_replica(replica_host) {
             agent
                 .fetch_root_key()
@@ -138,6 +195,14 @@ impl CanisterVfsClient {
 
 #[async_trait]
 impl VfsApi for CanisterVfsClient {
+    fn local_principal(&self) -> Result<String> {
+        Ok(self
+            .agent
+            .get_principal()
+            .map_err(|error| anyhow!(error))?
+            .to_text())
+    }
+
     async fn status(&self) -> Result<Status> {
         self.query("status", &()).await
     }
@@ -280,6 +345,77 @@ impl VfsApi for CanisterVfsClient {
             self.query("fetch_updates", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
+
+    async fn enable_path_policy(&self, path: &str) -> Result<PathPolicy> {
+        let result: Result<PathPolicy, String> =
+            self.update("enable_path_policy", &path.to_string()).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn my_path_policy_roles(&self, path: &str) -> Result<Vec<String>> {
+        self.query("my_path_policy_roles", &path.to_string()).await
+    }
+
+    async fn path_policy_entries(&self, path: &str) -> Result<Vec<PathPolicyEntry>> {
+        let result: Result<Vec<PathPolicyEntry>, String> =
+            self.query("path_policy_entries", &path.to_string()).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn grant_path_policy_role(
+        &self,
+        path: &str,
+        principal: String,
+        role: String,
+    ) -> Result<()> {
+        let bytes = self
+            .agent
+            .update(&self.canister_id, "grant_path_policy_role")
+            .with_arg(
+                Encode!(&path.to_string(), &principal, &role)
+                    .context("failed to encode grant_path_policy_role")?,
+            )
+            .call_and_wait()
+            .await
+            .context("update failed for grant_path_policy_role")?;
+        let result: Result<(), String> = Decode!(&bytes, Result<(), String>)
+            .context("failed to decode response for grant_path_policy_role")?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn revoke_path_policy_role(
+        &self,
+        path: &str,
+        principal: String,
+        role: String,
+    ) -> Result<()> {
+        let bytes = self
+            .agent
+            .update(&self.canister_id, "revoke_path_policy_role")
+            .with_arg(
+                Encode!(&path.to_string(), &principal, &role)
+                    .context("failed to encode revoke_path_policy_role")?,
+            )
+            .call_and_wait()
+            .await
+            .context("update failed for revoke_path_policy_role")?;
+        let result: Result<(), String> = Decode!(&bytes, Result<(), String>)
+            .context("failed to decode response for revoke_path_policy_role")?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn path_policy(&self, path: &str) -> Result<PathPolicy> {
+        self.query("path_policy", &path.to_string()).await
+    }
+}
+
+fn load_identity(path: &Path) -> Result<Box<dyn ic_agent::Identity>> {
+    if let Ok(identity) = Secp256k1Identity::from_pem_file(path) {
+        return Ok(Box::new(identity));
+    }
+    let identity = BasicIdentity::from_pem_file(path)
+        .with_context(|| format!("failed to load identity PEM: {}", path.display()))?;
+    Ok(Box::new(identity))
 }
 
 fn is_local_replica(host: &str) -> bool {

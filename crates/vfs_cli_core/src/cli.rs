@@ -24,6 +24,12 @@ pub struct ConnectionArgs {
 
     #[arg(long, help = "Override VFS_CANISTER_ID or user config")]
     pub canister_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "PEM identity for signed calls; overrides VFS_IDENTITY_PEM when both are set"
+    )]
+    pub identity_pem: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
