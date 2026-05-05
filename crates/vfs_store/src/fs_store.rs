@@ -147,15 +147,21 @@ impl FsStore {
     pub fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
         let path = normalize_list_children_path(&request.path)?;
         let conn = self.open()?;
-        if load_stored_node(&conn, &path)?.is_some() {
-            return Err(format!("not a directory: {path}"));
-        }
+        let concrete_node_exists = load_stored_node(&conn, &path)?.is_some();
         let rows = load_child_rows(&conn, &path)?;
         let virtual_names = load_virtual_child_names(&conn, &path)?;
-        if rows.is_empty() && virtual_names.is_empty() && !allows_empty_directory_listing(&path) {
+        if rows.is_empty() && virtual_names.is_empty() && concrete_node_exists {
+            return Err(format!("not a directory: {path}"));
+        }
+        if rows.is_empty()
+            && virtual_names.is_empty()
+            && !allows_empty_directory_listing(&path)
+            && !concrete_node_exists
+        {
             return Err(format!("path not found: {path}"));
         }
-        build_child_nodes(&path, rows, virtual_names)
+        let children_with_descendants = load_descendant_child_paths(&conn, &path)?;
+        build_child_nodes(&path, rows, virtual_names, &children_with_descendants)
     }
 
     pub fn write_node(
@@ -1350,6 +1356,7 @@ fn build_child_nodes(
     parent_path: &str,
     rows: Vec<ChildRow>,
     virtual_names: Vec<String>,
+    children_with_descendants: &BTreeSet<String>,
 ) -> Result<Vec<ChildNode>, String> {
     let mut children = BTreeMap::<String, ChildNode>::new();
 
@@ -1362,6 +1369,7 @@ fn build_child_nodes(
         children.insert(
             name.clone(),
             ChildNode {
+                has_children: children_with_descendants.contains(&row.path),
                 path: row.path,
                 name,
                 kind: entry_kind_from_node_kind(&row.kind),
@@ -1372,7 +1380,7 @@ fn build_child_nodes(
             },
         );
     }
-    for child in build_virtual_child_nodes(parent_path, virtual_names) {
+    for child in build_virtual_child_nodes(parent_path, virtual_names, children_with_descendants) {
         children.entry(child.name.clone()).or_insert(child);
     }
 
@@ -1386,19 +1394,54 @@ fn build_child_nodes(
     Ok(children)
 }
 
-fn build_virtual_child_nodes(parent_path: &str, names: Vec<String>) -> Vec<ChildNode> {
+fn build_virtual_child_nodes(
+    parent_path: &str,
+    names: Vec<String>,
+    children_with_descendants: &BTreeSet<String>,
+) -> Vec<ChildNode> {
     names
         .into_iter()
-        .map(|name| ChildNode {
-            path: child_path(parent_path, &name),
-            name,
-            kind: NodeEntryKind::Directory,
-            updated_at: None,
-            etag: None,
-            size_bytes: None,
-            is_virtual: true,
+        .map(|name| {
+            let path = child_path(parent_path, &name);
+            ChildNode {
+                has_children: children_with_descendants.contains(&path),
+                path,
+                name,
+                kind: NodeEntryKind::Directory,
+                updated_at: None,
+                etag: None,
+                size_bytes: None,
+                is_virtual: true,
+            }
         })
         .collect()
+}
+
+fn load_descendant_child_paths(
+    conn: &Connection,
+    parent_path: &str,
+) -> Result<BTreeSet<String>, String> {
+    let (prefix, upper, _relative_start) = list_child_query_bounds(parent_path);
+    let mut stmt = conn
+        .prepare(
+            "SELECT path
+             FROM fs_nodes
+             WHERE path >= ?1
+               AND path < ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = stmt
+        .query_map(params![prefix, upper], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let (name, is_direct) = child_name(parent_path, &path)?;
+            (!is_direct).then(|| child_path(parent_path, &name))
+        })
+        .collect())
 }
 
 fn child_prefix(parent_path: &str) -> String {

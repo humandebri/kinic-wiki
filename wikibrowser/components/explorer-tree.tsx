@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { ChildNode } from "@/lib/types";
-import { errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
+import { canExpandChildNode, errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
 export function ExplorerTree({
   canisterId,
@@ -40,11 +40,11 @@ function TreeNode({
   const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
   const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
   const requestedPath = useRef<string | null>(null);
-  const isDirectory = node.kind === "directory";
+  const canExpand = canExpandChildNode(node);
   const selected = selectedPath === node.path;
 
   useEffect(() => {
-    if (!expanded || !isDirectory || children.data || children.error || requestedPath.current === node.path) return;
+    if (!expanded || !canExpand || children.data || children.error || requestedPath.current === node.path) return;
     let cancelled = false;
     requestedPath.current = node.path;
     import("@/lib/vfs-client")
@@ -62,7 +62,7 @@ function TreeNode({
       cancelled = true;
       if (requestedPath.current === node.path) requestedPath.current = null;
     };
-  }, [canisterId, children.data, children.error, expanded, isDirectory, node.path]);
+  }, [canisterId, canExpand, children.data, children.error, expanded, node.path]);
 
   return (
     <div>
@@ -72,8 +72,8 @@ function TreeNode({
         }`}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
       >
-        {isDirectory ? <Toggle expanded={expanded} setExpanded={setExpanded} /> : <span className="w-[18px]" />}
-        {directoryIcon(isDirectory, expanded)}
+        {canExpand ? <Toggle expanded={expanded} setExpanded={setExpanded} /> : <span className="w-[18px]" />}
+        {directoryIcon(canExpand, expanded)}
         <Link
           className="min-w-0 flex-1 truncate no-underline"
           href={hrefForPath(canisterId, node.path)}
@@ -81,7 +81,7 @@ function TreeNode({
           {node.name}
         </Link>
       </div>
-      {expanded && isDirectory ? (
+      {expanded && canExpand ? (
         <ChildrenList
           canisterId={canisterId}
           childrenState={children}

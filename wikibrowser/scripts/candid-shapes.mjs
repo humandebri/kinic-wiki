@@ -13,6 +13,7 @@ export const expectedTypes = {
       name: "text",
       size_bytes: "opt nat64",
       path: "text",
+      has_children: "bool",
       is_virtual: "bool"
     }
   },

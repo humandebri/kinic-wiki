@@ -8,6 +8,7 @@ const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
+const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -45,6 +46,8 @@ assert.deepEqual(
   sortedChildren.map((node) => node.path),
   ["/Wiki/alpha", "/Wiki/beta", "/Wiki/1.md", "/Wiki/2.md", "/Wiki/10.md"]
 );
+assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
+assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);
 
 const hit = normalizeSearchHit({
   path: "/Wiki/demo.md",
@@ -105,7 +108,7 @@ assert.equal(cycleTone(null), "gray");
 
 console.log("UI helper checks OK");
 
-function child(path, name, kind) {
+function child(path, name, kind, hasChildren = kind === "directory") {
   return {
     path,
     name,
@@ -113,7 +116,8 @@ function child(path, name, kind) {
     updatedAt: null,
     etag: null,
     sizeBytes: null,
-    isVirtual: false
+    isVirtual: false,
+    hasChildren
   };
 }
 

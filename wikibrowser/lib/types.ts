@@ -23,6 +23,7 @@ export type ChildNode = {
   etag: string | null;
   sizeBytes: string | null;
   isVirtual: boolean;
+  hasChildren: boolean;
 };
 
 export type RecentNode = {

@@ -1096,6 +1096,35 @@ fn list_children_returns_direct_children_with_virtual_directories() {
     assert_eq!(tree.etag.as_deref(), Some(tree_etag.as_str()));
     assert_eq!(tree.size_bytes, Some("content revision 12".len() as u64));
     assert!(!tree.is_virtual);
+    assert!(tree.has_children);
+
+    let nested = children
+        .iter()
+        .find(|child| child.path == "/Wiki/nested")
+        .expect("virtual child with descendants should exist");
+    assert!(nested.has_children);
+
+    assert!(
+        !children
+            .iter()
+            .find(|child| child.path == "/Wiki/alpha.md")
+            .expect("leaf file child should exist")
+            .has_children
+    );
+
+    let tree_children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/tree".to_string(),
+        })
+        .expect("concrete node with descendants should list children");
+    assert_eq!(
+        tree_children
+            .iter()
+            .map(|child| child.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/Wiki/tree/leaf.md"]
+    );
+    assert!(!tree_children[0].has_children);
 }
 
 #[test]

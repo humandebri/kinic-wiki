@@ -31,6 +31,7 @@ type RawChild = {
   etag: [] | [string];
   size_bytes: [] | [bigint];
   is_virtual: boolean;
+  has_children: boolean;
 };
 
 type RawRecent = {
@@ -312,7 +313,8 @@ function normalizeChild(raw: RawChild): ChildNode {
     updatedAt: raw.updated_at[0]?.toString() ?? null,
     etag: raw.etag[0] ?? null,
     sizeBytes: raw.size_bytes[0]?.toString() ?? null,
-    isVirtual: raw.is_virtual
+    isVirtual: raw.is_virtual,
+    hasChildren: raw.has_children
   };
 }
 

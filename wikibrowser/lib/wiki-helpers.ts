@@ -26,8 +26,13 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
     updatedAt: null,
     etag: null,
     sizeBytes: null,
-    isVirtual: true
+    isVirtual: true,
+    hasChildren: true
   };
+}
+
+export function canExpandChildNode(node: ChildNode): boolean {
+  return node.kind === "directory" || node.hasChildren;
 }
 
 export function errorMessage(error: unknown): string {

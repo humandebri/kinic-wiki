@@ -64,6 +64,7 @@ pub struct ChildNode {
     pub etag: Option<String>,
     pub size_bytes: Option<u64>,
     pub is_virtual: bool,
+    pub has_children: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

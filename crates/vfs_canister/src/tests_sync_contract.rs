@@ -267,6 +267,10 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             "list_children request type must stay nominal in the public interface",
         );
         assert!(
+            did.contains("has_children : bool;"),
+            "ChildNode must expose descendant state",
+        );
+        assert!(
             has_query_method_input(did, "list_children", "ListChildrenRequest"),
             "list_children must consume ListChildrenRequest at the interface boundary",
         );

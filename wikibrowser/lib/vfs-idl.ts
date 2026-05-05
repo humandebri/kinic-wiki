@@ -27,6 +27,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     updated_at: idl.Opt(idl.Int64),
     etag: idl.Opt(idl.Text),
     size_bytes: idl.Opt(idl.Nat64),
+    has_children: idl.Bool,
     is_virtual: idl.Bool
   });
   const RecentNodeHit = idl.Record({

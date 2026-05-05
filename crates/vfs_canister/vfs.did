@@ -19,6 +19,7 @@ type ChildNode = record {
   name : text;
   size_bytes : opt nat64;
   path : text;
+  has_children : bool;
   is_virtual : bool;
 };
 type DeleteNodeRequest = record { path : text; expected_etag : opt text };
