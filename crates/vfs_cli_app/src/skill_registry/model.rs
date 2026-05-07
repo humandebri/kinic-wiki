@@ -3,9 +3,7 @@
 // Why: The CLI workflow stays thin while manifest handling remains testable and schema-free.
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use vfs_types::SearchNodeHit;
+use std::collections::BTreeMap;
 
 pub(super) const PRIVATE_ROOT: &str = "/Wiki/skills";
 pub(super) const PUBLIC_ROOT: &str = "/Wiki/public-skills";
@@ -17,8 +15,9 @@ pub(super) struct SkillManifest {
     pub(super) schema_version: u32,
     pub(super) id: String,
     pub(super) version: String,
-    pub(super) publisher: String,
     pub(super) entry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) summary: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -46,8 +45,8 @@ impl SkillManifest {
             schema_version: 1,
             id: id.to_string(),
             version: "0.1.0".to_string(),
-            publisher: id.publisher.clone(),
             entry: "SKILL.md".to_string(),
+            title: None,
             summary: None,
             tags: Vec::new(),
             use_cases: Vec::new(),
@@ -61,59 +60,62 @@ impl SkillManifest {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct SkillSourceFrontmatter {
+    pub(super) description: Option<String>,
+    pub(super) license: Option<String>,
+    #[serde(default)]
+    pub(super) metadata: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct SkillId {
-    pub(super) publisher: String,
     pub(super) name: String,
 }
 
 impl SkillId {
     pub(super) fn parse(value: &str) -> Result<Self> {
-        let (publisher, name) = value
-            .split_once('/')
-            .ok_or_else(|| anyhow!("skill id must use publisher/name"))?;
-        if !valid_segment(publisher) || !valid_segment(name) {
-            return Err(anyhow!("skill id must use publisher/name"));
+        if !valid_segment(value) {
+            return Err(anyhow!("skill id must use a single path-safe name"));
         }
         Ok(Self {
-            publisher: publisher.to_string(),
-            name: name.to_string(),
+            name: value.to_string(),
         })
     }
 }
 
 impl std::fmt::Display for SkillId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.publisher, self.name)
+        write!(f, "{}", self.name)
     }
 }
 
-#[derive(Default)]
-pub(super) struct FindAccumulator {
-    pub(super) score: f64,
-    pub(super) paths: BTreeSet<String>,
-    pub(super) why: BTreeSet<String>,
+pub(super) fn parse_skill_source_frontmatter(content: &str) -> Result<SkillSourceFrontmatter> {
+    let Ok(frontmatter) = extract_frontmatter(content) else {
+        return Ok(SkillSourceFrontmatter::default());
+    };
+    Ok(serde_yaml::from_str(frontmatter)?)
 }
 
-impl FindAccumulator {
-    pub(super) fn add_hit(&mut self, hit: SearchNodeHit) {
-        self.score += f64::from(hit.score);
-        self.paths.insert(hit.path);
-        for reason in hit.match_reasons {
-            self.why.insert(reason);
-        }
-    }
-}
-
-pub(super) fn normalize_manifest(content: &str, id: &SkillId) -> Result<String> {
+pub(super) fn normalize_manifest(
+    content: &str,
+    id: &SkillId,
+    source: &SkillSourceFrontmatter,
+) -> Result<String> {
     let mut manifest = parse_manifest(content)?;
     if manifest.id != id.to_string() {
         return Err(anyhow!("manifest id must match --id"));
     }
-    manifest.publisher = id.publisher.clone();
     if manifest.status.is_none() {
         manifest.status = Some("draft".to_string());
     }
+    apply_source_frontmatter_defaults(&mut manifest, id, source)?;
+    Ok(render_manifest(&manifest))
+}
+
+pub(super) fn manifest_for_source(id: &SkillId, source: &SkillSourceFrontmatter) -> Result<String> {
+    let mut manifest = SkillManifest::default_for(id);
+    apply_source_frontmatter_defaults(&mut manifest, id, source)?;
     Ok(render_manifest(&manifest))
 }
 
@@ -125,16 +127,50 @@ pub(super) fn parse_manifest(content: &str) -> Result<SkillManifest> {
     if manifest.entry != "SKILL.md" {
         return Err(anyhow!("manifest entry must be SKILL.md"));
     }
-    let id = SkillId::parse(&manifest.id)?;
-    if manifest.publisher != id.publisher {
-        return Err(anyhow!("manifest publisher must match id"));
-    }
+    SkillId::parse(&manifest.id)?;
     Ok(manifest)
 }
 
 pub(super) fn render_manifest(manifest: &SkillManifest) -> String {
     let yaml = serde_yaml::to_string(manifest).expect("manifest should serialize");
     format!("---\n{}---\n# Skill Manifest\n", yaml)
+}
+
+fn apply_source_frontmatter_defaults(
+    manifest: &mut SkillManifest,
+    _id: &SkillId,
+    source: &SkillSourceFrontmatter,
+) -> Result<()> {
+    if manifest.title.is_none() {
+        manifest.title = source
+            .metadata
+            .get("title")
+            .filter(|value| !value.is_empty())
+            .cloned();
+    }
+    if manifest.summary.is_none() {
+        manifest.summary = source
+            .description
+            .as_ref()
+            .filter(|value| !value.is_empty())
+            .cloned();
+    }
+    if manifest.tags.is_empty()
+        && let Some(category) = source
+            .metadata
+            .get("category")
+            .filter(|value| !value.is_empty())
+    {
+        manifest.tags.push(category.clone());
+    }
+    if !manifest.provenance.contains_key("license")
+        && let Some(license) = source.license.as_ref().filter(|value| !value.is_empty())
+    {
+        manifest
+            .provenance
+            .insert("license".to_string(), license.clone());
+    }
+    Ok(())
 }
 
 pub(super) fn set_manifest_status_preserving_content(
@@ -173,39 +209,18 @@ pub(super) fn set_manifest_status_preserving_content(
 
 pub(super) fn skill_base_path(id: &SkillId, public: bool) -> String {
     format!(
-        "{}/{}/{}",
+        "{}/{}",
         if public { PUBLIC_ROOT } else { PRIVATE_ROOT },
-        id.publisher,
         id.name
     )
 }
 
 pub(super) fn run_base_path(id: &SkillId) -> String {
-    format!("{}/{}/{}", RUN_ROOT, id.publisher, id.name)
-}
-
-pub(super) fn skill_id_from_path(path: &str) -> Option<(String, bool)> {
-    if let Some(rest) = path.strip_prefix(&format!("{PRIVATE_ROOT}/")) {
-        return skill_id_from_registry_path(rest).map(|id| (id, false));
-    }
-    if let Some(rest) = path.strip_prefix(&format!("{PUBLIC_ROOT}/")) {
-        return skill_id_from_registry_path(rest).map(|id| (id, true));
-    }
-    path.strip_prefix(&format!("{RUN_ROOT}/"))
-        .and_then(skill_id_from_registry_path)
-        .map(|id| (id, false))
-}
-
-pub(super) fn read_optional(source_dir: &Path, name: &str) -> Option<String> {
-    std::fs::read_to_string(source_dir.join(name)).ok()
+    format!("{}/{}", RUN_ROOT, id.name)
 }
 
 pub(super) fn catalog(public: bool) -> &'static str {
     if public { "public" } else { "private" }
-}
-
-pub(super) fn json_f64(value: &serde_json::Value, key: &str) -> f64 {
-    value[key].as_f64().unwrap_or_default()
 }
 
 pub(super) fn now_millis() -> i64 {
@@ -228,17 +243,6 @@ fn extract_frontmatter(content: &str) -> Result<&str> {
         .find("\n---")
         .ok_or_else(|| anyhow!("manifest frontmatter is not closed"))?;
     Ok(&rest[..end])
-}
-
-fn skill_id_from_registry_path(rest: &str) -> Option<String> {
-    let mut parts = rest.split('/');
-    let publisher = parts.next()?;
-    let name = parts.next()?;
-    if valid_segment(publisher) && valid_segment(name) {
-        Some(format!("{publisher}/{name}"))
-    } else {
-        None
-    }
 }
 
 fn valid_segment(value: &str) -> bool {

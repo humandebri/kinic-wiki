@@ -5,3 +5,4 @@ pub mod agent_tools;
 pub mod cli;
 pub mod commands;
 pub mod connection;
+pub mod skill_kb;

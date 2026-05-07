@@ -14,9 +14,9 @@ use vfs_types::{
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
     FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, ListChildrenRequest, ListNodesRequest,
     MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, NodeKind, RecentNodeHit, RecentNodesRequest,
-    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
 #[derive(Default)]
@@ -39,8 +39,24 @@ impl VfsApi for SkillMockClient {
         Ok(self.nodes.lock().expect("nodes lock").get(path).cloned())
     }
 
-    async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
-        Ok(Vec::new())
+    async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        Ok(self
+            .nodes
+            .lock()
+            .expect("nodes lock")
+            .values()
+            .filter(|node| node.path.starts_with(&request.prefix))
+            .map(|node| NodeEntry {
+                path: node.path.clone(),
+                kind: match node.kind {
+                    NodeKind::File => NodeEntryKind::File,
+                    NodeKind::Source => NodeEntryKind::Source,
+                },
+                updated_at: node.updated_at,
+                etag: node.etag.clone(),
+                has_children: false,
+            })
+            .collect())
     }
 
     async fn list_children(&self, _request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
@@ -92,6 +108,17 @@ impl VfsApi for SkillMockClient {
     }
 
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+        let mut nodes = self.nodes.lock().expect("nodes lock");
+        let Some(current) = nodes.get(&request.path) else {
+            anyhow::bail!("node not found: {}", request.path);
+        };
+        if request.expected_etag.as_deref() != Some(current.etag.as_str()) {
+            anyhow::bail!(
+                "expected_etag does not match current etag: {}",
+                request.path
+            );
+        }
+        nodes.remove(&request.path);
         Ok(DeleteNodeResult { path: request.path })
     }
 
@@ -192,51 +219,141 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     write(
         temp.path(),
         "SKILL.md",
-        "# Legal Review\n\nReview redlines.",
+        "# Legal Review\n\nReview redlines.\n\nRead [checklist](ingest.md) and [usage](docs/usage.md).\n\nIgnore [web](https://example.com/remote.md), [absolute](/tmp/secret.md), [parent](../outside.md), and [text](notes.txt).",
     );
+    write(temp.path(), "ingest.md", "# Ingest\n\nredlines checklist");
+    std::fs::create_dir(temp.path().join("docs")).expect("docs dir");
+    write(
+        temp.path(),
+        "docs/usage.md",
+        "# Usage\n\ncontract review usage",
+    );
+    std::fs::write(
+        temp.path().parent().unwrap().join("outside.md"),
+        "# Outside",
+    )
+    .expect("outside");
     write(temp.path(), "manifest.md", &manifest("reviewed"));
 
-    upsert_skill(&client, "default", temp.path(), "acme/legal-review", false)
-        .await
-        .expect("upsert");
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect("upsert");
     assert!(
         client
-            .read_node("default", "/Wiki/skills/acme/legal-review/SKILL.md")
+            .read_node("default", "/Wiki/skills/legal-review/SKILL.md")
             .await
             .unwrap()
             .is_some()
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/ingest.md")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/docs/usage.md")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/outside.md")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/provenance.md")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/evals.md")
+            .await
+            .unwrap()
+            .is_none()
     );
     write(
         temp.path(),
         "SKILL.md",
         "# Legal Review\n\nReview redlines and contract risks.",
     );
-    upsert_skill(&client, "default", temp.path(), "acme/legal-review", false)
-        .await
-        .expect("second upsert updates existing skill");
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect("second upsert updates existing skill");
     let updated_skill = client
-        .read_node("default", "/Wiki/skills/acme/legal-review/SKILL.md")
+        .read_node("default", "/Wiki/skills/legal-review/SKILL.md")
         .await
         .expect("read updated skill")
         .expect("skill exists")
         .content;
     assert!(updated_skill.contains("contract risks"));
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/ingest.md")
+            .await
+            .unwrap()
+            .is_some(),
+        "stale package files are retained without explicit prune"
+    );
+    let pruned = upsert_skill(&client, "default", temp.path(), "legal-review", false, true)
+        .await
+        .expect("prune upsert");
+    assert_eq!(
+        pruned["pruned_paths"],
+        serde_json::json!([
+            "/Wiki/skills/legal-review/docs/usage.md",
+            "/Wiki/skills/legal-review/ingest.md"
+        ])
+    );
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/ingest.md")
+            .await
+            .unwrap()
+            .is_none(),
+        "explicit prune removes files no longer present in the source package"
+    );
 
     let found = find_skills(&client, "default", "redlines", false, 10)
         .await
         .expect("find");
-    assert_eq!(found["hits"][0]["id"], "acme/legal-review");
+    assert_eq!(found["hits"][0]["id"], "legal-review");
     assert_eq!(found["hits"][0]["status"], "reviewed");
 
-    let inspected = inspect_skill(&client, "default", "acme/legal-review", false)
+    let inspected = inspect_skill(&client, "default", "legal-review", false)
         .await
         .expect("inspect");
-    assert_eq!(inspected["files"]["evals.md"], true);
+    assert_eq!(inspected["files"]["evals.md"], false);
+    assert_eq!(inspected["files"]["provenance.md"], false);
+    assert!(inspected["files"]["ingest.md"].is_null());
+    assert!(inspected["files"]["docs/usage.md"].is_null());
 
     set_skill_status(
         &client,
         "default",
-        "acme/legal-review",
+        "legal-review",
         SkillStatusArg::Deprecated,
         false,
     )
@@ -251,7 +368,7 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
         .expect("find");
     assert_eq!(shown["hits"][0]["status"], "deprecated");
     let updated_manifest = client
-        .read_node("default", "/Wiki/skills/acme/legal-review/manifest.md")
+        .read_node("default", "/Wiki/skills/legal-review/manifest.md")
         .await
         .expect("read manifest")
         .expect("manifest exists")
@@ -263,7 +380,7 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     let run = record_skill_run(
         &client,
         "default",
-        "acme/legal-review",
+        "legal-review",
         "review contract",
         SkillRunOutcomeArg::Success,
         &notes,
@@ -274,14 +391,14 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
         run["run_path"]
             .as_str()
             .unwrap()
-            .starts_with("/Sources/skill-runs/acme/legal-review/")
+            .starts_with("/Sources/skill-runs/legal-review/")
     );
 }
 
 #[tokio::test]
 async fn skill_set_status_preserves_manifest_body_and_unknown_frontmatter() {
     let client = SkillMockClient::default();
-    let manifest_path = "/Wiki/skills/acme/legal-review/manifest.md";
+    let manifest_path = "/Wiki/skills/legal-review/manifest.md";
     client
         .write_node(WriteNodeRequest {
             database_id: "default".to_string(),
@@ -291,9 +408,9 @@ async fn skill_set_status_preserves_manifest_body_and_unknown_frontmatter() {
                 "---\n",
                 "kind: kinic.skill\n",
                 "schema_version: 1\n",
-                "id: acme/legal-review\n",
+                "id: legal-review\n",
                 "version: 0.1.0\n",
-                "publisher: acme\n",
+                "x-team: acme\n",
                 "entry: SKILL.md\n",
                 "x-team-note: keep this\n",
                 "provenance:\n",
@@ -314,7 +431,7 @@ async fn skill_set_status_preserves_manifest_body_and_unknown_frontmatter() {
     set_skill_status(
         &client,
         "default",
-        "acme/legal-review",
+        "legal-review",
         SkillStatusArg::Promoted,
         false,
     )
@@ -335,9 +452,174 @@ async fn skill_set_status_preserves_manifest_body_and_unknown_frontmatter() {
 }
 
 #[tokio::test]
+async fn skill_upsert_uses_skill_frontmatter_to_fill_missing_manifest_fields() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "SKILL.md",
+        concat!(
+            "---\n",
+            "name: canister-security\n",
+            "description: IC-specific security patterns for canister development\n",
+            "license: Apache-2.0\n",
+            "metadata:\n",
+            "  title: Canister Security\n",
+            "  category: Security\n",
+            "---\n",
+            "# Canister Security\n"
+        ),
+    );
+
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "canister-security",
+        false,
+        false,
+    )
+    .await
+    .expect("upsert");
+
+    let manifest = client
+        .read_node("default", "/Wiki/skills/canister-security/manifest.md")
+        .await
+        .expect("read manifest")
+        .expect("manifest exists")
+        .content;
+    assert!(manifest.contains("title: Canister Security"));
+    assert!(manifest.contains("summary: IC-specific security patterns for canister development"));
+    assert!(manifest.contains("- Security"));
+    assert!(manifest.contains("status: draft"));
+    assert!(manifest.contains("license: Apache-2.0"));
+
+    let found = find_skills(&client, "default", "security", false, 10)
+        .await
+        .expect("find");
+    assert_eq!(found["hits"][0]["id"], "canister-security");
+    assert_eq!(found["hits"][0]["title"], "Canister Security");
+    let inspected = inspect_skill(&client, "default", "canister-security", false)
+        .await
+        .expect("inspect");
+    assert_eq!(inspected["manifest"]["title"], "Canister Security");
+}
+
+#[tokio::test]
+async fn skill_upsert_preserves_existing_manifest_fields_over_skill_frontmatter() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "SKILL.md",
+        concat!(
+            "---\n",
+            "name: legal-review\n",
+            "description: Upstream description\n",
+            "license: Apache-2.0\n",
+            "metadata:\n",
+            "  title: Upstream Title\n",
+            "  category: Upstream\n",
+            "---\n",
+            "# Legal Review\n"
+        ),
+    );
+    write(
+        temp.path(),
+        "manifest.md",
+        concat!(
+            "---\n",
+            "kind: kinic.skill\n",
+            "schema_version: 1\n",
+            "id: legal-review\n",
+            "version: 0.1.0\n",
+            "entry: SKILL.md\n",
+            "title: KB Title\n",
+            "summary: KB summary\n",
+            "tags:\n",
+            "  - kb-tag\n",
+            "status: reviewed\n",
+            "provenance:\n",
+            "  license: MIT\n",
+            "---\n",
+            "# Skill Manifest\n"
+        ),
+    );
+
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect("upsert");
+
+    let manifest = client
+        .read_node("default", "/Wiki/skills/legal-review/manifest.md")
+        .await
+        .expect("read manifest")
+        .expect("manifest exists")
+        .content;
+    assert!(manifest.contains("title: KB Title"));
+    assert!(manifest.contains("summary: KB summary"));
+    assert!(manifest.contains("- kb-tag"));
+    assert!(manifest.contains("license: MIT"));
+    assert!(!manifest.contains("Upstream Title"));
+    assert!(!manifest.contains("Upstream description"));
+    assert!(!manifest.contains("- Upstream"));
+    assert!(!manifest.contains("Apache-2.0"));
+}
+
+#[tokio::test]
+async fn skill_upsert_allows_upstream_frontmatter_name_to_differ_from_db_id() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "SKILL.md",
+        concat!(
+            "---\n",
+            "name: react:components\n",
+            "description: React component workflow\n",
+            "license: Apache-2.0\n",
+            "metadata:\n",
+            "  title: React Components\n",
+            "  category: React\n",
+            "---\n",
+            "# React Components\n"
+        ),
+    );
+
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "react-components",
+        false,
+        false,
+    )
+    .await
+    .expect("upstream name does not need to match DB id");
+    let manifest = client
+        .read_node("default", "/Wiki/skills/react-components/manifest.md")
+        .await
+        .expect("read manifest")
+        .expect("manifest exists")
+        .content;
+    assert!(manifest.contains("id: react-components"));
+    assert!(manifest.contains("title: React Components"));
+    assert!(manifest.contains("summary: React component workflow"));
+    assert!(manifest.contains("- React"));
+    assert!(manifest.contains("license: Apache-2.0"));
+}
+
+#[tokio::test]
 async fn skill_set_status_adds_missing_root_status_without_touching_body() {
     let client = SkillMockClient::default();
-    let manifest_path = "/Wiki/skills/acme/legal-review/manifest.md";
+    let manifest_path = "/Wiki/skills/legal-review/manifest.md";
     client
         .write_node(WriteNodeRequest {
             database_id: "default".to_string(),
@@ -347,9 +629,9 @@ async fn skill_set_status_adds_missing_root_status_without_touching_body() {
                 "---\n",
                 "kind: kinic.skill\n",
                 "schema_version: 1\n",
-                "id: acme/legal-review\n",
+                "id: legal-review\n",
                 "version: 0.1.0\n",
-                "publisher: acme\n",
+                "x-team: acme\n",
                 "entry: SKILL.md\n",
                 "provenance:\n",
                 "  status: upstream-reviewed\n",
@@ -366,7 +648,7 @@ async fn skill_set_status_adds_missing_root_status_without_touching_body() {
     set_skill_status(
         &client,
         "default",
-        "acme/legal-review",
+        "legal-review",
         SkillStatusArg::Draft,
         false,
     )
@@ -388,6 +670,41 @@ fn write(dir: &Path, name: &str, content: &str) {
 
 fn manifest(status: &str) -> String {
     format!(
-        "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nsummary: Contract review\ntags:\n  - legal\nuse_cases:\n  - Review redlines\nstatus: {status}\n---\n# Skill Manifest\n"
+        concat!(
+            "---\n",
+            "kind: kinic.skill\n",
+            "schema_version: 1\n",
+            "id: legal-review\n",
+            "version: 0.1.0\n",
+            "x-team: acme\n",
+            "entry: SKILL.md\n",
+            "summary: Contract review workflow for spotting redlines, risk clauses, and missing approval context\n",
+            "tags:\n",
+            "  - legal\n",
+            "  - contract\n",
+            "  - review\n",
+            "  - risk\n",
+            "use_cases:\n",
+            "  - Review vendor contract redlines before counsel handoff\n",
+            "  - Summarize risky clauses and negotiation blockers\n",
+            "  - Check whether approval, renewal, and liability terms are documented\n",
+            "status: {status}\n",
+            "replaces: []\n",
+            "related:\n",
+            "  - /Wiki/legal/contract-review-playbook.md\n",
+            "  - /Sources/github/legal-review\n",
+            "knowledge:\n",
+            "  - /Wiki/legal/contract-review-playbook.md\n",
+            "permissions:\n",
+            "  file_read: true\n",
+            "  network: false\n",
+            "  shell: false\n",
+            "provenance:\n",
+            "  source: github.com/legal-review\n",
+            "  source_ref: demo\n",
+            "---\n",
+            "# Skill Manifest\n"
+        ),
+        status = status
     )
 }

@@ -2,6 +2,7 @@
 
 `llm-wiki` is an FS-first wiki and memory interface for coding agents.
 It keeps remote nodes in an IC canister and exposes the same VFS through canister queries, a CLI, shared client library, and validation workflows.
+It also includes a DB-backed Skill Knowledge Base for teams that want to find, evaluate, and grow agent skills from real task evidence.
 
 ## Architecture
 
@@ -28,7 +29,7 @@ Detailed structure map:
 - Search, snapshot export, and delta sync
 - Link graph and node-context queries for wiki navigation
 - Agent Memory API v1 for canister-backed long-term context reads
-- Skill Registry paths for private/team `SKILL.md` packages plus public catalog nodes
+- Skill Knowledge Base paths for private/team `SKILL.md` packages plus public catalog nodes
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -80,13 +81,31 @@ canister_id = "aaaaa-aa"
 
 Use `--local` to target the local replica. Otherwise the default host is `https://icp0.io`.
 
+### Skill Knowledge Base
+
+The fastest product path is the Skill KB quickstart:
+
+```bash
+CANISTER_ID=<canister-id> scripts/demo_skill_kb.sh
+```
+
+For a local replica:
+
+```bash
+CANISTER_ID=<canister-id> LOCAL=1 scripts/demo_skill_kb.sh
+```
+
+See [`docs/QUICKSTART_SKILL_KB.md`](docs/QUICKSTART_SKILL_KB.md) for the manual 5 minute flow.
+The sample under [`examples/skill-kb`](examples/skill-kb) shows the intended loop: upload a skill package, find it from task context, inspect package files and evidence, record run evidence, then promote it.
+The demo script can be rerun; if the database already exists, it links and continues.
+
 ## Main Interfaces
 
 ### CLI
 
 Use `vfs-cli` when working from a shell or script.
 See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
-See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Registry layout, manifest fields, database-role access, and Browser support.
+See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Knowledge Base layout, manifest fields, database-role access, and Browser support.
 
 Main commands:
 
@@ -175,6 +194,14 @@ Current tool names:
 - `rm`
 - `search`
 - `search_paths`
+- `skill_find`
+- `skill_inspect`
+- `skill_read`
+
+Skill tools are read-only runtime helpers.
+Agents should call `skill_find` at task start, inspect promising candidates, read `SKILL.md` and package-local helper files, then apply those instructions to the current task.
+They do not require shelling out to the CLI.
+Use the CLI for operational writes such as `skill upsert`, `database link`, and `skill record-run`.
 
 ### Canister Agent Memory API
 

@@ -118,6 +118,7 @@ export function Inspector({
       {skillManifest ? (
         <InspectorCard title="Skill" icon={<Sparkles size={15} />}>
           <Meta label="id" value={skillManifest.id} />
+          {skillManifest.title ? <Meta label="title" value={skillManifest.title} /> : null}
           <Meta label="status" value={skillManifest.status ?? "draft"} />
           <Meta label="version" value={skillManifest.version} />
           {skillManifest.summary ? <Meta label="summary" value={skillManifest.summary} /> : null}

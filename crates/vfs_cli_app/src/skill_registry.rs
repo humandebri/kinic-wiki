@@ -2,18 +2,16 @@ use crate::cli::{SkillCommand, SkillRunOutcomeArg, SkillStatusArg};
 mod model;
 use anyhow::{Context, Result, anyhow};
 use model::{
-    FindAccumulator, PRIVATE_ROOT, PUBLIC_ROOT, RUN_ROOT, SkillId, SkillManifest, catalog,
-    json_f64, normalize_manifest, now_millis, parse_manifest, print, read_optional,
-    render_manifest, run_base_path, set_manifest_status_preserving_content, skill_base_path,
-    skill_id_from_path,
+    SkillId, catalog, manifest_for_source, normalize_manifest, now_millis,
+    parse_skill_source_frontmatter, print, run_base_path, set_manifest_status_preserving_content,
+    skill_base_path,
 };
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+pub(crate) use vfs_cli::skill_kb::{find_skills, inspect_skill};
 use vfs_client::VfsApi;
-use vfs_types::{
-    NodeKind, RecentNodesRequest, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
-};
+use vfs_types::{DeleteNodeRequest, ListNodesRequest, NodeEntryKind, NodeKind, WriteNodeRequest};
 
 pub async fn run_skill_command(
     client: &impl VfsApi,
@@ -25,9 +23,10 @@ pub async fn run_skill_command(
             source_dir,
             id,
             public,
+            prune,
             json,
         } => print(
-            upsert_skill(client, database_id, &source_dir, &id, public).await?,
+            upsert_skill(client, database_id, &source_dir, &id, public, prune).await?,
             json,
         )?,
         SkillCommand::Find {
@@ -71,117 +70,28 @@ pub(crate) async fn upsert_skill(
     source_dir: &Path,
     id: &str,
     public: bool,
+    prune: bool,
 ) -> Result<serde_json::Value> {
     let skill_id = SkillId::parse(id)?;
     let base_path = skill_base_path(&skill_id, public);
     let skill = std::fs::read_to_string(source_dir.join("SKILL.md"))
         .with_context(|| format!("missing SKILL.md in {}", source_dir.display()))?;
-    let provenance = read_optional(source_dir, "provenance.md")
-        .unwrap_or_else(|| format!("# Provenance\n\nsource: {}\n", source_dir.display()));
-    let evals = read_optional(source_dir, "evals.md").unwrap_or_else(|| "# Evals\n\n".to_string());
-    let manifest = match read_optional(source_dir, "manifest.md") {
-        Some(content) => normalize_manifest(&content, &skill_id)?,
-        None => render_manifest(&SkillManifest::default_for(&skill_id)),
-    };
-    for (name, content) in [
-        ("manifest.md", manifest),
-        ("SKILL.md", skill),
-        ("provenance.md", provenance),
-        ("evals.md", evals),
-    ] {
+    let source_frontmatter = parse_skill_source_frontmatter(&skill)?;
+    let files = discover_skill_package_files(source_dir, &skill, &skill_id, &source_frontmatter)?;
+    let file_names = files.keys().cloned().collect::<BTreeSet<_>>();
+    let mut written_paths = Vec::new();
+    for (name, content) in files {
         write_file_node(client, database_id, &format!("{base_path}/{name}"), content).await?;
+        written_paths.push(format!("{base_path}/{name}"));
     }
-    Ok(json!({ "id": id, "catalog": catalog(public), "base_path": base_path }))
-}
-
-pub(crate) async fn find_skills(
-    client: &impl VfsApi,
-    database_id: &str,
-    query: &str,
-    include_deprecated: bool,
-    top_k: u32,
-) -> Result<serde_json::Value> {
-    let mut grouped: BTreeMap<(String, bool), FindAccumulator> = BTreeMap::new();
-    for prefix in [PRIVATE_ROOT, PUBLIC_ROOT, RUN_ROOT] {
-        for hit in client
-            .search_nodes(SearchNodesRequest {
-                database_id: database_id.to_string(),
-                query_text: query.to_string(),
-                prefix: Some(prefix.to_string()),
-                top_k: top_k.clamp(1, 100),
-                preview_mode: Some(SearchPreviewMode::Light),
-            })
-            .await?
-        {
-            if let Some((id, public)) = skill_id_from_path(&hit.path) {
-                grouped.entry((id, public)).or_default().add_hit(hit);
-            }
-        }
-    }
-    let mut hits = Vec::new();
-    for ((id, public), acc) in grouped {
-        let manifest = read_manifest(client, database_id, &id, public).await?;
-        let status = manifest
-            .as_ref()
-            .and_then(|m| m.status.clone())
-            .unwrap_or_else(|| "draft".to_string());
-        if status == "deprecated" && !include_deprecated {
-            continue;
-        }
-        hits.push(json!({
-            "id": id,
-            "catalog": catalog(public),
-            "status": status,
-            "summary": manifest.and_then(|m| m.summary).unwrap_or_default(),
-            "score": acc.score,
-            "matched_paths": acc.paths.into_iter().collect::<Vec<_>>(),
-            "why": acc.why.into_iter().collect::<Vec<_>>()
-        }));
-    }
-    hits.sort_by(|a, b| json_f64(b, "score").total_cmp(&json_f64(a, "score")));
-    hits.truncate(top_k.clamp(1, 100) as usize);
-    Ok(json!({ "query": query, "hits": hits }))
-}
-
-pub(crate) async fn inspect_skill(
-    client: &impl VfsApi,
-    database_id: &str,
-    id: &str,
-    public: bool,
-) -> Result<serde_json::Value> {
-    SkillId::parse(id)?;
-    let base_path = skill_base_path(&SkillId::parse(id)?, public);
-    let mut files = BTreeMap::new();
-    let mut manifest = None;
-    for name in ["manifest.md", "SKILL.md", "provenance.md", "evals.md"] {
-        let node = client
-            .read_node(database_id, &format!("{base_path}/{name}"))
-            .await?;
-        if name == "manifest.md" {
-            manifest = node
-                .as_ref()
-                .and_then(|node| parse_manifest(&node.content).ok());
-        }
-        files.insert(name.to_string(), node.is_some());
-    }
-    let recent_runs = client
-        .recent_nodes(RecentNodesRequest {
-            database_id: database_id.to_string(),
-            path: Some(run_base_path(&SkillId::parse(id)?)),
-            limit: 5,
-        })
-        .await?
-        .into_iter()
-        .map(|hit| hit.path)
-        .collect::<Vec<_>>();
-    Ok(json!({
-        "id": id,
-        "catalog": catalog(public),
-        "base_path": base_path,
-        "manifest": manifest,
-        "files": files,
-        "recent_runs": recent_runs
-    }))
+    let pruned_paths = if prune {
+        prune_package_files(client, database_id, &base_path, &file_names).await?
+    } else {
+        Vec::new()
+    };
+    Ok(
+        json!({ "id": id, "catalog": catalog(public), "base_path": base_path, "written_paths": written_paths, "pruned_paths": pruned_paths }),
+    )
 }
 
 pub(crate) async fn record_skill_run(
@@ -240,22 +150,6 @@ pub(crate) async fn set_skill_status(
     Ok(json!({ "id": id, "catalog": catalog(public), "status": status.as_str(), "path": path }))
 }
 
-async fn read_manifest(
-    client: &impl VfsApi,
-    database_id: &str,
-    id: &str,
-    public: bool,
-) -> Result<Option<SkillManifest>> {
-    let skill_id = SkillId::parse(id)?;
-    Ok(client
-        .read_node(
-            database_id,
-            &format!("{}/manifest.md", skill_base_path(&skill_id, public)),
-        )
-        .await?
-        .and_then(|node| parse_manifest(&node.content).ok()))
-}
-
 async fn write_file_node(
     client: &impl VfsApi,
     database_id: &str,
@@ -274,6 +168,158 @@ async fn write_file_node(
         })
         .await?;
     Ok(())
+}
+
+async fn prune_package_files(
+    client: &impl VfsApi,
+    database_id: &str,
+    base_path: &str,
+    keep_files: &BTreeSet<String>,
+) -> Result<Vec<String>> {
+    let mut pruned_paths = Vec::new();
+    for entry in client
+        .list_nodes(ListNodesRequest {
+            database_id: database_id.to_string(),
+            prefix: base_path.to_string(),
+            recursive: true,
+        })
+        .await?
+    {
+        if entry.kind != NodeEntryKind::File {
+            continue;
+        }
+        let Some(relative_path) = entry.path.strip_prefix(&format!("{base_path}/")) else {
+            continue;
+        };
+        if keep_files.contains(relative_path) {
+            continue;
+        }
+        client
+            .delete_node(DeleteNodeRequest {
+                database_id: database_id.to_string(),
+                path: entry.path.clone(),
+                expected_etag: Some(entry.etag),
+            })
+            .await?;
+        pruned_paths.push(entry.path);
+    }
+    Ok(pruned_paths)
+}
+
+fn discover_skill_package_files(
+    source_dir: &Path,
+    skill: &str,
+    id: &SkillId,
+    source_frontmatter: &model::SkillSourceFrontmatter,
+) -> Result<BTreeMap<String, String>> {
+    let mut files = BTreeMap::new();
+    files.insert("SKILL.md".to_string(), skill.to_string());
+    let manifest = match read_optional(source_dir, "manifest.md") {
+        Some(content) => normalize_manifest(&content, id, source_frontmatter)?,
+        None => manifest_for_source(id, source_frontmatter)?,
+    };
+    files.insert("manifest.md".to_string(), manifest);
+    for name in ["provenance.md", "evals.md"] {
+        if let Some(content) = read_optional(source_dir, name) {
+            files.insert(name.to_string(), content);
+        }
+    }
+    for relative_path in referenced_markdown_files(source_dir, skill)? {
+        if files.contains_key(&relative_path) {
+            continue;
+        }
+        if let Some(content) = read_optional(source_dir, &relative_path) {
+            files.insert(relative_path, content);
+        }
+    }
+    Ok(files)
+}
+
+fn referenced_markdown_files(source_dir: &Path, skill: &str) -> Result<Vec<String>> {
+    let canonical_source_dir = source_dir
+        .canonicalize()
+        .with_context(|| format!("failed to read {}", source_dir.display()))?;
+    let mut files = Vec::new();
+    for target in markdown_link_targets(skill) {
+        if let Some(relative_path) = package_relative_markdown_path(&canonical_source_dir, &target)?
+        {
+            files.push(relative_path);
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn markdown_link_targets(content: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find("](") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        targets.push(rest[..end].to_string());
+        rest = &rest[end + 1..];
+    }
+    targets
+}
+
+fn package_relative_markdown_path(
+    canonical_source_dir: &Path,
+    raw_target: &str,
+) -> Result<Option<String>> {
+    let Some(target) = clean_markdown_link_target(raw_target) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(target);
+    if path.is_absolute() {
+        return Ok(None);
+    }
+    let candidate = canonical_source_dir.join(path);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    let canonical_candidate = candidate
+        .canonicalize()
+        .with_context(|| format!("failed to read {}", candidate.display()))?;
+    let Ok(relative_path) = canonical_candidate.strip_prefix(canonical_source_dir) else {
+        return Ok(None);
+    };
+    Ok(path_to_package_key(relative_path))
+}
+
+fn clean_markdown_link_target(raw_target: &str) -> Option<String> {
+    let target = raw_target.split_whitespace().next()?.trim();
+    let target = target.split(['#', '?']).next()?.trim();
+    if target.is_empty()
+        || target.starts_with('#')
+        || target.starts_with('/')
+        || target.contains("://")
+        || !target.ends_with(".md")
+    {
+        return None;
+    }
+    Some(target.to_string())
+}
+
+fn path_to_package_key(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(part) = component else {
+            return None;
+        };
+        parts.push(part.to_str()?.to_string());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn read_optional(source_dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(source_dir.join(name)).ok()
 }
 
 impl SkillStatusArg {

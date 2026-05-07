@@ -7,6 +7,7 @@ const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
+const { splitMarkdownFrontmatter } = await importTs("../lib/markdown-frontmatter.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
 const { parseSkillManifest } = await importTs("../lib/skill-manifest.ts");
 const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
@@ -92,6 +93,23 @@ assert.deepEqual(
   ["# One", "## Two"]
 );
 assert.equal(splitMarkdownPreviewSections("No headings\nOnly prose").length, 1);
+const frontmatter = splitMarkdownFrontmatter(`---
+name: canister-security
+description: "IC-specific security patterns"
+metadata:
+  title: Canister Security
+  category: Security
+---
+
+# Canister Security
+`);
+assert.equal(frontmatter.body, "# Canister Security\n");
+assert.deepEqual(frontmatter.fields, [
+  { key: "name", value: "canister-security" },
+  { key: "description", value: "IC-specific security patterns" },
+  { key: "metadata.title", value: "Canister Security" },
+  { key: "metadata.category", value: "Security" }
+]);
 assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "alpha", "/Wiki/index.md"));
 assert.notEqual(
   graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
@@ -105,10 +123,10 @@ assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchR
 const skillManifest = parseSkillManifest(`---
 kind: kinic.skill
 schema_version: 1
-id: acme/legal-review
+id: legal-review
 version: 0.1.0
-publisher: acme
 entry: SKILL.md
+title: Legal Review
 summary: Contract review
 tags:
   - legal
@@ -121,6 +139,7 @@ related:
 # Skill Manifest
 `);
 assert.equal(skillManifest.summary, "Contract review");
+assert.equal(skillManifest.title, "Legal Review");
 assert.deepEqual(skillManifest.tags, ["legal"]);
 assert.deepEqual(skillManifest.useCases, ["Review redlines"]);
 assert.equal(skillManifest.status, "reviewed");

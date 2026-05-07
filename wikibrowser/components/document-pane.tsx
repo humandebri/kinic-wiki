@@ -38,7 +38,7 @@ export function DocumentHeader({
     <div className="flex min-h-[60px] flex-col gap-2 border-b border-line bg-paper/80 px-5 py-3 md:flex-row md:items-center md:justify-between">
       <div className="min-w-0">
         <p className="font-mono text-xs text-muted">{isDirectory ? "directory" : "node"}</p>
-        <h2 className="truncate text-lg font-semibold tracking-[-0.035em]">{path}</h2>
+        <h2 className="truncate text-lg font-semibold tracking-[-0.035em]">{displayPath(path)}</h2>
       </div>
       <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
         <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
@@ -46,6 +46,10 @@ export function DocumentHeader({
       </div>
     </div>
   );
+}
+
+function displayPath(path: string): string {
+  return path.startsWith("/Wiki/") ? path.slice("/Wiki/".length) : path;
 }
 
 export function DocumentPane({

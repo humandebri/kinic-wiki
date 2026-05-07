@@ -3,8 +3,8 @@ export type SkillManifest = {
   schemaVersion: string;
   id: string;
   version: string;
-  publisher: string;
   entry: string;
+  title: string | null;
   summary: string | null;
   tags: string[];
   useCases: string[];
@@ -32,16 +32,15 @@ export function parseSkillManifest(content: string): SkillManifest | null {
   if (scalar(values, "schema_version") !== "1") return null;
   const id = scalar(values, "id");
   const version = scalar(values, "version");
-  const publisher = scalar(values, "publisher");
   const entry = scalar(values, "entry");
-  if (!id || !version || !publisher || !entry) return null;
+  if (!id || !version || !entry) return null;
   return {
     kind: "kinic.skill",
     schemaVersion: "1",
     id,
     version,
-    publisher,
     entry,
+    title: scalar(values, "title"),
     summary: scalar(values, "summary"),
     tags: values.tags ?? [],
     useCases: values.use_cases ?? [],
@@ -78,10 +77,10 @@ export function manifestPathForSkillRegistryFile(path: string): string | null {
 
 export function skillAccessCapabilities(roles: string[]): SkillAccessCapabilities {
   const admin = roles.includes("Admin");
-  const publisher = admin || roles.includes("Writer");
+  const writer = admin || roles.includes("Writer");
   return {
-    read: publisher || roles.includes("Reader"),
-    publish: publisher,
+    read: writer || roles.includes("Reader"),
+    publish: writer,
     admin
   };
 }

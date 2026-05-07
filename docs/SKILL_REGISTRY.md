@@ -4,38 +4,66 @@ Skill Registry stores Agent Skills-compatible `SKILL.md` packages as ordinary wi
 It is a DB-backed skill knowledge base, not a GitHub or Vercel marketplace replacement.
 GitHub is provenance/source context; the DB copy is the runtime source of truth.
 
+Use it when a team wants skills to be searchable by task situation, review status, provenance, eval notes, and run evidence.
+The product loop is:
+
+```text
+draft skill -> upsert -> find from task context -> inspect -> record run -> promote or deprecate
+```
+
 Access control is database-level.
 Registry nodes follow the same `Owner`, `Writer`, and `Reader` roles as every other node in the database.
 Use separate databases when different skill catalogs need different membership.
+
+## Why Not Just A Skill Store
+
+Vercel-style skill stores are useful as distribution shelves:
+
+- publish or discover reusable skills
+- install a skill into an agent environment
+- treat GitHub or a package source as the main artifact history
+
+Kinic Skill KB is for growing skills after teams start using them:
+
+- search skills by task context, not only by package name
+- keep `manifest.md`, `SKILL.md`, provenance, evals, and run evidence in one queryable DB
+- record whether a skill actually helped a task under `/Sources/skill-runs/...`
+- move skills through `draft`, `reviewed`, `promoted`, and `deprecated`
+- share access with database roles instead of path-level ACL or marketplace visibility
+
+GitHub is still the source and review history.
+The DB copy is the operational record: what the team can find, trust, inspect, and improve from usage.
 
 ## Layout
 
 Private or team skills live under `/Wiki/skills`:
 
 ```text
-/Wiki/skills/<publisher>/<name>/manifest.md
-/Wiki/skills/<publisher>/<name>/SKILL.md
-/Wiki/skills/<publisher>/<name>/provenance.md
-/Wiki/skills/<publisher>/<name>/evals.md
+/Wiki/skills/<name>/manifest.md
+/Wiki/skills/<name>/SKILL.md
+/Wiki/skills/<name>/ingest.md
+/Wiki/skills/<name>/provenance.md   # optional
+/Wiki/skills/<name>/evals.md        # optional
 ```
 
 Curated public skills use the same layout under `/Wiki/public-skills`:
 
 ```text
-/Wiki/public-skills/<publisher>/<name>/manifest.md
-/Wiki/public-skills/<publisher>/<name>/SKILL.md
-/Wiki/public-skills/<publisher>/<name>/provenance.md
-/Wiki/public-skills/<publisher>/<name>/evals.md
+/Wiki/public-skills/<name>/manifest.md
+/Wiki/public-skills/<name>/SKILL.md
+/Wiki/public-skills/<name>/ingest.md
+/Wiki/public-skills/<name>/provenance.md   # optional
+/Wiki/public-skills/<name>/evals.md        # optional
 ```
 
 `manifest.md` is the registry record.
 `SKILL.md` is the Agent Skills entry file.
-`provenance.md` records source and review context.
-`evals.md` records evaluation notes or benchmark results.
+Package-local Markdown files referenced from `SKILL.md`, such as `ingest.md`, are stored with the package.
+`provenance.md` and `evals.md` are optional long-form records.
 Run evidence is stored as source nodes:
 
 ```text
-/Sources/skill-runs/<publisher>/<name>/<timestamp>.md
+/Sources/skill-runs/<name>/<timestamp>.md
 ```
 
 ## Manifest
@@ -47,10 +75,10 @@ The Browser inspector parses a small read-only v1 display subset.
 ---
 kind: kinic.skill
 schema_version: 1
-id: acme/legal-review
+id: legal-review
 version: 0.1.0
-publisher: acme
 entry: SKILL.md
+title: Legal Review
 summary: Contract review workflow
 tags:
   - legal
@@ -67,7 +95,7 @@ permissions:
   network: false
   shell: false
 provenance:
-  source: github.com/acme/legal-review
+  source: github.com/legal-review
   source_ref: abc123
 ---
 # Skill Manifest
@@ -77,10 +105,10 @@ Required fields:
 
 - `kind`: must be `kinic.skill`
 - `schema_version`: must be `1`
-- `id`: must use `publisher/name`
+- `id`: must use a single path-safe skill name
 - `version`: skill package version
-- `publisher`: must match the `id` publisher segment
 - `entry`: must be `SKILL.md` in v1
+- `title`: display title, usually copied from `SKILL.md` frontmatter `metadata.title`
 
 Optional fields:
 
@@ -92,21 +120,28 @@ Optional fields:
 - `related`: related wiki or source paths
 - `knowledge`: wiki paths the skill depends on
 - `permissions`: declared expected access needs
-- `provenance`: source and source revision metadata
+- `provenance`: source, source revision, and upstream package metadata such as license
+
+`manifest.md` is the Skill KB index and lifecycle record.
+`SKILL.md` frontmatter is upstream package metadata input.
+On `skill upsert`, empty manifest fields are filled from `SKILL.md`: `metadata.title` to `title`, `description` to `summary`, `metadata.category` to `tags`, and `license` to `provenance.license`.
+Existing manifest values win.
+`SKILL.md` `name` is an upstream runtime or display name and may differ from the DB skill id.
 
 ## CLI Usage
 
 Use `database link` once, then run `skill` commands without repeating `--database-id`.
 They are thin wrappers over normal VFS nodes and do not add canister schema or path-level ACL.
+For the full first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
 
 ```bash
 cargo run -p vfs-cli --bin vfs-cli -- database create team-skills
 cargo run -p vfs-cli --bin vfs-cli -- database link team-skills
-cargo run -p vfs-cli --bin vfs-cli -- skill upsert --source-dir ./skills/legal-review --id acme/legal-review
+cargo run -p vfs-cli --bin vfs-cli -- skill upsert --source-dir ./skills/legal-review --id legal-review
 cargo run -p vfs-cli --bin vfs-cli -- skill find "review contract redlines"
-cargo run -p vfs-cli --bin vfs-cli -- skill inspect acme/legal-review --json
-cargo run -p vfs-cli --bin vfs-cli -- skill record-run acme/legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
-cargo run -p vfs-cli --bin vfs-cli -- skill set-status acme/legal-review --status promoted
+cargo run -p vfs-cli --bin vfs-cli -- skill inspect legal-review --json
+cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
+cargo run -p vfs-cli --bin vfs-cli -- skill set-status legal-review --status promoted
 ```
 
 Share access with database member commands:
@@ -116,12 +151,59 @@ cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> rea
 cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> writer
 ```
 
+Status values are intentionally simple:
+
+- `draft`: imported or experimental skill.
+- `reviewed`: checked by the owning team.
+- `promoted`: recommended for common use.
+- `deprecated`: hidden from default `skill find`; include with `--include-deprecated`.
+
+Run evidence under `/Sources/skill-runs/...` is the product differentiator.
+It records what happened when a skill was used, so teams can promote useful skills and retire weak ones.
+
+`skill upsert` stores the package, not just the entry file.
+It writes `SKILL.md`, `manifest.md`, optional `provenance.md` and `evals.md`, and direct package-local `.md` links from `SKILL.md`.
+If `manifest.md` is missing, it is generated from `--id` plus `SKILL.md` frontmatter.
+For example, `[ingest](ingest.md)` is stored as `/Wiki/skills/<name>/ingest.md`.
+URLs, absolute paths, missing files, and files outside the package directory are ignored.
+By default, upsert does not delete existing DB files.
+Use `--prune` when the source package is the desired exact file set and stale package files should be removed.
+
+## Example
+
+The golden sample lives under [`../examples/skill-kb`](../examples/skill-kb):
+
+```bash
+cargo run -p vfs-cli --bin vfs-cli -- skill upsert \
+  --source-dir examples/skill-kb/skills/legal-review \
+  --id legal-review \
+  --prune
+cargo run -p vfs-cli --bin vfs-cli -- skill find "contract review"
+cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review \
+  --task "review vendor MSA redlines before counsel handoff" \
+  --outcome success \
+  --notes-file examples/skill-kb/runs/legal-review-success.md
+```
+
 ## Browser
 
 The wiki browser shows a read-only Skill card in the Inspector for registry paths.
 When viewing `manifest.md`, the card is parsed from the current node.
-When viewing `SKILL.md`, `provenance.md`, or `evals.md`, the browser reads the sibling `manifest.md` and displays the same skill metadata.
+When viewing package files such as `SKILL.md`, `ingest.md`, `provenance.md`, or `evals.md`, the browser reads the sibling `manifest.md` and displays the same skill metadata.
 Registry access follows the selected database role.
+
+## Agent Runtime
+
+Agents can use Skill KB without shelling out to the CLI through the shared tool dispatcher:
+
+```text
+skill_find -> skill_inspect -> skill_read SKILL.md -> skill_read helper files
+```
+
+Runtime tools are read-only.
+They require `database_id` and use existing VFS reads and searches.
+Agents should ignore `deprecated` skills by default, prefer `promoted` or `reviewed` candidates, and treat the read `SKILL.md` as task-local instruction.
+Use the CLI for `skill upsert`, `skill record-run`, and database linking.
 
 ## v1 Limits
 

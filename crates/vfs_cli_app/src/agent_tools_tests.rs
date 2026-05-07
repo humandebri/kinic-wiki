@@ -18,6 +18,7 @@ use vfs_cli::agent_tools::{
 };
 #[derive(Default)]
 struct ToolMockClient {
+    nodes: std::sync::Mutex<std::collections::BTreeMap<String, Node>>,
     append_requests: std::sync::Mutex<Vec<AppendNodeRequest>>,
     edit_requests: std::sync::Mutex<Vec<EditNodeRequest>>,
     mkdir_requests: std::sync::Mutex<Vec<MkdirNodeRequest>>,
@@ -45,6 +46,15 @@ impl VfsApi for ToolMockClient {
     }
 
     async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
+        if let Some(node) = self
+            .nodes
+            .lock()
+            .expect("nodes lock should succeed")
+            .get(path)
+            .cloned()
+        {
+            return Ok(Some(node));
+        }
         Ok(Some(sample_node(path, "body", "etag-1")))
     }
 
@@ -67,7 +77,24 @@ impl VfsApi for ToolMockClient {
         self.list_requests
             .lock()
             .expect("list lock should succeed")
-            .push(request);
+            .push(request.clone());
+        let nodes = self.nodes.lock().expect("nodes lock should succeed");
+        if !nodes.is_empty() {
+            return Ok(nodes
+                .values()
+                .filter(|node| node.path.starts_with(&request.prefix))
+                .map(|node| NodeEntry {
+                    path: node.path.clone(),
+                    kind: match node.kind {
+                        NodeKind::File => NodeEntryKind::File,
+                        NodeKind::Source => NodeEntryKind::Source,
+                    },
+                    updated_at: node.updated_at,
+                    etag: node.etag.clone(),
+                    has_children: false,
+                })
+                .collect());
+        }
         Ok(Vec::new())
     }
 
@@ -228,7 +255,26 @@ impl VfsApi for ToolMockClient {
         self.search_requests
             .lock()
             .expect("search lock should succeed")
-            .push(request);
+            .push(request.clone());
+        let nodes = self.nodes.lock().expect("nodes lock should succeed");
+        if !nodes.is_empty() {
+            return Ok(nodes
+                .values()
+                .filter(|node| {
+                    node.path
+                        .starts_with(request.prefix.as_deref().unwrap_or_default())
+                        && node.content.contains(&request.query_text)
+                })
+                .map(|node| SearchNodeHit {
+                    path: node.path.clone(),
+                    kind: node.kind.clone(),
+                    snippet: Some(node.path.clone()),
+                    preview: None,
+                    score: -1.0,
+                    match_reasons: vec!["content_fts".to_string()],
+                })
+                .collect());
+        }
         Ok(Vec::new())
     }
 
@@ -346,8 +392,8 @@ async fn agent_tools_default_read_scopes_to_vfs_root() {
 fn tool_schemas_include_minimal_vfs_tools() {
     let openai = create_openai_tools();
     let anthropic = create_anthropic_tools();
-    assert_eq!(openai.len(), 18);
-    assert_eq!(anthropic.len(), 18);
+    assert_eq!(openai.len(), 21);
+    assert_eq!(anthropic.len(), 21);
 
     let openai_names = tool_names(&openai, "function");
     let anthropic_names = tool_names(&anthropic, "name");
@@ -371,6 +417,9 @@ fn tool_schemas_include_minimal_vfs_tools() {
         "rm",
         "search",
         "search_paths",
+        "skill_find",
+        "skill_inspect",
+        "skill_read",
     ] {
         assert!(openai_names.contains(&name.to_string()));
         assert!(anthropic_names.contains(&name.to_string()));
@@ -392,6 +441,9 @@ fn tool_schemas_cap_query_result_limits() {
 
     let search_paths = openai_tool_parameters(&openai, "search_paths");
     assert_eq!(search_paths["properties"]["top_k"]["maximum"], 100);
+
+    let skill_find = openai_tool_parameters(&openai, "skill_find");
+    assert_eq!(skill_find["properties"]["top_k"]["maximum"], 20);
 
     let read_context = openai_tool_parameters(&openai, "read_context");
     assert_eq!(read_context["properties"]["link_limit"]["maximum"], 100);
@@ -650,6 +702,101 @@ async fn anthropic_dispatch_routes_search_preview_mode() {
 }
 
 #[tokio::test]
+async fn anthropic_dispatch_routes_skill_tools() {
+    let client = ToolMockClient::default();
+    seed_skill_nodes(&client);
+
+    let found = handle_anthropic_tool_call(
+        &client,
+        "skill_find",
+        serde_json::json!({
+            "database_id": "default",
+            "query_text": "contract",
+            "top_k": 5
+        }),
+    )
+    .await
+    .expect("skill find should dispatch");
+    assert!(!found.is_error);
+    assert!(found.text.contains("\"id\": \"legal-review\""));
+    assert!(!found.text.contains("\"id\": \"old-skill\""));
+
+    let deprecated = handle_anthropic_tool_call(
+        &client,
+        "skill_find",
+        serde_json::json!({
+            "database_id": "default",
+            "query_text": "contract",
+            "include_deprecated": true
+        }),
+    )
+    .await
+    .expect("skill find should include deprecated");
+    assert!(deprecated.text.contains("\"id\": \"old-skill\""));
+
+    let inspected = handle_anthropic_tool_call(
+        &client,
+        "skill_inspect",
+        serde_json::json!({
+            "database_id": "default",
+            "id": "legal-review"
+        }),
+    )
+    .await
+    .expect("skill inspect should dispatch");
+    assert!(!inspected.is_error);
+    assert!(inspected.text.contains("\"ingest.md\": true"));
+
+    let read = handle_anthropic_tool_call(
+        &client,
+        "skill_read",
+        serde_json::json!({
+            "database_id": "default",
+            "id": "legal-review",
+            "file": "ingest.md"
+        }),
+    )
+    .await
+    .expect("skill read should dispatch");
+    assert!(!read.is_error);
+    assert!(read.text.contains("contract ingest"));
+}
+
+#[tokio::test]
+async fn skill_read_rejects_non_package_paths_and_requires_database() {
+    let client = ToolMockClient::default();
+
+    for file in [
+        "../secret.md",
+        "/Wiki/skills/legal-review/SKILL.md",
+        "https://example.com/a.md",
+    ] {
+        let result = handle_anthropic_tool_call(
+            &client,
+            "skill_read",
+            serde_json::json!({
+                "database_id": "default",
+                "id": "legal-review",
+                "file": file
+            }),
+        )
+        .await
+        .expect("skill read should return tool error");
+        assert!(result.is_error);
+    }
+
+    let missing_database = handle_anthropic_tool_call(
+        &client,
+        "skill_find",
+        serde_json::json!({ "query_text": "contract" }),
+    )
+    .await
+    .expect("skill find should return tool error");
+    assert!(missing_database.is_error);
+    assert!(missing_database.text.contains("database_id is required"));
+}
+
+#[tokio::test]
 async fn anthropic_dispatch_routes_link_tools() {
     let client = ToolMockClient::default();
 
@@ -752,6 +899,58 @@ fn sample_link(source_path: &str, target_path: &str) -> vfs_types::LinkEdge {
         link_text: "target".to_string(),
         link_kind: "wiki".to_string(),
         updated_at: 2,
+    }
+}
+
+fn seed_skill_nodes(client: &ToolMockClient) {
+    let mut nodes = client.nodes.lock().expect("nodes lock should succeed");
+    for (path, content) in [
+        (
+            "/Wiki/skills/legal-review/manifest.md",
+            concat!(
+                "---\n",
+                "kind: kinic.skill\n",
+                "schema_version: 1\n",
+                "id: legal-review\n",
+                "version: 0.1.0\n",
+                "entry: SKILL.md\n",
+                "summary: Contract review workflow\n",
+                "tags:\n",
+                "- legal\n",
+                "use_cases:\n",
+                "- Review contract redlines\n",
+                "status: promoted\n",
+                "---\n"
+            ),
+        ),
+        (
+            "/Wiki/skills/legal-review/SKILL.md",
+            "# Legal Review\n\ncontract review",
+        ),
+        (
+            "/Wiki/skills/legal-review/ingest.md",
+            "# Ingest\n\ncontract ingest",
+        ),
+        (
+            "/Wiki/skills/old-skill/manifest.md",
+            concat!(
+                "---\n",
+                "kind: kinic.skill\n",
+                "schema_version: 1\n",
+                "id: old-skill\n",
+                "version: 0.1.0\n",
+                "entry: SKILL.md\n",
+                "summary: Old contract workflow\n",
+                "status: deprecated\n",
+                "---\n"
+            ),
+        ),
+        (
+            "/Wiki/skills/old-skill/SKILL.md",
+            "# Old\n\ncontract review",
+        ),
+    ] {
+        nodes.insert(path.to_string(), sample_node(path, content, "etag-skill"));
     }
 }
 

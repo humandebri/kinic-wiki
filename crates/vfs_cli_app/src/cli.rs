@@ -282,6 +282,8 @@ pub enum SkillCommand {
         #[arg(long)]
         public: bool,
         #[arg(long)]
+        prune: bool,
+        #[arg(long)]
         json: bool,
     },
     Find {
@@ -667,8 +669,28 @@ mod tests {
         let cli = Cli::parse_from([
             "vfs-cli",
             "skill",
+            "upsert",
+            "--source-dir",
+            "./skills/legal-review",
+            "--id",
+            "legal-review",
+            "--prune",
+            "--json",
+        ]);
+        let Command::Skill {
+            command: SkillCommand::Upsert { prune, json, .. },
+        } = cli.command
+        else {
+            panic!("expected skill upsert command");
+        };
+        assert!(prune);
+        assert!(json);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
             "set-status",
-            "acme/legal-review",
+            "legal-review",
             "--status",
             "deprecated",
         ]);
