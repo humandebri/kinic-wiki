@@ -222,6 +222,18 @@ fn finalize_database_archive(database_id: String, snapshot_hash: Vec<u8>) -> Res
 }
 
 #[update]
+fn cancel_database_archive(database_id: String) -> Result<(), String> {
+    with_usage(
+        "cancel_database_archive",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            service.cancel_database_archive(&database_id, caller, now)?;
+            Ok(())
+        },
+    )
+}
+
+#[update]
 fn begin_database_restore(
     database_id: String,
     snapshot_hash: Vec<u8>,

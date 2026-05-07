@@ -15,12 +15,13 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, append_node, begin_database_archive, create_database, delete_node, edit_node,
-    export_snapshot, fetch_updates, finalize_database_archive, glob_nodes, grant_database_access,
-    graph_links, graph_neighborhood, incoming_links, list_children, list_databases, list_nodes,
-    memory_manifest, mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
-    read_database_archive_chunk, read_node, read_node_context, recent_nodes,
-    revoke_database_access, search_node_paths, search_nodes, source_evidence, status, write_node,
+    SERVICE, append_node, begin_database_archive, cancel_database_archive, create_database,
+    delete_node, edit_node, export_snapshot, fetch_updates, finalize_database_archive, glob_nodes,
+    grant_database_access, graph_links, graph_neighborhood, incoming_links, list_children,
+    list_databases, list_nodes, memory_manifest, mkdir_node, move_node, multi_edit_node,
+    outgoing_links, query_context, read_database_archive_chunk, read_node, read_node_context,
+    recent_nodes, revoke_database_access, search_node_paths, search_nodes, source_evidence, status,
+    write_node,
 };
 
 fn install_test_service() {
@@ -755,4 +756,73 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
     assert_eq!(info.status, DatabaseStatus::Archived);
     assert_eq!(info.snapshot_hash, Some(snapshot_hash));
     assert!(info.mount_id.is_none());
+}
+
+#[test]
+fn cancel_database_archive_entrypoint_returns_database_to_hot() {
+    install_test_service();
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/cancel-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "cancel body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+
+    begin_database_archive("default".to_string()).expect("archive should begin");
+    assert!(
+        write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/blocked.md".to_string(),
+            kind: NodeKind::File,
+            content: "blocked".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .expect_err("archiving DB should reject writes")
+        .contains("database is archiving")
+    );
+
+    cancel_database_archive("default".to_string()).expect("archive cancel should succeed");
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/after-cancel.md".to_string(),
+        kind: NodeKind::File,
+        content: "after cancel".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("write should succeed after cancel");
+    let info = list_databases()
+        .expect("database infos should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(info.status, DatabaseStatus::Hot);
+    assert!(info.mount_id.is_some());
+}
+
+#[test]
+fn cancel_database_archive_entrypoint_rejects_non_owner() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("default", "owner", 1_700_000_000_000)
+        .expect("default database should create");
+    service
+        .begin_database_archive("default", "owner")
+        .expect("archive should begin");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+
+    assert!(
+        cancel_database_archive("default".to_string())
+            .expect_err("non-owner cancel should fail")
+            .contains("principal has no access")
+    );
 }

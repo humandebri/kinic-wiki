@@ -309,6 +309,7 @@ service : () -> {
   append_node : (AppendNodeRequest) -> (Result);
   begin_database_archive : (text) -> (Result_1);
   begin_database_restore : (text, blob, nat64) -> (Result_2);
+  cancel_database_archive : (text) -> (Result_2);
   canister_health : () -> (CanisterHealth) query;
   create_database : (text) -> (Result_2);
   delete_database : (text) -> (Result_2);

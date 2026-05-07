@@ -741,6 +741,196 @@ fn archives_and_restores_database_bytes() {
 }
 
 #[test]
+fn cancel_database_archive_returns_archiving_database_to_hot() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+
+    let before = database_index_row(&root, "alpha");
+    service
+        .begin_database_archive("alpha", "owner")
+        .expect("archive should begin");
+    let archiving = database_index_row(&root, "alpha");
+    assert_eq!(archiving.0, "archiving");
+    assert_eq!(archiving.1, before.1);
+
+    let canceled = service
+        .cancel_database_archive("alpha", "owner", 3)
+        .expect("archive cancel should succeed");
+    assert_eq!(canceled.database_id, "alpha");
+    let after = database_index_row(&root, "alpha");
+    assert_eq!(after.0, "hot");
+    assert_eq!(after.1, before.1);
+
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/b.md".to_string(),
+                kind: NodeKind::File,
+                content: "beta body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            4,
+        )
+        .expect("write should succeed after cancel");
+    let node = service
+        .read_node("alpha", "owner", "/Wiki/b.md")
+        .expect("read should succeed after cancel")
+        .expect("node should exist");
+    assert_eq!(node.content, "beta body");
+}
+
+#[test]
+fn cancel_database_archive_after_hash_mismatch_keeps_mount_id() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+    let before = database_index_row(&root, "alpha");
+    service
+        .begin_database_archive("alpha", "owner")
+        .expect("archive should begin");
+
+    assert!(
+        service
+            .finalize_database_archive("alpha", "owner", vec![0; 32], 3)
+            .expect_err("wrong hash should fail")
+            .contains("snapshot_hash does not match")
+    );
+    assert_eq!(database_index_row(&root, "alpha").0, "archiving");
+
+    service
+        .cancel_database_archive("alpha", "owner", 4)
+        .expect("archive cancel should succeed after mismatch");
+    let after = database_index_row(&root, "alpha");
+    assert_eq!(after.0, "hot");
+    assert_eq!(after.1, before.1);
+}
+
+#[test]
+fn cancel_database_archive_rejects_invalid_statuses_and_non_owner() {
+    let service = service();
+    service
+        .create_database("hot_db", "owner", 1)
+        .expect("hot_db should create");
+    assert!(
+        service
+            .cancel_database_archive("hot_db", "owner", 2)
+            .expect_err("hot cancel should fail")
+            .contains("database is hot")
+    );
+
+    service
+        .create_database("archiving_db", "owner", 3)
+        .expect("archiving_db should create");
+    service
+        .begin_database_archive("archiving_db", "owner")
+        .expect("archive should begin");
+    assert!(
+        service
+            .cancel_database_archive("archiving_db", "writer", 4)
+            .expect_err("non-owner cancel should fail")
+            .contains("principal has no access")
+    );
+    service
+        .cancel_database_archive("archiving_db", "owner", 5)
+        .expect("archive cancel should succeed");
+
+    service
+        .create_database("archived_db", "owner", 6)
+        .expect("archived_db should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "archived_db".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            7,
+        )
+        .expect("write should succeed");
+    let archive = service
+        .begin_database_archive("archived_db", "owner")
+        .expect("archive should begin");
+    let bytes = read_archive_in_chunks(&service, "archived_db", archive.size_bytes, 17);
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("archived_db", "owner", snapshot_hash.clone(), 8)
+        .expect("archive should finalize");
+    assert!(
+        service
+            .cancel_database_archive("archived_db", "owner", 9)
+            .expect_err("archived cancel should fail")
+            .contains("database is archived")
+    );
+
+    service
+        .begin_database_restore(
+            "archived_db",
+            "owner",
+            snapshot_hash,
+            archive.size_bytes,
+            10,
+        )
+        .expect("restore should begin");
+    assert!(
+        service
+            .cancel_database_archive("archived_db", "owner", 11)
+            .expect_err("restoring cancel should fail")
+            .contains("database is restoring")
+    );
+
+    service
+        .create_database("deleted_db", "owner", 12)
+        .expect("deleted_db should create");
+    service
+        .delete_database("deleted_db", "owner", 13)
+        .expect("delete should succeed");
+    assert!(
+        service
+            .cancel_database_archive("deleted_db", "owner", 14)
+            .expect_err("deleted cancel should fail")
+            .contains("database is deleted")
+    );
+}
+
+#[test]
 fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
     let (service, root) = service_with_root();
     service

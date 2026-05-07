@@ -343,6 +343,26 @@ impl VfsService {
         Ok(meta)
     }
 
+    pub fn cancel_database_archive(
+        &self,
+        database_id: &str,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        self.require_role(database_id, caller, RequiredRole::Owner)?;
+        let meta = self.database_meta_with_statuses(database_id, &[DatabaseStatus::Archiving])?;
+        let conn = self.open_index()?;
+        conn.execute(
+            "UPDATE databases
+             SET status = 'hot',
+                 updated_at_ms = ?2
+             WHERE database_id = ?1",
+            params![database_id, now],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(meta)
+    }
+
     pub fn begin_database_restore(
         &self,
         database_id: &str,
@@ -1284,7 +1304,8 @@ fn database_meta_error(conn: &Connection, database_id: &str) -> String {
         .optional()
     {
         Ok(Some(status))
-            if status == "archived"
+            if status == "hot"
+                || status == "archived"
                 || status == "archiving"
                 || status == "restoring"
                 || status == "deleted" =>

@@ -9,6 +9,7 @@ Use the CLI commands below for shell workflows and local mirror operations.
 ## Connection
 
 Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` database is created implicitly.
+This is a breaking change for older single-DB clients that omitted `database_id`.
 
 ```bash
 cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
@@ -21,6 +22,9 @@ cargo run -p vfs-cli -- --local --database-id <database-id> status
 ```
 
 `--database-id` takes precedence over `VFS_DATABASE_ID`.
+
+List, search, recent, and graph commands default to the VFS root `/`.
+Pass `--prefix /Wiki` or `--path /Wiki` when the human-facing wiki tree is the intended scope.
 
 Without `--canister-id`, the CLI reads configuration from:
 

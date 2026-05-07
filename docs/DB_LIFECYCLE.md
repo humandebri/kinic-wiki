@@ -82,7 +82,8 @@ Archive is a low-level snapshot byte export flow:
 The canister does not persist archive bytes. The caller owns external storage and retry behavior.
 
 `snapshot_hash` must be the 32-byte SHA-256 digest of the exported SQLite bytes.
-If hash verification fails, the DB stays `archiving`; the caller can reread bytes and retry finalize.
+If hash verification fails, the DB stays `archiving`; the caller can reread bytes and retry finalize or call `cancel_database_archive(database_id)` to return the DB to `hot`.
+`cancel_database_archive` is owner-only and only valid while the DB is `archiving`.
 Archive reads reject chunks larger than 1 MiB.
 Finalize computes the digest by reading the SQLite file. Large DBs can increase update instruction cost; a future archive flow can move this to incremental chunk hashing.
 

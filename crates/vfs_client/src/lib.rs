@@ -80,6 +80,11 @@ pub trait VfsApi: Sync {
             "finalize_database_archive is not implemented by this client"
         ))
     }
+    async fn cancel_database_archive(&self, _database_id: &str) -> Result<()> {
+        Err(anyhow!(
+            "cancel_database_archive is not implemented by this client"
+        ))
+    }
     async fn begin_database_restore(
         &self,
         _database_id: &str,
@@ -386,6 +391,13 @@ impl VfsApi for CanisterVfsClient {
                 &database_id.to_string(),
                 &snapshot_hash,
             )
+            .await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn cancel_database_archive(&self, database_id: &str) -> Result<()> {
+        let result: Result<(), String> = self
+            .update("cancel_database_archive", &database_id.to_string())
             .await?;
         result.map_err(|error| anyhow!(error))
     }
