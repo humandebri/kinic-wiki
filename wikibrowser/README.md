@@ -106,7 +106,40 @@ Covered methods:
 Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`.
 The app is public read-only and accepts arbitrary canister IDs. The target DB must grant reader access to anonymous principal `2vxsx-fae`.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
-The `/w/<canister-id>/db/<database-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway. Legacy `/w/<canister-id>/...` URLs redirect to `/db/default/...`.
+The `/w/<canister-id>/db/<database-id>/...` URLs are served by a `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway. Legacy `/w/<canister-id>/...` URLs redirect to `/db/default/...`.
+
+## AEO Publish MVP
+
+`/answers/<slug>` serves allowlisted AI-readable public memory pages. These pages run on the Next server with ISR and read Markdown from the configured Kinic Wiki canister.
+
+Environment:
+
+```bash
+KINIC_AEO_CANISTER_ID=<mainnet-wiki-canister-id>
+NEXT_PUBLIC_SITE_URL=https://kinic.xyz
+```
+
+Rules:
+
+- `/answers/*` is indexable and rendered with the page body in the initial HTML.
+- `/w/*` remains the arbitrary canister browser and is marked `noindex`.
+- `sitemap.xml` only lists `/answers/*`.
+- `robots.txt` allows `OAI-SearchBot` and blocks `/w/*`.
+
+AEO Markdown must include limited frontmatter:
+
+```md
+---
+title: What is Kinic?
+description: Kinic is an AI memory for important information.
+answer_summary: Kinic helps people browse and access important information in one organized place.
+updated: 2026-05-07
+index: true
+entities:
+  - Kinic
+  - AI memory
+---
+```
 
 ## Troubleshooting
 
@@ -126,7 +159,7 @@ Dashboard settings:
 - Install Command: `pnpm install`
 - Build Command: `pnpm build`
 - Output Directory: Vercel default
-- Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` for Preview and Production
+- Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`, `KINIC_AEO_CANISTER_ID=<mainnet-wiki-canister-id>`, and `NEXT_PUBLIC_SITE_URL=<canonical-origin>` for Preview and Production
 - Routing: keep `vercel.json` so `/w/:segments*` rewrites to the static `/w` shell
 
 CLI deploy from this directory:
