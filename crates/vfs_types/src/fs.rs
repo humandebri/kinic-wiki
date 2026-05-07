@@ -28,6 +28,8 @@ pub struct DatabaseMember {
 pub enum DatabaseStatus {
     #[serde(alias = "Hot")]
     Hot,
+    #[serde(alias = "Archiving")]
+    Archiving,
     #[serde(alias = "Archived")]
     Archived,
     #[serde(alias = "Deleted")]

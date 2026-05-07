@@ -6,9 +6,13 @@ use std::path::PathBuf;
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use vfs_runtime::{USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService};
+use vfs_runtime::{
+    MAX_ARCHIVE_CHUNK_BYTES, MAX_DATABASE_SIZE_BYTES, MAX_RESTORE_CHUNK_BYTES,
+    USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService,
+};
 use vfs_types::{
-    DatabaseRole, DatabaseStatus, NodeKind, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
+    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, NodeKind,
+    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
 
 fn service() -> VfsService {
@@ -527,10 +531,88 @@ fn archives_and_restores_database_bytes() {
         )
         .expect("write should succeed");
 
+    assert!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 0, 17)
+            .expect_err("hot DB should reject archive chunk reads")
+            .contains("database")
+    );
     let archive = service
         .begin_database_archive("alpha", "owner")
         .expect("archive should begin");
     assert!(archive.size_bytes > 0);
+    let archiving = database_index_row(&root, "alpha");
+    let archiving_mount_id = archiving.1;
+    assert_eq!(
+        archiving,
+        (
+            "archiving".to_string(),
+            archiving_mount_id,
+            archive.size_bytes,
+            None
+        )
+    );
+    assert!(
+        service
+            .read_node("alpha", "owner", "/Wiki/a.md")
+            .expect_err("archiving DB should reject reads")
+            .contains("database is archiving")
+    );
+    assert!(
+        service
+            .write_node(
+                "owner",
+                WriteNodeRequest {
+                    database_id: "alpha".to_string(),
+                    path: "/Wiki/b.md".to_string(),
+                    kind: NodeKind::File,
+                    content: "blocked".to_string(),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                },
+                3,
+            )
+            .expect_err("archiving DB should reject writes")
+            .contains("database is archiving")
+    );
+    assert!(
+        service
+            .append_node(
+                "owner",
+                AppendNodeRequest {
+                    database_id: "alpha".to_string(),
+                    path: "/Wiki/a.md".to_string(),
+                    content: "blocked".to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: None,
+                },
+                3,
+            )
+            .expect_err("archiving DB should reject appends")
+            .contains("database is archiving")
+    );
+    assert!(
+        service
+            .delete_node(
+                "owner",
+                DeleteNodeRequest {
+                    database_id: "alpha".to_string(),
+                    path: "/Wiki/a.md".to_string(),
+                    expected_etag: None,
+                },
+                3,
+            )
+            .expect_err("archiving DB should reject deletes")
+            .contains("database is archiving")
+    );
+    assert!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 0, MAX_ARCHIVE_CHUNK_BYTES + 1)
+            .expect_err("oversized archive chunk should fail")
+            .contains("archive chunk size exceeds limit")
+    );
     let bytes = read_archive_in_chunks(&service, "alpha", archive.size_bytes, 17);
     assert_eq!(bytes.len() as u64, archive.size_bytes);
     assert_eq!(
@@ -572,6 +654,12 @@ fn archives_and_restores_database_bytes() {
     service
         .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
         .expect("archive should finalize");
+    assert!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 0, 17)
+            .expect_err("archived DB should reject archive chunk reads")
+            .contains("database is archived")
+    );
     assert_eq!(
         database_index_row(&root, "alpha"),
         ("archived".to_string(), None, archive.size_bytes, None)
@@ -592,6 +680,12 @@ fn archives_and_restores_database_bytes() {
             4,
         )
         .expect("restore should begin");
+    assert!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 0, 17)
+            .expect_err("restoring DB should reject archive chunk reads")
+            .contains("database is restoring")
+    );
     let restoring = database_index_row(&root, "alpha");
     assert_eq!(restoring.0, "restoring");
     assert!(restoring.1.is_some());
@@ -754,6 +848,7 @@ fn archive_and_restore_reject_snapshot_hash_mismatch() {
         .finalize_database_archive("alpha", "owner", wrong_hash, 3)
         .expect_err("wrong archive hash should fail");
     assert!(error.contains("snapshot_hash does not match archived"));
+    assert_eq!(database_index_row(&_root, "alpha").0, "archiving");
 
     let snapshot_hash = sha256_bytes(&bytes);
     service
@@ -772,6 +867,67 @@ fn archive_and_restore_reject_snapshot_hash_mismatch() {
         .finalize_database_restore("alpha", "owner", 6)
         .expect_err("wrong restored bytes should fail");
     assert!(error.contains("snapshot_hash does not match restored"));
+}
+
+#[test]
+fn archive_and_restore_enforce_size_limits_without_state_changes() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+
+    let archive = service
+        .begin_database_archive("alpha", "owner")
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
+        .expect("archive should finalize");
+
+    let state_before = database_index_row(&root, "alpha");
+    let size_error = service
+        .begin_database_restore(
+            "alpha",
+            "owner",
+            snapshot_hash.clone(),
+            MAX_DATABASE_SIZE_BYTES + 1,
+            4,
+        )
+        .expect_err("oversized restore size should fail");
+    assert!(size_error.contains("database size exceeds limit"));
+    assert_eq!(database_index_row(&root, "alpha"), state_before);
+
+    let oversized_restore_chunk = vec![0; MAX_RESTORE_CHUNK_BYTES + 1];
+    service
+        .begin_database_restore(
+            "alpha",
+            "owner",
+            snapshot_hash.clone(),
+            archive.size_bytes,
+            4,
+        )
+        .expect("restore should begin");
+    let chunk_error = service
+        .write_database_restore_chunk("alpha", "owner", 0, &oversized_restore_chunk)
+        .expect_err("oversized restore chunk should fail");
+    assert!(chunk_error.contains("restore chunk size exceeds limit"));
 }
 
 #[test]

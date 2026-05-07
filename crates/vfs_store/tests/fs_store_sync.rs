@@ -881,6 +881,60 @@ fn export_snapshot_rejects_snapshot_session_id() {
 }
 
 #[test]
+fn export_snapshot_requires_snapshot_revision_when_cursor_is_set() {
+    let (_dir, store) = new_store();
+    for index in 0..101 {
+        write_node(
+            &store,
+            &format!("/Wiki/{index:03}.md"),
+            "content",
+            None,
+            index,
+        );
+    }
+    let first = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect("first page should succeed");
+
+    let error = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: first.next_cursor,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect_err("cursor without snapshot revision should fail");
+    assert_eq!(error, "snapshot_revision is required when cursor is set");
+}
+
+#[test]
+fn export_snapshot_rejects_cursor_without_revision_even_when_snapshot_is_current() {
+    let (_dir, store) = new_store();
+    write_node(&store, "/Wiki/live.md", "live", None, 10);
+
+    let error = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: Some("/Wiki/live.md".to_string()),
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect_err("cursor without snapshot revision should fail");
+    assert_eq!(error, "snapshot_revision is required when cursor is set");
+}
+
+#[test]
 fn fetch_updates_pages_changed_and_removed_paths_to_fixed_target() {
     let (_dir, store) = new_store();
     let stale = write_node(&store, "/Wiki/000.md", "stale", None, 0);

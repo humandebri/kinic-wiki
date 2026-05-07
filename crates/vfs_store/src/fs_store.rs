@@ -52,6 +52,7 @@ const CONTEXT_SEARCH_LIMIT: u32 = 10;
 const TOKEN_CHAR_APPROX: usize = 4;
 const SNAPSHOT_REVISION_NO_LONGER_CURRENT: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
+const SNAPSHOT_REVISION_CURSOR_REQUIRED: &str = "snapshot_revision is required when cursor is set";
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
 const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
@@ -722,6 +723,9 @@ impl FsStore {
             return Err(SNAPSHOT_SESSION_INVALID.to_string());
         }
         let cursor = normalize_sync_cursor(request.cursor.as_deref(), &prefix)?;
+        if cursor.is_some() && request.snapshot_revision.is_none() {
+            return Err(SNAPSHOT_REVISION_CURSOR_REQUIRED.to_string());
+        }
         let conn = self.open()?;
         let current_revision = current_snapshot_revision_number(&conn)?;
         let snapshot = match request.snapshot_revision.as_deref() {

@@ -27,13 +27,14 @@ Stable-memory mount IDs are partitioned by purpose:
 The index DB tracks database metadata and membership. User DBs hold VFS node data, search data, and link data.
 The index DB also stores an internal `usage_events` ledger for update calls.
 
-Hot or restoring DBs consume one active user DB slot. Archived and deleted DBs release their active mount, but v1 does not recycle stable-memory mount IDs for another database.
+Hot, archiving, or restoring DBs consume one active user DB slot. Archived and deleted DBs release their active mount, but v1 does not recycle stable-memory mount IDs for another database.
 
 ## Status
 
-Databases move through four statuses:
+Databases move through five statuses:
 
 - `hot`: mounted and usable for VFS read/write/search/list
+- `archiving`: mounted for chunk export, VFS operations rejected until finalize succeeds
 - `archived`: not mounted, active mount released, snapshot metadata retained
 - `deleted`: not mounted, active mount released, not restorable unless an external archive was taken first
 - `restoring`: mounted for chunk import, VFS operations rejected until finalize succeeds
@@ -73,7 +74,7 @@ Delete is treated as irreversible. If recovery is required, archive first and st
 
 Archive is a low-level snapshot byte export flow:
 
-1. `begin_database_archive(database_id)` returns the current DB file size.
+1. `begin_database_archive(database_id)` moves the DB to `archiving` and returns the current DB file size.
 2. `read_database_archive_chunk(database_id, offset, max_bytes)` exports file bytes by range.
 3. Caller stores the bytes outside the canister.
 4. `finalize_database_archive(database_id, snapshot_hash)` verifies the SHA-256 digest, marks the DB archived, and releases the active mount.
@@ -81,6 +82,8 @@ Archive is a low-level snapshot byte export flow:
 The canister does not persist archive bytes. The caller owns external storage and retry behavior.
 
 `snapshot_hash` must be the 32-byte SHA-256 digest of the exported SQLite bytes.
+If hash verification fails, the DB stays `archiving`; the caller can reread bytes and retry finalize.
+Archive reads reject chunks larger than 1 MiB.
 Finalize computes the digest by reading the SQLite file. Large DBs can increase update instruction cost; a future archive flow can move this to incremental chunk hashing.
 
 ## Restore
@@ -94,9 +97,11 @@ Restore is a low-level snapshot byte import flow:
 Restore can only begin from `archived` or `deleted`. It cannot begin from `hot` or while already `restoring`.
 
 If finalize fails because the file size is wrong, the DB stays `restoring`. The caller can write missing bytes and retry finalize.
+Restore rejects chunks larger than 1 MiB and declared DB sizes larger than `i64::MAX`.
 
 ## Current Limits
 
-- At most 32757 active user DB slots per canister: mount IDs `11..=32767`.
+- At most 32757 lifetime user DB slots per canister: mount IDs `11..=32767`.
+- v1 does not treat archived or deleted slots as reusable concurrent capacity.
 - Archive/restore APIs are canister-level primitives. The CLI does not yet provide archive export/import commands.
 - Caffeine or external object storage integration is out of scope for v1.

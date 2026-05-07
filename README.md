@@ -39,8 +39,8 @@ Current scope:
 
 Storage constraints:
 
-- Hot or restoring databases use stable-memory mount IDs `11..=32767`, so one canister can keep up to 32757 active database mounts at once.
-- Archived or deleted databases release their active mount ID.
+- User databases consume stable-memory mount IDs `11..=32767`, so one canister has 32757 lifetime database slots in v1.
+- Archived or deleted databases clear their active mount ID, but v1 does not recycle historical mount IDs.
 - See [`docs/DB_LIFECYCLE.md`](docs/DB_LIFECYCLE.md) for DB status, slot reuse, archive, and restore behavior.
 - Link graph queries are backed by `fs_links`; SQLite size grows with stored link edges and two link indexes.
 - Node writes update the link index in the same transaction as node content and FTS updates.

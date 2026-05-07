@@ -19,8 +19,8 @@ use super::{
     export_snapshot, fetch_updates, finalize_database_archive, glob_nodes, grant_database_access,
     graph_links, graph_neighborhood, incoming_links, list_children, list_databases, list_nodes,
     memory_manifest, mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
-    read_database_archive_chunk, read_node, read_node_context, recent_nodes, search_node_paths,
-    search_nodes, source_evidence, status, write_node,
+    read_database_archive_chunk, read_node, read_node_context, recent_nodes,
+    revoke_database_access, search_node_paths, search_nodes, source_evidence, status, write_node,
 };
 
 fn install_test_service() {
@@ -145,6 +145,24 @@ fn grant_database_access_rejects_invalid_principal() {
     .expect_err("invalid principal should fail");
 
     assert!(error.contains("invalid principal"));
+}
+
+#[test]
+fn revoke_database_access_validates_and_canonicalizes_principal() {
+    install_test_service();
+
+    let invalid = revoke_database_access("default".to_string(), "not a principal".to_string())
+        .expect_err("invalid principal should fail");
+    assert!(invalid.contains("invalid principal"));
+
+    grant_database_access(
+        "default".to_string(),
+        "aaaaa-aa".to_string(),
+        DatabaseRole::Reader,
+    )
+    .expect("valid principal should grant");
+    revoke_database_access("default".to_string(), "aaaaa-aa".to_string())
+        .expect("valid principal should revoke");
 }
 
 #[test]

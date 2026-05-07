@@ -30,6 +30,9 @@ const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
+pub const MAX_ARCHIVE_CHUNK_BYTES: u32 = 1024 * 1024;
+pub const MAX_RESTORE_CHUNK_BYTES: usize = 1024 * 1024;
+pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
 const SHA256_DIGEST_BYTES: usize = 32;
@@ -263,6 +266,14 @@ impl VfsService {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         let meta = self.database_meta(database_id)?;
         let size_bytes = file_size(&meta.db_file_name)?;
+        let conn = self.open_index()?;
+        conn.execute(
+            "UPDATE databases
+             SET status = 'archiving'
+             WHERE database_id = ?1",
+            params![database_id],
+        )
+        .map_err(|error| error.to_string())?;
         Ok(DatabaseArchiveInfo {
             database_id: database_id.to_string(),
             size_bytes,
@@ -277,9 +288,14 @@ impl VfsService {
         max_bytes: u32,
     ) -> Result<Vec<u8>, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
-        let meta = self.database_meta(database_id)?;
+        let meta = self.database_meta_with_statuses(database_id, &[DatabaseStatus::Archiving])?;
         if max_bytes == 0 {
             return Ok(Vec::new());
+        }
+        if max_bytes > MAX_ARCHIVE_CHUNK_BYTES {
+            return Err(format!(
+                "archive chunk size exceeds limit: {max_bytes} > {MAX_ARCHIVE_CHUNK_BYTES}"
+            ));
         }
         let size = file_size(&meta.db_file_name)?;
         if offset >= size {
@@ -303,9 +319,9 @@ impl VfsService {
         caller: &str,
         snapshot_hash: Vec<u8>,
         now: i64,
-    ) -> Result<(), String> {
+    ) -> Result<DatabaseMeta, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
-        let meta = self.database_meta(database_id)?;
+        let meta = self.database_meta_with_statuses(database_id, &[DatabaseStatus::Archiving])?;
         validate_snapshot_hash(&snapshot_hash)?;
         let actual_hash = file_sha256(&meta.db_file_name)?;
         if actual_hash != snapshot_hash {
@@ -324,7 +340,7 @@ impl VfsService {
             params![database_id, snapshot_hash, now],
         )
         .map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(meta)
     }
 
     pub fn begin_database_restore(
@@ -337,6 +353,11 @@ impl VfsService {
     ) -> Result<DatabaseMeta, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         validate_snapshot_hash(&snapshot_hash)?;
+        if size_bytes > MAX_DATABASE_SIZE_BYTES {
+            return Err(format!(
+                "database size exceeds limit: {size_bytes} > {MAX_DATABASE_SIZE_BYTES}"
+            ));
+        }
         let current_status = self.database_status(database_id)?;
         if !matches!(
             current_status,
@@ -368,7 +389,7 @@ impl VfsService {
                 database_id,
                 i64::from(mount_id),
                 snapshot_hash,
-                i64::try_from(size_bytes).unwrap_or(i64::MAX),
+                i64::try_from(size_bytes).map_err(|error| error.to_string())?,
                 now
             ],
         )
@@ -387,6 +408,12 @@ impl VfsService {
         bytes: &[u8],
     ) -> Result<(), String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
+        if bytes.len() > MAX_RESTORE_CHUNK_BYTES {
+            return Err(format!(
+                "restore chunk size exceeds limit: {} > {MAX_RESTORE_CHUNK_BYTES}",
+                bytes.len()
+            ));
+        }
         let meta = self.database_meta_with_statuses(database_id, &[DatabaseStatus::Restoring])?;
         let expected_size = self.restore_size_bytes(database_id)?;
         let end = offset
@@ -415,8 +442,8 @@ impl VfsService {
              VALUES (?1, ?2, ?3)",
             params![
                 database_id,
-                i64::try_from(offset).unwrap_or(i64::MAX),
-                i64::try_from(end).unwrap_or(i64::MAX)
+                i64::try_from(offset).map_err(|error| error.to_string())?,
+                i64::try_from(end).map_err(|error| error.to_string())?
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -468,7 +495,11 @@ impl VfsService {
                  restore_size_bytes = NULL,
                  updated_at_ms = ?3
              WHERE database_id = ?1",
-            params![database_id, i64::try_from(size).unwrap_or(i64::MAX), now],
+            params![
+                database_id,
+                i64::try_from(size).map_err(|error| error.to_string())?,
+                now
+            ],
         )
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -1253,7 +1284,10 @@ fn database_meta_error(conn: &Connection, database_id: &str) -> String {
         .optional()
     {
         Ok(Some(status))
-            if status == "archived" || status == "restoring" || status == "deleted" =>
+            if status == "archived"
+                || status == "archiving"
+                || status == "restoring"
+                || status == "deleted" =>
         {
             format!("database is {status}: {database_id}")
         }
@@ -1285,7 +1319,7 @@ fn load_databases(conn: &Connection) -> Result<Vec<DatabaseMeta>, String> {
     conn.prepare(
         "SELECT database_id, db_file_name, active_mount_id, schema_version, logical_size_bytes, status
          FROM databases
-         WHERE status = 'hot' AND active_mount_id IS NOT NULL
+         WHERE status IN ('hot', 'archiving', 'restoring') AND active_mount_id IS NOT NULL
          ORDER BY mount_id ASC",
     )
     .map_err(|error| error.to_string())?
@@ -1417,6 +1451,7 @@ fn role_to_db(role: DatabaseRole) -> &'static str {
 fn status_from_db(status: &str) -> rusqlite::Result<DatabaseStatus> {
     match status {
         "hot" => Ok(DatabaseStatus::Hot),
+        "archiving" => Ok(DatabaseStatus::Archiving),
         "archived" => Ok(DatabaseStatus::Archived),
         "deleted" => Ok(DatabaseStatus::Deleted),
         "restoring" => Ok(DatabaseStatus::Restoring),

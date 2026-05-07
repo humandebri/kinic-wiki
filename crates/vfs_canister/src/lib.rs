@@ -147,7 +147,12 @@ fn revoke_database_access(database_id: String, principal: String) -> Result<(), 
     with_usage(
         "revoke_database_access",
         Some(database_id.clone()),
-        |service, caller, _now| service.revoke_database_access(&database_id, caller, &principal),
+        |service, caller, _now| {
+            let principal = Principal::from_text(&principal)
+                .map_err(|error| format!("invalid principal: {error}"))?
+                .to_text();
+            service.revoke_database_access(&database_id, caller, &principal)
+        },
     )
 }
 
@@ -208,13 +213,8 @@ fn finalize_database_archive(database_id: String, snapshot_hash: Vec<u8>) -> Res
         "finalize_database_archive",
         Some(database_id.clone()),
         |service, caller, now| {
-            let meta = service.list_databases().and_then(|databases| {
-                databases
-                    .into_iter()
-                    .find(|meta| meta.database_id == database_id)
-                    .ok_or_else(|| format!("database not found: {database_id}"))
-            })?;
-            service.finalize_database_archive(&database_id, caller, snapshot_hash, now)?;
+            let meta =
+                service.finalize_database_archive(&database_id, caller, snapshot_hash, now)?;
             unmount_database_file(&meta.db_file_name);
             Ok(())
         },

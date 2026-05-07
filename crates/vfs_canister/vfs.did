@@ -47,7 +47,7 @@ type DatabaseRestoreChunkRequest = record {
   bytes : blob;
 };
 type DatabaseRole = variant { Reader; Writer; Owner };
-type DatabaseStatus = variant { Hot; Restoring; Archived; Deleted };
+type DatabaseStatus = variant { Hot; Restoring; Archiving; Archived; Deleted };
 type DeleteNodeRequest = record {
   path : text;
   expected_etag : opt text;
