@@ -1,6 +1,6 @@
 ---
 name: kinic-wiki-lint
-description: Kinic Wiki 専用 workflow skill for inspecting local and remote wiki health without silently fixing it.
+description: Kinic Wiki workflow skill for inspecting local and remote wiki health without silently fixing it.
 ---
 
 # Kinic Wiki Lint

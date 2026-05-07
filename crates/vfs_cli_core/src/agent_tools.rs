@@ -7,8 +7,10 @@ use serde_json::{Value, json};
 use vfs_client::VfsApi;
 use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest,
-    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeKind,
-    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, ListNodesRequest,
+    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
+    NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
+    SearchPreviewMode, WriteNodeRequest,
 };
 
 const DEFAULT_AGENT_PREFIX: &str = "/";
@@ -31,7 +33,18 @@ impl Default for AgentToolConfig {
     }
 }
 
-pub const READ_ONLY_TOOL_NAMES: [&str; 5] = ["read", "ls", "search", "search_paths", "recent"];
+pub const READ_ONLY_TOOL_NAMES: [&str; 10] = [
+    "read",
+    "read_context",
+    "ls",
+    "search",
+    "search_paths",
+    "recent",
+    "graph_neighborhood",
+    "graph_links",
+    "incoming_links",
+    "outgoing_links",
+];
 
 pub fn create_openai_tools() -> Vec<Value> {
     create_openai_tools_for_names(tool_names_slice())
@@ -116,6 +129,12 @@ async fn dispatch_tool_call_impl(
         "read" => tool_ok(
             json!({ "node": client.read_node(&serde_json::from_value::<ReadArgs>(input)?.path).await? }),
         ),
+        "read_context" => {
+            let args: ReadContextArgs = serde_json::from_value(input)?;
+            tool_ok(
+                json!({ "context": client.read_node_context(NodeContextRequest { path: args.path, link_limit: args.link_limit.unwrap_or(20) }).await? }),
+            )
+        }
         "write" => {
             let args: WriteArgs = serde_json::from_value(input)?;
             tool_ok(json!(
@@ -197,6 +216,30 @@ async fn dispatch_tool_call_impl(
                 json!({ "hits": client.recent_nodes(RecentNodesRequest { limit: args.limit.unwrap_or(10), path: Some(args.path.unwrap_or_else(|| config.default_prefix.to_string())) }).await? }),
             )
         }
+        "graph_neighborhood" => {
+            let args: GraphNeighborhoodArgs = serde_json::from_value(input)?;
+            tool_ok(
+                json!({ "links": client.graph_neighborhood(GraphNeighborhoodRequest { center_path: args.center_path, depth: args.depth.unwrap_or(1), limit: args.limit.unwrap_or(100) }).await? }),
+            )
+        }
+        "graph_links" => {
+            let args: GraphLinksArgs = serde_json::from_value(input)?;
+            tool_ok(
+                json!({ "links": client.graph_links(GraphLinksRequest { prefix: args.prefix.unwrap_or_else(|| config.default_prefix.to_string()), limit: args.limit.unwrap_or(100) }).await? }),
+            )
+        }
+        "incoming_links" => {
+            let args: LinkArgs = serde_json::from_value(input)?;
+            tool_ok(
+                json!({ "links": client.incoming_links(IncomingLinksRequest { path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
+            )
+        }
+        "outgoing_links" => {
+            let args: LinkArgs = serde_json::from_value(input)?;
+            tool_ok(
+                json!({ "links": client.outgoing_links(OutgoingLinksRequest { path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
+            )
+        }
         "multi_edit" => {
             let args: MultiEditArgs = serde_json::from_value(input)?;
             tool_ok(json!(
@@ -223,13 +266,13 @@ async fn dispatch_tool_call_impl(
         "search" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_nodes(SearchNodesRequest { query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| config.default_prefix.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: None }).await? }),
+                json!({ "hits": client.search_nodes(SearchNodesRequest { query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| config.default_prefix.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         "search_paths" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| config.default_prefix.to_string())), top_k: args.top_k.unwrap_or(10) }).await? }),
+                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| config.default_prefix.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),
@@ -240,6 +283,7 @@ async fn dispatch_tool_call_impl(
 fn tool_names_slice() -> &'static [&'static str] {
     &[
         "read",
+        "read_context",
         "write",
         "append",
         "edit",
@@ -248,6 +292,10 @@ fn tool_names_slice() -> &'static [&'static str] {
         "mv",
         "glob",
         "recent",
+        "graph_neighborhood",
+        "graph_links",
+        "incoming_links",
+        "outgoing_links",
         "multi_edit",
         "rm",
         "search",
@@ -271,6 +319,11 @@ fn tool_error(message: String) -> ToolResult {
 fn tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec::new("read", "Read a node by path.", read_schema()),
+        ToolSpec::new(
+            "read_context",
+            "Read a node with incoming and outgoing links.",
+            read_context_schema(),
+        ),
         ToolSpec::new("write", "Write a node by path.", write_schema()),
         ToolSpec::new("append", "Append text to a node.", append_schema()),
         ToolSpec::new(
@@ -287,6 +340,26 @@ fn tool_specs() -> Vec<ToolSpec> {
             glob_schema(),
         ),
         ToolSpec::new("recent", "List recently updated nodes.", recent_schema()),
+        ToolSpec::new(
+            "graph_neighborhood",
+            "Read local link graph edges around a center path.",
+            graph_neighborhood_schema(),
+        ),
+        ToolSpec::new(
+            "graph_links",
+            "Read link graph edges under a prefix.",
+            graph_links_schema(),
+        ),
+        ToolSpec::new(
+            "incoming_links",
+            "Read links pointing to a node path.",
+            link_schema(),
+        ),
+        ToolSpec::new(
+            "outgoing_links",
+            "Read links from a node path.",
+            link_schema(),
+        ),
         ToolSpec::new(
             "multi_edit",
             "Apply multiple atomic plain-text replacements to a node.",
@@ -308,6 +381,9 @@ fn tool_specs() -> Vec<ToolSpec> {
 
 fn read_schema() -> Value {
     json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})
+}
+fn read_context_schema() -> Value {
+    json!({"type":"object","properties":{"path":{"type":"string"},"link_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["path"],"additionalProperties":false})
 }
 fn write_schema() -> Value {
     json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string","enum":["file","source"]},"metadata_json":{"type":"string"},"expected_etag":{"type":"string"}},"required":["path","content"],"additionalProperties":false})
@@ -333,6 +409,15 @@ fn glob_schema() -> Value {
 fn recent_schema() -> Value {
     json!({"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100},"path":{"type":"string"}},"additionalProperties":false})
 }
+fn graph_neighborhood_schema() -> Value {
+    json!({"type":"object","properties":{"center_path":{"type":"string"},"depth":{"type":"integer","minimum":1,"maximum":2},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["center_path"],"additionalProperties":false})
+}
+fn graph_links_schema() -> Value {
+    json!({"type":"object","properties":{"prefix":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false})
+}
+fn link_schema() -> Value {
+    json!({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["path"],"additionalProperties":false})
+}
 fn multi_edit_schema() -> Value {
     json!({"type":"object","properties":{"path":{"type":"string"},"expected_etag":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"],"additionalProperties":false}}},"required":["path","edits"],"additionalProperties":false})
 }
@@ -340,12 +425,17 @@ fn delete_schema() -> Value {
     json!({"type":"object","properties":{"path":{"type":"string"},"expected_etag":{"type":"string"}},"required":["path"],"additionalProperties":false})
 }
 fn search_schema() -> Value {
-    json!({"type":"object","properties":{"query_text":{"type":"string"},"prefix":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":100}},"required":["query_text"],"additionalProperties":false})
+    json!({"type":"object","properties":{"query_text":{"type":"string"},"prefix":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":100},"preview_mode":{"type":"string","enum":["none","light","content_start"]}},"required":["query_text"],"additionalProperties":false})
 }
 
 #[derive(Deserialize)]
 struct ReadArgs {
     path: String,
+}
+#[derive(Deserialize)]
+struct ReadContextArgs {
+    path: String,
+    link_limit: Option<u32>,
 }
 #[derive(Deserialize)]
 struct WriteArgs {
@@ -400,6 +490,22 @@ struct RecentArgs {
     path: Option<String>,
 }
 #[derive(Deserialize)]
+struct GraphNeighborhoodArgs {
+    center_path: String,
+    depth: Option<u32>,
+    limit: Option<u32>,
+}
+#[derive(Deserialize)]
+struct GraphLinksArgs {
+    prefix: Option<String>,
+    limit: Option<u32>,
+}
+#[derive(Deserialize)]
+struct LinkArgs {
+    path: String,
+    limit: Option<u32>,
+}
+#[derive(Deserialize)]
 struct MultiEditArgs {
     path: String,
     edits: Vec<MultiEdit>,
@@ -415,6 +521,7 @@ struct SearchArgs {
     query_text: String,
     prefix: Option<String>,
     top_k: Option<u32>,
+    preview_mode: Option<SearchPreviewMode>,
 }
 
 struct ToolSpec {

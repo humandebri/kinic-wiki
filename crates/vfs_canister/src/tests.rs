@@ -5,15 +5,20 @@ use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
-    MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest,
-    SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
+    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
+    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
+    NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
+    SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, SourceEvidenceRequest,
+    WriteNodeRequest,
 };
 
 use super::{
     SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    list_nodes, mkdir_node, move_node, multi_edit_node, read_node, recent_nodes, search_node_paths,
-    search_nodes, status, write_node,
+    graph_links, graph_neighborhood, incoming_links, list_children, list_nodes, memory_manifest,
+    mkdir_node, move_node, multi_edit_node, outgoing_links, query_context, read_node,
+    read_node_context, recent_nodes, search_node_paths, search_nodes, source_evidence, status,
+    write_node,
 };
 
 fn install_test_service() {
@@ -34,6 +39,73 @@ fn status_stays_available_after_fs_migrations() {
 
     assert_eq!(current.file_count, 0);
     assert_eq!(current.source_count, 0);
+}
+
+#[test]
+fn memory_entrypoints_return_agent_memory_contract() {
+    install_test_service();
+
+    let manifest = memory_manifest();
+    assert_eq!(manifest.api_version, "agent-memory-v1");
+    assert_eq!(manifest.write_policy, "agent_memory_read_only");
+    assert_eq!(manifest.recommended_entrypoint, "query_context");
+    assert_eq!(manifest.max_depth, 2);
+    assert!(manifest.roots.iter().any(|root| root.path == "/Wiki"));
+
+    for (path, content) in [
+        ("/Wiki/scope/index.md", "# Index\n\n[Overview](overview.md)"),
+        (
+            "/Wiki/scope/overview.md",
+            "# Overview\n\nbeam memory [Raw](/Sources/raw/a/a.md)",
+        ),
+        ("/Wiki/scope/schema.md", "# Schema\n\nread-only"),
+        (
+            "/Wiki/scope/provenance.md",
+            "# Provenance\n\n[Raw](/Sources/raw/a/a.md)",
+        ),
+        ("/Sources/raw/a/a.md", "raw source"),
+    ] {
+        write_node(WriteNodeRequest {
+            path: path.to_string(),
+            kind: if path.starts_with("/Sources/") {
+                NodeKind::Source
+            } else {
+                NodeKind::File
+            },
+            content: content.to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .expect("write should succeed");
+    }
+
+    let context = query_context(QueryContextRequest {
+        task: "beam memory".to_string(),
+        entities: Vec::new(),
+        namespace: Some("/Wiki/scope".to_string()),
+        budget_tokens: 1_000,
+        include_evidence: true,
+        depth: 1,
+    })
+    .expect("query context should load");
+    assert!(
+        context
+            .nodes
+            .iter()
+            .any(|node| node.node.path == "/Wiki/scope/overview.md")
+    );
+    assert!(!context.evidence.is_empty());
+
+    let evidence = source_evidence(SourceEvidenceRequest {
+        node_path: "/Wiki/scope/overview.md".to_string(),
+    })
+    .expect("evidence should load");
+    assert!(
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    );
 }
 
 #[test]
@@ -84,6 +156,19 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         })
     );
 
+    let children = list_children(ListChildrenRequest {
+        path: "/Wiki".to_string(),
+    })
+    .expect("children should list");
+    assert!(children.iter().any(|child| {
+        child.path == "/Wiki/nested" && child.kind == NodeEntryKind::Directory && child.is_virtual
+    }));
+    assert!(children.iter().any(|child| {
+        child.path == "/Wiki/foo.md"
+            && child.kind == NodeEntryKind::File
+            && child.etag.as_deref() == Some(created.node.etag.as_str())
+    }));
+
     let hits = search_nodes(SearchNodesRequest {
         query_text: "alpha".to_string(),
         prefix: Some("/Wiki".to_string()),
@@ -98,6 +183,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         query_text: "NeStEd".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
+        preview_mode: None,
     })
     .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -151,6 +237,63 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         expected_etag: Some("stale".to_string()),
     });
     assert!(stale_delete.is_err());
+}
+
+#[test]
+fn fs_entrypoints_cover_backlink_queries() {
+    install_test_service();
+
+    write_node(WriteNodeRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        kind: NodeKind::File,
+        content: "[Target](../target.md) and [[/Wiki/target.md]]".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("source write should succeed");
+
+    let incoming = incoming_links(IncomingLinksRequest {
+        path: "/Wiki/target.md".to_string(),
+        limit: 10,
+    })
+    .expect("incoming links should load");
+    assert_eq!(incoming.len(), 2);
+    assert!(
+        incoming
+            .iter()
+            .all(|edge| edge.source_path == "/Wiki/topic/source.md")
+    );
+
+    let outgoing = outgoing_links(OutgoingLinksRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        limit: 10,
+    })
+    .expect("outgoing links should load");
+    assert_eq!(outgoing.len(), 2);
+
+    let graph = graph_links(GraphLinksRequest {
+        prefix: "/Wiki/topic".to_string(),
+        limit: 10,
+    })
+    .expect("graph links should load");
+    assert_eq!(graph.len(), 2);
+
+    let context = read_node_context(NodeContextRequest {
+        path: "/Wiki/topic/source.md".to_string(),
+        link_limit: 10,
+    })
+    .expect("context should load")
+    .expect("node should exist");
+    assert_eq!(context.node.path, "/Wiki/topic/source.md");
+    assert_eq!(context.outgoing_links.len(), 2);
+
+    let neighborhood = graph_neighborhood(GraphNeighborhoodRequest {
+        center_path: "/Wiki/target.md".to_string(),
+        depth: 1,
+        limit: 10,
+    })
+    .expect("neighborhood should load");
+    assert_eq!(neighborhood.len(), 2);
 }
 
 #[test]

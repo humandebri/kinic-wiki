@@ -1,7 +1,7 @@
 # llm-wiki
 
-`llm-wiki` is an FS-first wiki for coding agents.
-It keeps remote nodes in an IC canister and exposes the same VFS through a CLI, shared client library, and validation workflows.
+`llm-wiki` is an FS-first wiki and memory interface for coding agents.
+It keeps remote nodes in an IC canister and exposes the same VFS through canister queries, a CLI, shared client library, and validation workflows.
 
 ## Architecture
 
@@ -19,12 +19,15 @@ Detailed structure map:
 - Source of truth: remote `/Wiki/...` and `/Sources/...` nodes
 - Conflict control: file-level `etag`
 - Search: SQLite FTS on current node content
+- Agent memory: task-scoped context, provenance, and local graph queries
 
 ## What Exists Today
 
 - FS-first remote node API backed by the IC
 - Rust CLI for direct path-based operations and sync flows
 - Search, snapshot export, and delta sync
+- Link graph and node-context queries for wiki navigation
+- Agent Memory API v1 for canister-backed long-term context reads
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -73,12 +76,14 @@ Use `--local` to target the local replica. Otherwise the default host is `https:
 ### CLI
 
 Use `vfs-cli` when working from a shell or script.
+See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
 
 Main commands:
 
 - `rebuild-index`
 - `rebuild-scope-index`
 - `read-node`
+- `read-node-context`
 - `list-nodes`
 - `write-node`
 - `append-node`
@@ -89,6 +94,10 @@ Main commands:
 - `move-node`
 - `glob-nodes`
 - `recent-nodes`
+- `graph-neighborhood`
+- `graph-links`
+- `incoming-links`
+- `outgoing-links`
 - `multi-edit-node`
 - `search-remote`
 - `search-path-remote`
@@ -133,6 +142,7 @@ async fn run() -> Result<()> {
 Current tool names:
 
 - `read`
+- `read_context`
 - `write`
 - `append`
 - `edit`
@@ -141,10 +151,34 @@ Current tool names:
 - `mv`
 - `glob`
 - `recent`
+- `graph_neighborhood`
+- `graph_links`
+- `incoming_links`
+- `outgoing_links`
 - `multi_edit`
 - `rm`
 - `search`
 - `search_paths`
+
+### Canister Agent Memory API
+
+Use the read-only Agent Memory API when an agent talks directly to the canister rather than through CLI commands.
+
+Primary methods:
+
+- `memory_manifest`: discover roots, capabilities, limits, and memory API policy
+- `query_context`: primary task-scoped context bundle with search hits, canonical pages, local graph, and optional evidence
+- `source_evidence`: source-path evidence lookup for a known wiki node
+
+Auxiliary methods:
+
+- `read_node_context`
+- `search_nodes`
+- `search_node_paths`
+- `graph_neighborhood`
+- `recent_nodes`
+
+`recent_changes` and `memory_summary` are not part of v1. Use `recent_nodes` for recent live nodes, and use `query_context` with a summary-style task for maintained overview context.
 
 ## Validation
 

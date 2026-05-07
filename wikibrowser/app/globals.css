@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f6f1e8;
+  color: #1f2933;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.7), transparent 32rem),
+    linear-gradient(135deg, #f6f1e8 0%, #fbf8f0 52%, #efe7d8 100%);
+  color: #1f2933;
+}
+
+a {
+  color: #1f6feb;
+}
+
+pre,
+code {
+  font-family: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.markdown-body {
+  line-height: 1.68;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  color: #18212f;
+  font-weight: 700;
+  line-height: 1.18;
+}
+
+.markdown-body h1 {
+  font-size: 2.1rem;
+  letter-spacing: -0.04em;
+}
+
+.markdown-body h2 {
+  margin-top: 2rem;
+  font-size: 1.35rem;
+}
+
+.markdown-body h3 {
+  margin-top: 1.5rem;
+  font-size: 1.05rem;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre {
+  margin-top: 1rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.4rem;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border: 1px solid #ded7cb;
+  border-radius: 0.75rem;
+  background: #f7f3ea;
+  padding: 1rem;
+}
+
+.markdown-body code {
+  border-radius: 0.3rem;
+  background: #f0eadf;
+  padding: 0.1rem 0.28rem;
+  font-size: 0.88em;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}

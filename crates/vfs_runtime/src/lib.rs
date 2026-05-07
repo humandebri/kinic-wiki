@@ -5,12 +5,15 @@ use std::path::PathBuf;
 
 use vfs_store::FsStore;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
-    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
+    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 pub struct VfsService {
@@ -38,6 +41,10 @@ impl VfsService {
 
     pub fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>, String> {
         self.fs_store.list_nodes(request)
+    }
+
+    pub fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
+        self.fs_store.list_children(request)
     }
 
     pub fn write_node(
@@ -82,6 +89,43 @@ impl VfsService {
 
     pub fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
         self.fs_store.recent_nodes(request)
+    }
+
+    pub fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.incoming_links(request)
+    }
+
+    pub fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.outgoing_links(request)
+    }
+
+    pub fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.graph_links(request)
+    }
+
+    pub fn graph_neighborhood(
+        &self,
+        request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>, String> {
+        self.fs_store.graph_neighborhood(request)
+    }
+
+    pub fn read_node_context(
+        &self,
+        request: NodeContextRequest,
+    ) -> Result<Option<NodeContext>, String> {
+        self.fs_store.read_node_context(request)
+    }
+
+    pub fn query_context(&self, request: QueryContextRequest) -> Result<QueryContext, String> {
+        self.fs_store.query_context(request)
+    }
+
+    pub fn source_evidence(
+        &self,
+        request: SourceEvidenceRequest,
+    ) -> Result<SourceEvidence, String> {
+        self.fs_store.source_evidence(request)
     }
 
     pub fn multi_edit_node(

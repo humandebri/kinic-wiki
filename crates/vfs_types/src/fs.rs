@@ -42,11 +42,28 @@ pub struct ListNodesRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct ListChildrenRequest {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct NodeEntry {
     pub path: String,
     pub kind: NodeEntryKind,
     pub updated_at: i64,
     pub etag: String,
+    pub has_children: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct ChildNode {
+    pub path: String,
+    pub name: String,
+    pub kind: NodeEntryKind,
+    pub updated_at: Option<i64>,
+    pub etag: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub is_virtual: bool,
     pub has_children: bool,
 }
 
@@ -164,6 +181,54 @@ pub struct RecentNodeHit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct IncomingLinksRequest {
+    pub path: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OutgoingLinksRequest {
+    pub path: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GraphLinksRequest {
+    pub prefix: String,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct GraphNeighborhoodRequest {
+    pub center_path: String,
+    pub depth: u32,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct LinkEdge {
+    pub source_path: String,
+    pub target_path: String,
+    pub raw_href: String,
+    pub link_text: String,
+    pub link_kind: String,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeContextRequest {
+    pub path: String,
+    pub link_limit: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct NodeContext {
+    pub node: Node,
+    pub incoming_links: Vec<LinkEdge>,
+    pub outgoing_links: Vec<LinkEdge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MultiEdit {
     pub old_text: String,
     pub new_text: String,
@@ -207,6 +272,8 @@ pub struct SearchNodePathsRequest {
     pub query_text: String,
     pub prefix: Option<String>,
     pub top_k: u32,
+    #[serde(default)]
+    pub preview_mode: Option<SearchPreviewMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
@@ -227,6 +294,8 @@ pub enum SearchPreviewMode {
     None,
     #[serde(alias = "Light")]
     Light,
+    #[serde(alias = "ContentStart")]
+    ContentStart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -278,4 +347,77 @@ pub struct FetchUpdatesResponse {
     pub changed_nodes: Vec<Node>,
     pub removed_paths: Vec<String>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryRoot {
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryCapability {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct CanonicalRole {
+    pub name: String,
+    pub path_pattern: String,
+    pub purpose: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct MemoryManifest {
+    pub api_version: String,
+    pub purpose: String,
+    pub roots: Vec<MemoryRoot>,
+    pub capabilities: Vec<MemoryCapability>,
+    pub canonical_roles: Vec<CanonicalRole>,
+    pub write_policy: String,
+    pub recommended_entrypoint: String,
+    pub max_depth: u32,
+    pub max_query_limit: u32,
+    pub budget_unit: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct QueryContextRequest {
+    pub task: String,
+    pub entities: Vec<String>,
+    pub namespace: Option<String>,
+    pub budget_tokens: u32,
+    pub include_evidence: bool,
+    pub depth: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
+pub struct QueryContext {
+    pub namespace: String,
+    pub task: String,
+    pub search_hits: Vec<SearchNodeHit>,
+    pub nodes: Vec<NodeContext>,
+    pub graph_links: Vec<LinkEdge>,
+    pub evidence: Vec<SourceEvidence>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidenceRequest {
+    pub node_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidenceRef {
+    pub source_path: String,
+    pub via_path: String,
+    pub raw_href: String,
+    pub link_text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct SourceEvidence {
+    pub node_path: String,
+    pub refs: Vec<SourceEvidenceRef>,
 }

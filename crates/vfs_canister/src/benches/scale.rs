@@ -138,6 +138,7 @@ fn emit_metadata(case: BenchCase, metrics: &SnapshotMetrics) {
         match case.preview_mode {
             SearchPreviewMode::None => "none",
             SearchPreviewMode::Light => "light",
+            SearchPreviewMode::ContentStart => "content_start",
         },
         case.n,
         case.n,

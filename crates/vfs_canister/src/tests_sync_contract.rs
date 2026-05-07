@@ -73,6 +73,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
         query_text: "PROJECT-beta".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 10,
+        preview_mode: None,
     })
     .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -262,12 +263,50 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             "mkdir_node request type must stay nominal in the public interface",
         );
         assert!(
-            did.contains("mkdir_node : (MkdirNodeRequest) -> (Result_7) query;"),
+            did.contains("type ListChildrenRequest = record { path : text };"),
+            "list_children request type must stay nominal in the public interface",
+        );
+        assert!(
+            did.contains("has_children : bool;"),
+            "ChildNode must expose descendant state",
+        );
+        assert!(
+            has_query_method_input(did, "list_children", "ListChildrenRequest"),
+            "list_children must consume ListChildrenRequest at the interface boundary",
+        );
+        assert!(
+            has_query_method_input(did, "mkdir_node", "MkdirNodeRequest"),
             "mkdir_node must consume MkdirNodeRequest at the interface boundary",
         );
         assert!(
-            !did.contains("mkdir_node : (DeleteNodeResult) -> (Result_7) query;"),
+            has_query_method_input(did, "outgoing_links", "OutgoingLinksRequest"),
+            "outgoing_links must consume OutgoingLinksRequest at the interface boundary",
+        );
+        assert!(
+            !has_query_method_input(did, "list_children", "DeleteNodeResult"),
+            "list_children must not collapse to DeleteNodeResult",
+        );
+        assert!(
+            !has_query_method_input(did, "mkdir_node", "DeleteNodeResult"),
             "mkdir_node must not collapse to DeleteNodeResult",
         );
+        assert!(
+            !has_query_method_input(did, "outgoing_links", "IncomingLinksRequest"),
+            "outgoing_links must not collapse to IncomingLinksRequest",
+        );
+        assert!(
+            !did.contains("recent_changes :"),
+            "recent_changes should not be part of agent memory v1",
+        );
+        assert!(
+            !did.contains("memory_summary :"),
+            "memory_summary should not be part of agent memory v1",
+        );
     }
+}
+
+fn has_query_method_input(did: &str, method: &str, input: &str) -> bool {
+    let prefix = format!("  {method} : ({input}) -> (");
+    did.lines()
+        .any(|line| line.starts_with(&prefix) && line.ends_with(" query;"))
 }

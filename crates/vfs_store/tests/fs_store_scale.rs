@@ -223,6 +223,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
             query_text: "TOPIC-000".to_string(),
             prefix: Some("/Wiki/projects/alpha".to_string()),
             top_k: 100,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     assert!(
@@ -259,6 +260,7 @@ fn path_search_smoke_reports_latency_and_hits() {
                 query_text: query_text.to_string(),
                 prefix: Some("/Wiki/bench".to_string()),
                 top_k: 20,
+                preview_mode: None,
             })
             .expect("path search smoke should succeed");
         let elapsed_us = started_at.elapsed().as_micros();

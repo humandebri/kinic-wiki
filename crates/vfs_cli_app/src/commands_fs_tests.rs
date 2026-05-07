@@ -25,6 +25,7 @@ pub(crate) struct MockClient {
     pub(crate) search_hits: Vec<SearchNodeHit>,
     pub(crate) delete_fail_paths: HashSet<String>,
     pub(crate) lists: std::sync::Mutex<Vec<ListNodesRequest>>,
+    pub(crate) child_lists: std::sync::Mutex<Vec<vfs_types::ListChildrenRequest>>,
     pub(crate) writes: std::sync::Mutex<Vec<WriteNodeRequest>>,
     pub(crate) appends: std::sync::Mutex<Vec<AppendNodeRequest>>,
     pub(crate) edits: std::sync::Mutex<Vec<EditNodeRequest>>,
@@ -34,6 +35,7 @@ pub(crate) struct MockClient {
     pub(crate) globs: std::sync::Mutex<Vec<GlobNodesRequest>>,
     pub(crate) recents: std::sync::Mutex<Vec<RecentNodesRequest>>,
     pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
+    pub(crate) searches: std::sync::Mutex<Vec<SearchNodesRequest>>,
     pub(crate) path_searches: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
 }
 
@@ -89,6 +91,17 @@ impl VfsApi for MockClient {
             });
         }
         Ok(entries)
+    }
+
+    async fn list_children(
+        &self,
+        request: vfs_types::ListChildrenRequest,
+    ) -> Result<Vec<vfs_types::ChildNode>> {
+        self.child_lists
+            .lock()
+            .expect("child lists should lock")
+            .push(request);
+        Ok(Vec::new())
     }
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
@@ -223,7 +236,11 @@ impl VfsApi for MockClient {
         })
     }
 
-    async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+    async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+        self.searches
+            .lock()
+            .expect("searches should lock")
+            .push(request);
         Ok(self.search_hits.clone())
     }
 
@@ -269,6 +286,12 @@ impl VfsApi for SnapshotRestartClient {
         unreachable!()
     }
     async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        unreachable!()
+    }
+    async fn list_children(
+        &self,
+        _request: vfs_types::ListChildrenRequest,
+    ) -> Result<Vec<vfs_types::ChildNode>> {
         unreachable!()
     }
     async fn write_node(&self, _request: WriteNodeRequest) -> Result<WriteNodeResult> {

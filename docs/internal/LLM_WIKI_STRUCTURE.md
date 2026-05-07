@@ -2,9 +2,9 @@
 
 ## 1. 要約
 
-`llm-wiki` は「IC canister 上の VFS を正本にした wiki 基盤」。
+`llm-wiki` は「IC canister 上の VFS を正本にした wiki / agent memory 基盤」。
 現行の主軸は Rust workspace 8 crate と、検証・運用・Obsidian 連携補助で構成される。
-現在の中心概念は `/Wiki/...` と `/Sources/...` を同一 VFS 上で扱う FS-first 構成。
+現在の中心概念は `/Wiki/...` と `/Sources/...` を同一 VFS 上で扱う FS-first 構成と、agent が読むための task-scoped memory query。
 
 ## 2. 全体像
 
@@ -62,7 +62,7 @@ flowchart LR
 ### 5.1 `vfs_types`
 
 - 全層共通の request / response / node 型を保持
-- `Status` を含む公開 API 契約面
+- `Status`、VFS query/update、Agent Memory API v1 を含む公開 API 契約面
 - wiki 固有ロジックを持たない
 
 ### 5.2 `wiki_domain`
@@ -74,7 +74,7 @@ flowchart LR
 ### 5.3 `vfs_store`
 
 - SQLite 正本層
-- CRUD、move、append、multi edit、glob、recent、FTS search、snapshot export、delta sync を集約
+- CRUD、move、append、multi edit、glob、recent、FTS search、link graph、node context、Agent Memory query、snapshot export、delta sync を集約
 - `schema.rs` で versioned migration を適用
 - `fs_change_log` と `fs_path_state` により sync 差分を計算
 - FTS preview 生成は ranking と分離して性能劣化を抑制
@@ -83,6 +83,7 @@ flowchart LR
 
 - `fs_store.rs`: 永続化 API 本体
 - `fs_search.rs`: FTS 検索計画、候補再ランク
+- `fs_links.rs`: Markdown link / wikilink index と graph query
 - `schema.rs`: migration 管理
 - `glob_match.rs`: glob 判定
 - `hashing.rs`: etag 用ハッシュ補助
@@ -104,10 +105,13 @@ flowchart LR
 公開メソッド群:
 
 - `status`
+- `canister_health`
 - `read_node`, `list_nodes`
 - `write_node`, `append_node`, `edit_node`, `delete_node`, `move_node`
 - `mkdir_node`, `glob_nodes`, `recent_nodes`, `multi_edit_node`
 - `search_nodes`, `search_node_paths`
+- `read_node_context`, `incoming_links`, `outgoing_links`, `graph_links`, `graph_neighborhood`
+- `memory_manifest`, `query_context`, `source_evidence`
 - `export_snapshot`, `fetch_updates`
 
 ### 5.6 `vfs_client`
@@ -115,6 +119,7 @@ flowchart LR
 - `ic-agent` を使う Rust client
 - query / update の Candid encode/decode を共通化
 - CLI と library embedding の共通 transport
+- Agent Memory API v1 の direct canister query method も提供
 
 ### 5.7 `vfs_cli_core`
 

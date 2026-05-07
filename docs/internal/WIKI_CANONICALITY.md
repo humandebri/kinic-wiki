@@ -1,49 +1,71 @@
 # Wiki Canonicality Policy
 
-この文書は、この repo の current wiki schema を定義する repo-local policy。
+This document defines the current repo-local wiki schema.
 
-- skill には一般原則だけ置く
-- current note 名と責務はここに置く
-- schema が変わったら、この文書を正本として更新する
+- Keep general principles in skills.
+- Keep current note names and responsibilities here.
+- When the schema changes, update this document as the source of truth.
 
 ## Current Principles
 
-- `/Sources/raw/...` が原資料正本
-- `/Wiki/...` は整理済み知識面
-- raw transcript を `/Wiki/...` の正本として重複保持しない
-- exact evidence と recap を混ぜない
-- unresolved state を settled fact として昇格しない
-- old value と new value がある場合、current value を `facts.md` で明示する
+- `/Sources/raw/...` is the canonical raw source layer.
+- `/Wiki/...` is the organized knowledge layer.
+- Do not duplicate raw transcripts into `/Wiki/...` as canonical wiki content.
+- Do not mix exact evidence with recap.
+- Do not promote unresolved state into settled facts.
+- When old and new values both exist, state the current value explicitly in `facts.md`.
 
 ## Current Note Roles
 
+- Scope-level pages:
+  - `index.md`
+    - content-oriented catalog
+    - List the scope entry points, key pages, categories, and child pages with short descriptions.
+    - Do not pack the full overview or detailed body text into the index.
+  - `overview.md`
+    - corpus-level synthesis
+    - Capture the scope purpose, structure, main themes, gaps, and reading path.
+    - Do not make this the canonical source for exact evidence or stable facts.
+  - `log.md`
+    - append-only chronological mutation log
+    - Append ingest, restructure, lint, and query-derived update entries.
+    - Do not rewrite existing entries.
+  - `schema.md`
+    - scope-local conventions
+    - Capture operational rules for raw, wiki, topic, summary, and log pages.
+  - `topics/*.md`
+    - category-level or topic-level synthesis
+    - Connect multiple sources or child summaries.
+    - Do not use topic pages as raw transcript copies.
+
+- Child-level pages:
 - `facts.md`
-  - 確定した stable fact と stable attribute
-  - exact fact、current value、selected option、stable relationship / duration を置く
-  - topic-only mention、曖昧情報、未解決事項、future / pending、chronology-only event、recap prose は置かない
+  - Settled stable facts and stable attributes.
+  - Store exact facts, current values, selected options, and stable relationships or durations.
+  - Do not store topic-only mentions, ambiguous information, unresolved items, future or pending items, chronology-only events, or recap prose.
 - `events.md`
-  - 起きた事実の時系列
-  - completed event と dated event だけを置く
-  - 解釈や要約、future / pending は置かない
+  - Chronology of events that happened.
+  - Store only completed events and dated events.
+  - Do not store interpretation, summary, future, or pending items.
 - `plans.md`
-  - future / pending、予定、意図、次アクション
-  - scope 固有の明示指示、一時的な制約、運用方針
+  - Future or pending items, plans, intentions, and next actions.
+  - Scope-specific explicit instructions, temporary constraints, and operational policies.
 - `preferences.md`
-  - 嗜好、判断基準、選好
+  - Preferences, decision criteria, and choices.
 - `open_questions.md`
-  - 未解決事項、要確認事項、競合情報
+  - Unresolved items, questions to verify, and conflicting information.
 - `summary.md`
-  - 人間向け recap
-  - exact evidence source にしない
-  - stable fact の正本にしない
+  - Human-facing recap.
+  - Do not use as the exact evidence source.
+  - Do not use as the canonical stable fact source.
 - `provenance.md`
-  - raw source id / path / import metadata / 参照位置
+  - Raw source id, path, import metadata, and reference locations.
 
 ## Current Anti-Rules
 
-- `facts.md` に topic-only line を入れない
-- `facts.md` に future / pending、chronology-only event、recap prose を入れない
-- `facts.md` に old value だけを置いて current value を欠落させない
-- `summary.md` に exact fact、causal claim、resolution claim を入れない
-- unresolved contradiction を settled note に入れない
-- raw transcript を `/Wiki/...` に正本として複製しない
+- Do not put topic-only lines in `facts.md`.
+- Do not put future or pending items, chronology-only events, or recap prose in `facts.md`.
+- Do not leave only old values in `facts.md` while omitting the current value.
+- Do not put exact facts, causal claims, or resolution claims in `summary.md`.
+- Do not put unresolved contradictions in settled notes.
+- Do not duplicate raw transcripts into `/Wiki/...` as canonical content.

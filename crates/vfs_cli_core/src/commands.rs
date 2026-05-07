@@ -8,8 +8,10 @@ use vfs_client::VfsApi;
 use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
-    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest,
-    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
+    ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
+    MultiEditNodeRequest, NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest,
+    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
 
 use crate::cli::VfsCommand;
@@ -46,6 +48,21 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             } else {
                 for entry in entries {
                     println!("{}\t{:?}\t{}", entry.path, entry.kind, entry.etag);
+                }
+            }
+        }
+        VfsCommand::ListChildren { path, json } => {
+            let children = client.list_children(ListChildrenRequest { path }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&children)?);
+            } else {
+                for child in children {
+                    println!(
+                        "{}\t{:?}\t{}",
+                        child.path,
+                        child.kind,
+                        child.etag.unwrap_or_default()
+                    );
                 }
             }
         }
@@ -220,6 +237,60 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
                 }
             }
         }
+        VfsCommand::ReadNodeContext {
+            path,
+            link_limit,
+            json,
+        } => {
+            let context = client
+                .read_node_context(NodeContextRequest { path, link_limit })
+                .await?
+                .ok_or_else(|| anyhow!("node not found"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&context)?);
+            } else {
+                println!("{}", context.node.content);
+                print_link_summary("incoming", &context.incoming_links);
+                print_link_summary("outgoing", &context.outgoing_links);
+            }
+        }
+        VfsCommand::GraphNeighborhood {
+            center_path,
+            depth,
+            limit,
+            json,
+        } => {
+            let links = client
+                .graph_neighborhood(GraphNeighborhoodRequest {
+                    center_path,
+                    depth,
+                    limit,
+                })
+                .await?;
+            print_links(links, json)?;
+        }
+        VfsCommand::GraphLinks {
+            prefix,
+            limit,
+            json,
+        } => {
+            let links = client
+                .graph_links(GraphLinksRequest { prefix, limit })
+                .await?;
+            print_links(links, json)?;
+        }
+        VfsCommand::IncomingLinks { path, limit, json } => {
+            let links = client
+                .incoming_links(IncomingLinksRequest { path, limit })
+                .await?;
+            print_links(links, json)?;
+        }
+        VfsCommand::OutgoingLinks { path, limit, json } => {
+            let links = client
+                .outgoing_links(OutgoingLinksRequest { path, limit })
+                .await?;
+            print_links(links, json)?;
+        }
         VfsCommand::MultiEditNode {
             path,
             edits_file,
@@ -244,6 +315,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             query_text,
             prefix,
             top_k,
+            preview_mode,
             json,
         } => {
             let hits = client
@@ -251,7 +323,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
                     query_text,
                     prefix: Some(prefix),
                     top_k,
-                    preview_mode: None,
+                    preview_mode: preview_mode.map(|mode| mode.to_search_preview_mode()),
                 })
                 .await?;
             if json {
@@ -272,6 +344,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             query_text,
             prefix,
             top_k,
+            preview_mode,
             json,
         } => {
             let hits = client
@@ -279,6 +352,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
                     query_text,
                     prefix: Some(prefix),
                     top_k,
+                    preview_mode: preview_mode.map(|mode| mode.to_search_preview_mode()),
                 })
                 .await?;
             if json {
@@ -291,6 +365,30 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         }
     }
     Ok(())
+}
+
+fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&links)?);
+    } else {
+        for link in links {
+            println!(
+                "{}\t{}\t{}\t{}",
+                link.source_path, link.target_path, link.link_kind, link.link_text
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_link_summary(label: &str, links: &[LinkEdge]) {
+    println!("{label}\t{}", links.len());
+    for link in links {
+        println!(
+            "{label}\t{}\t{}\t{}\t{}",
+            link.source_path, link.target_path, link.link_kind, link.link_text
+        );
+    }
 }
 
 pub async fn collect_paged_snapshot(
@@ -428,6 +526,9 @@ mod tests {
     #[derive(Default)]
     struct MockClient {
         writes: Mutex<Vec<WriteNodeRequest>>,
+        child_lists: Mutex<Vec<ListChildrenRequest>>,
+        contexts: Mutex<Vec<NodeContextRequest>>,
+        neighborhoods: Mutex<Vec<GraphNeighborhoodRequest>>,
     }
 
     #[async_trait]
@@ -438,8 +539,40 @@ mod tests {
         async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
             Ok(None)
         }
+        async fn read_node_context(
+            &self,
+            request: NodeContextRequest,
+        ) -> Result<Option<NodeContext>> {
+            self.contexts.lock().unwrap().push(request.clone());
+            Ok(Some(NodeContext {
+                node: Node {
+                    path: request.path,
+                    kind: NodeKind::File,
+                    content: "body".to_string(),
+                    created_at: 1,
+                    updated_at: 2,
+                    etag: "etag".to_string(),
+                    metadata_json: "{}".to_string(),
+                },
+                incoming_links: Vec::new(),
+                outgoing_links: Vec::new(),
+            }))
+        }
         async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
             Ok(Vec::new())
+        }
+        async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
+            self.child_lists.lock().unwrap().push(request);
+            Ok(vec![ChildNode {
+                path: "/Wiki/alpha.md".to_string(),
+                name: "alpha.md".to_string(),
+                kind: NodeEntryKind::File,
+                updated_at: Some(10),
+                etag: Some("etag".to_string()),
+                size_bytes: Some(5),
+                is_virtual: false,
+                has_children: false,
+            }])
         }
         async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
             self.writes.lock().unwrap().push(request.clone());
@@ -473,6 +606,13 @@ mod tests {
         }
         async fn recent_nodes(&self, _request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
             unreachable!()
+        }
+        async fn graph_neighborhood(
+            &self,
+            request: GraphNeighborhoodRequest,
+        ) -> Result<Vec<LinkEdge>> {
+            self.neighborhoods.lock().unwrap().push(request);
+            Ok(Vec::new())
         }
         async fn multi_edit_node(
             &self,
@@ -523,5 +663,58 @@ mod tests {
         .await
         .expect("write should succeed");
         assert_eq!(client.writes.lock().unwrap()[0].kind, NodeKind::Source);
+    }
+
+    #[tokio::test]
+    async fn list_children_sends_path_request() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            VfsCommand::ListChildren {
+                path: "/Wiki".to_string(),
+                json: true,
+            },
+        )
+        .await
+        .expect("list children should succeed");
+        assert_eq!(client.child_lists.lock().unwrap()[0].path, "/Wiki");
+    }
+
+    #[tokio::test]
+    async fn read_node_context_sends_link_limit_request() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            VfsCommand::ReadNodeContext {
+                path: "/Wiki/a.md".to_string(),
+                link_limit: 7,
+                json: true,
+            },
+        )
+        .await
+        .expect("read context should succeed");
+        let contexts = client.contexts.lock().unwrap();
+        assert_eq!(contexts[0].path, "/Wiki/a.md");
+        assert_eq!(contexts[0].link_limit, 7);
+    }
+
+    #[tokio::test]
+    async fn graph_neighborhood_sends_depth_request() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            VfsCommand::GraphNeighborhood {
+                center_path: "/Wiki/a.md".to_string(),
+                depth: 2,
+                limit: 9,
+                json: true,
+            },
+        )
+        .await
+        .expect("graph neighborhood should succeed");
+        let neighborhoods = client.neighborhoods.lock().unwrap();
+        assert_eq!(neighborhoods[0].center_path, "/Wiki/a.md");
+        assert_eq!(neighborhoods[0].depth, 2);
+        assert_eq!(neighborhoods[0].limit, 9);
     }
 }

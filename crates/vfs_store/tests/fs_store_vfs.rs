@@ -2,9 +2,11 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
-    AppendNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest, ListNodesRequest,
-    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeEntryKind, NodeKind,
-    RecentNodesRequest, SearchNodePathsRequest, SearchPreviewMode,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodeType, GlobNodesRequest,
+    GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, ListNodesRequest,
+    MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
+    NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
+    SearchNodePathsRequest, SearchPreviewMode, SourceEvidenceRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -121,6 +123,591 @@ fn append_node_preserves_existing_kind_and_metadata() {
     assert_eq!(current.kind, NodeKind::Source);
     assert_eq!(current.metadata_json, "{\"v\":1}");
     assert_eq!(current.content, "alpha\nbeta");
+}
+
+#[test]
+fn link_index_tracks_write_edit_append_delete_and_move() {
+    let (_dir, store) = new_store();
+
+    let created = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/topic/source.md".to_string(),
+                content: "[Alpha](../alpha.md \"Alpha title\") [Paren](../paren.md (Paren title)) [After](../after.md) [[/Wiki/beta.md]] [[Project \"Alpha\".md]] [[Project (Alpha).md]] [External](https://example.com) [Custom](web+foo:bar) [Git](git+ssh://example/repo) [Urn](urn:isbn:123) [Anchor](#top)".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("append create should succeed");
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/alpha.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/alpha.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")[0]
+            .raw_href,
+        "../alpha.md \"Alpha title\""
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/paren.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")[0]
+            .raw_href,
+        "../paren.md (Paren title)"
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/after.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/topic/Project \"Alpha\".md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/topic/Project (Alpha).md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .outgoing_links(OutgoingLinksRequest {
+                path: "/Wiki/topic/source.md".to_string(),
+                limit: 10,
+            })
+            .expect("outgoing should load")
+            .len(),
+        6
+    );
+
+    let edited = store
+        .edit_node(
+            EditNodeRequest {
+                path: "/Wiki/topic/source.md".to_string(),
+                old_text: "../alpha.md \"Alpha title\"".to_string(),
+                new_text: "../gamma.md?view=raw#section \"Gamma title\"".to_string(),
+                expected_etag: Some(created.node.etag.clone()),
+                replace_all: false,
+            },
+            11,
+        )
+        .expect("edit should succeed");
+    assert!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/alpha.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/gamma.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")[0]
+            .raw_href,
+        "../gamma.md?view=raw#section \"Gamma title\""
+    );
+
+    let appended = store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/topic/source.md".to_string(),
+                content: "[Delta](./delta.md)".to_string(),
+                expected_etag: Some(edited.node.etag.clone()),
+                separator: Some("\n".to_string()),
+                metadata_json: None,
+                kind: None,
+            },
+            12,
+        )
+        .expect("append update should succeed");
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/topic/delta.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .len(),
+        1
+    );
+
+    let moved = store
+        .move_node(
+            MoveNodeRequest {
+                from_path: "/Wiki/topic/source.md".to_string(),
+                to_path: "/Wiki/moved/source.md".to_string(),
+                expected_etag: Some(appended.node.etag.clone()),
+                overwrite: false,
+            },
+            13,
+        )
+        .expect("move should succeed");
+    assert!(
+        store
+            .outgoing_links(OutgoingLinksRequest {
+                path: "/Wiki/topic/source.md".to_string(),
+                limit: 10,
+            })
+            .expect("outgoing should load")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/gamma.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")[0]
+            .source_path,
+        "/Wiki/moved/source.md"
+    );
+
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                path: "/Wiki/moved/source.md".to_string(),
+                expected_etag: Some(moved.node.etag),
+            },
+            14,
+        )
+        .expect("delete should succeed");
+    assert!(
+        store
+            .incoming_links(IncomingLinksRequest {
+                path: "/Wiki/gamma.md".to_string(),
+                limit: 10,
+            })
+            .expect("incoming should load")
+            .is_empty()
+    );
+}
+
+#[test]
+fn graph_links_respects_prefix_and_limit() {
+    let (_dir, store) = new_store();
+    for index in 0..3 {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: format!("/Wiki/scope/source-{index}.md"),
+                    content: format!("[Target](/Wiki/target-{index}.md)"),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: None,
+                },
+                10 + index,
+            )
+            .expect("append create should succeed");
+    }
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/other/source.md".to_string(),
+                content: "[Target](/Wiki/other-target.md)".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            20,
+        )
+        .expect("append create should succeed");
+
+    let graph = store
+        .graph_links(GraphLinksRequest {
+            prefix: "/Wiki/scope".to_string(),
+            limit: 2,
+        })
+        .expect("graph should load");
+    assert_eq!(graph.len(), 2);
+    assert!(
+        graph
+            .iter()
+            .all(|edge| edge.source_path.starts_with("/Wiki/scope/"))
+    );
+}
+
+#[test]
+fn node_context_returns_node_and_indexed_links() {
+    let (_dir, store) = new_store();
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/a.md".to_string(),
+                content: "[B](/Wiki/b.md)".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("a write should succeed");
+    store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/c.md".to_string(),
+                content: "[A](/Wiki/a.md)".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("c write should succeed");
+
+    let context = store
+        .read_node_context(NodeContextRequest {
+            path: "/Wiki/a.md".to_string(),
+            link_limit: 10,
+        })
+        .expect("context should load")
+        .expect("node should exist");
+    assert_eq!(context.node.path, "/Wiki/a.md");
+    assert_eq!(context.outgoing_links[0].target_path, "/Wiki/b.md");
+    assert_eq!(context.incoming_links[0].source_path, "/Wiki/c.md");
+
+    let invalid_path = store
+        .read_node_context(NodeContextRequest {
+            path: "Wiki/a.md".to_string(),
+            link_limit: 10,
+        })
+        .expect_err("non-absolute path should fail");
+    assert!(invalid_path.contains("start with"));
+
+    let missing = store
+        .read_node_context(NodeContextRequest {
+            path: "/Wiki/missing.md".to_string(),
+            link_limit: 10,
+        })
+        .expect("missing context should load");
+    assert!(missing.is_none());
+}
+
+#[test]
+fn memory_queries_return_context_and_scope_evidence() {
+    let (_dir, store) = new_store();
+    for (path, content, now) in [
+        (
+            "/Wiki/scope/index.md",
+            "# Index\n\n- [Overview](overview.md)\n- [Alpha](alpha.md)",
+            10,
+        ),
+        (
+            "/Wiki/scope/overview.md",
+            "# Overview\n\nalpha synthesis [Raw](/Sources/raw/a/a.md)",
+            11,
+        ),
+        ("/Wiki/scope/schema.md", "# Schema\n\nread-only", 12),
+        (
+            "/Wiki/scope/provenance.md",
+            "# Provenance\n\n[Raw](/Sources/raw/a/a.md)",
+            13,
+        ),
+        (
+            "/Wiki/scope/alpha.md",
+            "# Alpha\n\nbeam full reset detail [Raw](/Sources/raw/a/a.md)",
+            14,
+        ),
+        ("/Wiki/scope/topics/foo.md", "# Foo\n\ntopic detail", 15),
+        ("/Sources/raw/a/a.md", "raw source", 16),
+    ] {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: Some(if path.starts_with("/Sources/") {
+                        NodeKind::Source
+                    } else {
+                        NodeKind::File
+                    }),
+                },
+                now,
+            )
+            .expect("node write should succeed");
+    }
+
+    let context = store
+        .query_context(QueryContextRequest {
+            task: "beam reset".to_string(),
+            entities: vec!["alpha".to_string()],
+            namespace: Some("/Wiki/scope".to_string()),
+            budget_tokens: 1_000,
+            include_evidence: true,
+            depth: 1,
+        })
+        .expect("context should load");
+    assert_eq!(context.namespace, "/Wiki/scope");
+    assert!(
+        context
+            .nodes
+            .iter()
+            .any(|node| node.node.path == "/Wiki/scope/alpha.md")
+    );
+    assert!(!context.search_hits.is_empty());
+    assert!(!context.graph_links.is_empty());
+    assert!(context.evidence.iter().any(|evidence| {
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    }));
+
+    let evidence = store
+        .source_evidence(SourceEvidenceRequest {
+            node_path: "/Wiki/scope/overview.md".to_string(),
+        })
+        .expect("evidence should load");
+    assert_eq!(evidence.node_path, "/Wiki/scope/overview.md");
+    assert!(
+        evidence
+            .refs
+            .iter()
+            .any(|item| item.source_path == "/Sources/raw/a/a.md")
+    );
+
+    let topic_evidence = store
+        .source_evidence(SourceEvidenceRequest {
+            node_path: "/Wiki/scope/topics/foo.md".to_string(),
+        })
+        .expect("topic evidence should load");
+    assert!(topic_evidence.refs.iter().any(|item| {
+        item.via_path == "/Wiki/scope/provenance.md" && item.source_path == "/Sources/raw/a/a.md"
+    }));
+
+    let small_context = store
+        .query_context(QueryContextRequest {
+            task: "summary".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/scope".to_string()),
+            budget_tokens: 1,
+            include_evidence: true,
+            depth: 1,
+        })
+        .expect("small context should load");
+    assert!(small_context.truncated);
+
+    let invalid_depth = store.query_context(QueryContextRequest {
+        task: "beam".to_string(),
+        entities: Vec::new(),
+        namespace: Some("/Wiki/scope".to_string()),
+        budget_tokens: 1_000,
+        include_evidence: false,
+        depth: 3,
+    });
+    assert_eq!(
+        invalid_depth.expect_err("invalid depth should fail"),
+        "depth must be 0, 1, or 2"
+    );
+}
+
+#[test]
+fn query_context_trims_search_hits_and_preserves_candidate_order() {
+    let (_dir, store) = new_store();
+    for (path, content, now) in [
+        ("/Wiki/order/index.md", "# Index", 10),
+        ("/Wiki/order/overview.md", "# Overview", 11),
+        ("/Wiki/order/schema.md", "# Schema", 12),
+        ("/Wiki/order/aaa.md", "# Aaa\n\nneedle alpha detail", 13),
+        ("/Wiki/order/zzz.md", "# Zzz\n\nneedle zeta detail", 14),
+    ] {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: Some(NodeKind::File),
+                },
+                now,
+            )
+            .expect("node write should succeed");
+    }
+
+    let ordered = store
+        .query_context(QueryContextRequest {
+            task: "needle".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/order".to_string()),
+            budget_tokens: 1_000,
+            include_evidence: false,
+            depth: 0,
+        })
+        .expect("context should load");
+    let ordered_paths = ordered
+        .nodes
+        .iter()
+        .map(|context| context.node.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &ordered_paths[..3],
+        [
+            "/Wiki/order/index.md",
+            "/Wiki/order/overview.md",
+            "/Wiki/order/schema.md",
+        ]
+    );
+    assert!(ordered_paths.contains(&"/Wiki/order/aaa.md"));
+
+    let (_dir, budget_store) = new_store();
+    budget_store
+        .append_node(
+            AppendNodeRequest {
+                path: "/Wiki/budget/long.md".to_string(),
+                content: "# Long\n\nneedle detail that cannot fit in a one token budget"
+                    .to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: Some(NodeKind::File),
+            },
+            20,
+        )
+        .expect("node write should succeed");
+
+    let small = budget_store
+        .query_context(QueryContextRequest {
+            task: "needle".to_string(),
+            entities: Vec::new(),
+            namespace: Some("/Wiki/budget".to_string()),
+            budget_tokens: 1,
+            include_evidence: false,
+            depth: 0,
+        })
+        .expect("small context should load");
+    assert!(small.search_hits.is_empty());
+    assert!(small.nodes.is_empty());
+    assert!(small.truncated);
+}
+
+#[test]
+fn graph_neighborhood_returns_center_hops() {
+    let (_dir, store) = new_store();
+    for (path, content) in [
+        ("/Wiki/a.md", "[B](/Wiki/b.md)"),
+        ("/Wiki/b.md", "[C](/Wiki/c.md)"),
+        ("/Wiki/d.md", "[B](/Wiki/b.md)"),
+        ("/Wiki/e.md", "[D](/Wiki/d.md)"),
+    ] {
+        store
+            .append_node(
+                AppendNodeRequest {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    expected_etag: None,
+                    separator: None,
+                    metadata_json: None,
+                    kind: None,
+                },
+                10,
+            )
+            .expect("node write should succeed");
+    }
+
+    let depth_one = store
+        .graph_neighborhood(GraphNeighborhoodRequest {
+            center_path: "/Wiki/b.md".to_string(),
+            depth: 1,
+            limit: 10,
+        })
+        .expect("depth one should load");
+    assert_eq!(depth_one.len(), 3);
+    assert!(
+        depth_one
+            .iter()
+            .any(|edge| edge.source_path == "/Wiki/a.md" && edge.target_path == "/Wiki/b.md")
+    );
+    assert!(
+        depth_one
+            .iter()
+            .any(|edge| edge.source_path == "/Wiki/b.md" && edge.target_path == "/Wiki/c.md")
+    );
+
+    let depth_two = store
+        .graph_neighborhood(GraphNeighborhoodRequest {
+            center_path: "/Wiki/b.md".to_string(),
+            depth: 2,
+            limit: 10,
+        })
+        .expect("depth two should load");
+    assert!(
+        depth_two
+            .iter()
+            .any(|edge| edge.source_path == "/Wiki/e.md" && edge.target_path == "/Wiki/d.md")
+    );
+
+    let limited = store
+        .graph_neighborhood(GraphNeighborhoodRequest {
+            center_path: "/Wiki/b.md".to_string(),
+            depth: 1,
+            limit: 2,
+        })
+        .expect("limited graph should load");
+    assert_eq!(limited.len(), 2);
+
+    let invalid = store
+        .graph_neighborhood(GraphNeighborhoodRequest {
+            center_path: "/Wiki/b.md".to_string(),
+            depth: 3,
+            limit: 10,
+        })
+        .expect_err("invalid depth should fail");
+    assert!(invalid.contains("depth"));
+
+    let invalid_path = store
+        .graph_neighborhood(GraphNeighborhoodRequest {
+            center_path: "Wiki/b.md".to_string(),
+            depth: 1,
+            limit: 10,
+        })
+        .expect_err("non-absolute center should fail");
+    assert!(invalid_path.contains("start with"));
 }
 
 #[test]
@@ -307,6 +894,7 @@ fn move_node_renames_and_updates_search() {
             query_text: "TO".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);

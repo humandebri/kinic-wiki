@@ -6,6 +6,7 @@
 // That prevents SQLite `snippet()` cost from scaling with all matched rows.
 // Only returned hits pay preview generation cost.
 use std::{
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,13 +14,16 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use uuid::Uuid;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodeType, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest,
-    MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEdit, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    SearchPreviewMode, Status, WriteNodeRequest, WriteNodeResult,
+    AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
+    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEdit, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest,
+    NodeEntry, NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest,
+    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    SearchPreviewMode, SourceEvidence, SourceEvidenceRef, SourceEvidenceRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
 use crate::{
@@ -29,8 +33,12 @@ use crate::{
         node_kind_from_db, node_kind_to_db, normalize_node_path, prefix_filter_sql,
         prefix_filter_sql_for_column, relative_to_prefix, snapshot_revision_token,
     },
+    fs_links::{
+        delete_source_links, load_graph_links, load_graph_neighborhood, load_incoming_links,
+        load_outgoing_links, sync_node_links,
+    },
     fs_search::{
-        build_light_previews_for_hits, build_search_query_plan, finalize_hits,
+        SearchCandidate, build_previews_for_hits, build_search_query_plan, finalize_hits,
         load_content_substring_candidates, load_path_candidates, load_ranked_fts_candidates,
         path_match_score, rerank_candidates, sort_candidates,
     },
@@ -40,6 +48,10 @@ use crate::{
 };
 
 const QUERY_RESULT_LIMIT_MAX: u32 = 100;
+const WIKI_ROOT_PATH: &str = "/Wiki";
+const CONTEXT_LINK_LIMIT: u32 = 20;
+const CONTEXT_SEARCH_LIMIT: u32 = 10;
+const TOKEN_CHAR_APPROX: usize = 4;
 const SNAPSHOT_REVISION_NO_LONGER_CURRENT: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
 const SNAPSHOT_SESSION_EXPIRED: &str = "snapshot_session_id has expired";
@@ -52,6 +64,28 @@ const SNAPSHOT_SESSION_CURSOR_INVALID: &str = "cursor is invalid for snapshot_se
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
 const SNAPSHOT_SESSION_TTL_SECS: i64 = 300;
+const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
+SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
+FROM fs_nodes
+WHERE path >= ?1
+  AND path < ?2
+  AND instr(substr(path, ?3), '/') = 0
+ORDER BY path ASC";
+const LIST_VIRTUAL_CHILD_NAMES_SQL: &str = "\
+SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
+FROM fs_nodes
+WHERE path >= ?1
+  AND path < ?2
+  AND instr(substr(path, ?3), '/') > 0
+ORDER BY 1 ASC";
+
+struct ChildRow {
+    path: String,
+    kind: NodeKind,
+    updated_at: i64,
+    etag: String,
+    size_bytes: u64,
+}
 
 // Where: crates/vfs_store/src/fs_store.rs
 // What: Change-log semantics used by delta sync visibility checks.
@@ -110,6 +144,26 @@ impl FsStore {
         Ok(build_entries_from_rows(&rows, &prefix, request.recursive))
     }
 
+    pub fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
+        let path = normalize_list_children_path(&request.path)?;
+        let conn = self.open()?;
+        let concrete_node_exists = load_stored_node(&conn, &path)?.is_some();
+        let rows = load_child_rows(&conn, &path)?;
+        let virtual_names = load_virtual_child_names(&conn, &path)?;
+        if rows.is_empty() && virtual_names.is_empty() && concrete_node_exists {
+            return Err(format!("not a directory: {path}"));
+        }
+        if rows.is_empty()
+            && virtual_names.is_empty()
+            && !allows_empty_directory_listing(&path)
+            && !concrete_node_exists
+        {
+            return Err(format!("path not found: {path}"));
+        }
+        let children_with_descendants = load_descendant_child_paths(&conn, &path)?;
+        build_child_nodes(&path, rows, virtual_names, &children_with_descendants)
+    }
+
     pub fn write_node(
         &self,
         request: WriteNodeRequest,
@@ -129,6 +183,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
         sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(WriteNodeResult {
             node: node_ack(&node),
@@ -155,6 +210,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
         sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(WriteNodeResult {
             node: node_ack(&node),
@@ -188,6 +244,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         save_node(&tx, Some(current.row_id), &node)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(EditNodeResult {
             node: node_ack(&node),
@@ -224,6 +281,7 @@ impl FsStore {
             return Err(format!("target node already exists: {to_path}"));
         }
         if let Some(target) = target.as_ref() {
+            delete_source_links(&tx, &target.node.path)?;
             delete_node_row(&tx, target)?;
         }
         let mut moved = current.node.clone();
@@ -236,6 +294,8 @@ impl FsStore {
         moved.etag = compute_node_etag(&moved);
         save_node(&tx, Some(current.row_id), &moved)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &moved)))?;
+        delete_source_links(&tx, &from_path)?;
+        sync_node_links(&tx, &moved)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(MoveNodeResult {
             node: node_ack(&moved),
@@ -339,6 +399,7 @@ impl FsStore {
         node.etag = compute_node_etag(&node);
         save_node(&tx, Some(current.row_id), &node)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
+        sync_node_links(&tx, &node)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(MultiEditNodeResult {
             node: node_ack(&node),
@@ -361,9 +422,171 @@ impl FsStore {
         }
         let revision = record_path_removal(&tx, &path)?;
         update_path_state(&tx, &path, revision)?;
+        delete_source_links(&tx, &path)?;
         delete_node_row(&tx, &current)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(DeleteNodeResult { path })
+    }
+
+    pub fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        load_incoming_links(&conn, &path, capped_query_limit(request.limit))
+    }
+
+    pub fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        load_outgoing_links(&conn, &path, capped_query_limit(request.limit))
+    }
+
+    pub fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
+        let prefix = normalize_node_path(&request.prefix, true)?;
+        let conn = self.open()?;
+        load_graph_links(&conn, &prefix, capped_query_limit(request.limit))
+    }
+
+    pub fn graph_neighborhood(
+        &self,
+        request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>, String> {
+        let center_path = normalize_node_path(&request.center_path, false)?;
+        let conn = self.open()?;
+        load_graph_neighborhood(
+            &conn,
+            &center_path,
+            request.depth,
+            capped_query_limit(request.limit),
+        )
+    }
+
+    pub fn read_node_context(
+        &self,
+        request: NodeContextRequest,
+    ) -> Result<Option<NodeContext>, String> {
+        let path = normalize_node_path(&request.path, false)?;
+        let conn = self.open()?;
+        let Some(node) = load_node(&conn, &path)? else {
+            return Ok(None);
+        };
+        let limit = capped_query_limit(request.link_limit);
+        Ok(Some(NodeContext {
+            incoming_links: load_incoming_links(&conn, &path, limit)?,
+            outgoing_links: load_outgoing_links(&conn, &path, limit)?,
+            node,
+        }))
+    }
+
+    pub fn query_context(&self, request: QueryContextRequest) -> Result<QueryContext, String> {
+        if request.depth > 2 {
+            return Err("depth must be 0, 1, or 2".to_string());
+        }
+        let namespace = normalize_memory_namespace(request.namespace.as_deref())?;
+        let budget_chars = budget_chars(request.budget_tokens);
+        let query_text = context_query_text(&request.task, &request.entities)?;
+        let search_hits = self.search_nodes(SearchNodesRequest {
+            query_text,
+            prefix: Some(namespace.clone()),
+            top_k: CONTEXT_SEARCH_LIMIT,
+            preview_mode: Some(SearchPreviewMode::Light),
+        })?;
+        let (search_hits, mut used_chars, mut truncated) =
+            trim_search_hits_to_budget(search_hits, budget_chars);
+        let paths = ordered_context_candidate_paths(&namespace, &search_hits);
+
+        let conn = self.open()?;
+        let mut nodes = Vec::new();
+        for path in paths {
+            let Some(context) = load_node_context_for_memory(&conn, &path, CONTEXT_LINK_LIMIT)?
+            else {
+                continue;
+            };
+            let context_chars = estimate_node_context_chars(&context);
+            if used_chars.saturating_add(context_chars) > budget_chars {
+                truncated = true;
+                break;
+            }
+            used_chars = used_chars.saturating_add(context_chars);
+            nodes.push(context);
+            if used_chars > budget_chars {
+                truncated = true;
+                break;
+            }
+        }
+
+        let mut graph_links = Vec::new();
+        if request.depth > 0 {
+            let mut seen_edges = BTreeSet::new();
+            for context in &nodes {
+                for edge in load_graph_neighborhood(
+                    &conn,
+                    &context.node.path,
+                    request.depth,
+                    capped_query_limit(CONTEXT_LINK_LIMIT),
+                )? {
+                    let key = (
+                        edge.source_path.clone(),
+                        edge.target_path.clone(),
+                        edge.raw_href.clone(),
+                    );
+                    if seen_edges.insert(key) {
+                        let edge_chars = estimate_link_edge_chars(&edge);
+                        if used_chars.saturating_add(edge_chars) > budget_chars {
+                            truncated = true;
+                            break;
+                        }
+                        used_chars = used_chars.saturating_add(edge_chars);
+                        graph_links.push(edge);
+                    }
+                    if graph_links.len() >= QUERY_RESULT_LIMIT_MAX as usize {
+                        truncated = true;
+                        break;
+                    }
+                }
+                if graph_links.len() >= QUERY_RESULT_LIMIT_MAX as usize {
+                    break;
+                }
+            }
+        }
+
+        let evidence = if request.include_evidence {
+            let mut items = Vec::new();
+            for context in &nodes {
+                let evidence = source_evidence_for_path(&conn, &context.node.path)?;
+                let evidence_chars = estimate_source_evidence_chars(&evidence);
+                if used_chars.saturating_add(evidence_chars) > budget_chars {
+                    truncated = true;
+                    break;
+                }
+                used_chars = used_chars.saturating_add(evidence_chars);
+                items.push(evidence);
+            }
+            items
+        } else {
+            Vec::new()
+        };
+
+        Ok(QueryContext {
+            namespace,
+            task: request.task,
+            search_hits,
+            nodes,
+            graph_links,
+            evidence,
+            truncated,
+        })
+    }
+
+    pub fn source_evidence(
+        &self,
+        request: SourceEvidenceRequest,
+    ) -> Result<SourceEvidence, String> {
+        let node_path = normalize_node_path(&request.node_path, false)?;
+        let conn = self.open()?;
+        let Some(_) = load_node(&conn, &node_path)? else {
+            return Err(format!("node does not exist: {node_path}"));
+        };
+        source_evidence_for_path(&conn, &node_path)
     }
 
     pub fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {
@@ -403,7 +626,7 @@ impl FsStore {
             sort_candidates(candidates.into_values().collect())
         };
         ranked.truncate(top_k as usize);
-        build_light_previews_for_hits(&conn, &mut ranked, &plan, preview_mode)?;
+        build_previews_for_hits(&conn, &mut ranked, &plan, preview_mode)?;
         Ok(finalize_hits(ranked, top_k))
     }
 
@@ -420,8 +643,10 @@ impl FsStore {
             .ok_or_else(|| "query_text must not be empty".to_string())?;
         let conn = self.open()?;
         let top_k = capped_query_limit(request.top_k);
+        let preview_mode = request.preview_mode.unwrap_or(SearchPreviewMode::None);
         let mut sql = String::from(
-            "SELECT path,
+            "SELECT id,
+                    path,
                     kind,
                     instr(lower(path), ?1) AS first_match_position,
                     length(path) AS path_length
@@ -444,30 +669,40 @@ impl FsStore {
             " ORDER BY first_match_position ASC, path_length ASC, path ASC LIMIT {top_k}"
         ));
         let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-        stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| {
-            let path = row.get::<_, String>(0)?;
-            let first_match_position = row.get::<_, i64>(2)?;
-            let path_length = row.get::<_, i64>(3)?;
-            let title = file_search_title(&path).to_lowercase();
-            let lowered_query = request.query_text.to_lowercase();
-            let mut match_reasons = vec!["path_substring".to_string()];
-            if title == lowered_query {
-                match_reasons.push("basename_exact".to_string());
-            } else if title.starts_with(&lowered_query) {
-                match_reasons.push("basename_prefix".to_string());
-            }
-            Ok(SearchNodeHit {
-                path: path.clone(),
-                kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
-                snippet: Some(path),
-                preview: None,
-                score: path_match_score(first_match_position, path_length),
-                match_reasons,
+        let mut candidates = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                let path = row.get::<_, String>(1)?;
+                let first_match_position = row.get::<_, i64>(3)?;
+                let path_length = row.get::<_, i64>(4)?;
+                let title = file_search_title(&path).to_lowercase();
+                let lowered_query = request.query_text.to_lowercase();
+                let mut match_reasons = BTreeSet::from(["path_substring".to_string()]);
+                if title == lowered_query {
+                    match_reasons.insert("basename_exact".to_string());
+                } else if title.starts_with(&lowered_query) {
+                    match_reasons.insert("basename_prefix".to_string());
+                }
+                Ok(SearchCandidate {
+                    row_id: row.get::<_, i64>(0)?,
+                    path: path.clone(),
+                    kind: node_kind_from_db(&row.get::<_, String>(2)?)?,
+                    snippet: Some(path),
+                    preview: None,
+                    score: path_match_score(first_match_position, path_length),
+                    match_reasons,
+                    has_content_match: false,
+                })
             })
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        build_previews_for_hits(
+            &conn,
+            &mut candidates,
+            &build_search_query_plan(&request.query_text).expect("path terms already validated"),
+            preview_mode,
+        )?;
+        Ok(finalize_hits(candidates, top_k))
     }
 
     pub fn export_snapshot(
@@ -1073,6 +1308,190 @@ fn count_nodes(conn: &Connection, kind: &str) -> Result<u64, String> {
     .map_err(|error| error.to_string())
 }
 
+fn normalize_list_children_path(path: &str) -> Result<String, String> {
+    let trimmed = if path.len() > 1 && path.ends_with('/') {
+        &path[..path.len() - 1]
+    } else {
+        path
+    };
+    normalize_node_path(trimmed, true)
+}
+
+fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, String> {
+    let (prefix, upper, relative_start) = list_child_query_bounds(path);
+    let mut stmt = conn
+        .prepare(LIST_DIRECT_CHILD_ROWS_SQL)
+        .map_err(|error| error.to_string())?;
+    stmt.query_map(params![prefix, upper, relative_start], |row| {
+        let size_bytes = row.get::<_, i64>(4)?;
+        Ok(ChildRow {
+            path: row.get(0)?,
+            kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
+            updated_at: row.get(2)?,
+            etag: row.get(3)?,
+            size_bytes: size_bytes.max(0) as u64,
+        })
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| error.to_string())
+}
+
+fn allows_empty_directory_listing(path: &str) -> bool {
+    matches!(path, "/" | "/Wiki" | "/Sources")
+}
+
+fn load_virtual_child_names(conn: &Connection, path: &str) -> Result<Vec<String>, String> {
+    let (prefix, upper, relative_start) = list_child_query_bounds(path);
+    let mut stmt = conn
+        .prepare(LIST_VIRTUAL_CHILD_NAMES_SQL)
+        .map_err(|error| error.to_string())?;
+    stmt.query_map(params![prefix, upper, relative_start], |row| row.get(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn build_child_nodes(
+    parent_path: &str,
+    rows: Vec<ChildRow>,
+    virtual_names: Vec<String>,
+    children_with_descendants: &BTreeSet<String>,
+) -> Result<Vec<ChildNode>, String> {
+    let mut children = BTreeMap::<String, ChildNode>::new();
+
+    for row in rows {
+        let (name, is_direct) = child_name(parent_path, &row.path)
+            .ok_or_else(|| format!("invalid child path: {}", row.path))?;
+        if !is_direct {
+            return Err(format!("non-direct child row loaded: {}", row.path));
+        }
+        children.insert(
+            name.clone(),
+            ChildNode {
+                has_children: children_with_descendants.contains(&row.path),
+                path: row.path,
+                name,
+                kind: entry_kind_from_node_kind(&row.kind),
+                updated_at: Some(row.updated_at),
+                etag: Some(row.etag),
+                size_bytes: Some(row.size_bytes),
+                is_virtual: false,
+            },
+        );
+    }
+    for child in build_virtual_child_nodes(parent_path, virtual_names, children_with_descendants) {
+        children.entry(child.name.clone()).or_insert(child);
+    }
+
+    let mut children = children.into_values().collect::<Vec<_>>();
+    children.sort_by(|left, right| match (&left.kind, &right.kind) {
+        (NodeEntryKind::Directory, NodeEntryKind::Directory) => left.name.cmp(&right.name),
+        (NodeEntryKind::Directory, _) => std::cmp::Ordering::Less,
+        (_, NodeEntryKind::Directory) => std::cmp::Ordering::Greater,
+        _ => left.name.cmp(&right.name),
+    });
+    Ok(children)
+}
+
+fn build_virtual_child_nodes(
+    parent_path: &str,
+    names: Vec<String>,
+    children_with_descendants: &BTreeSet<String>,
+) -> Vec<ChildNode> {
+    names
+        .into_iter()
+        .map(|name| {
+            let path = child_path(parent_path, &name);
+            ChildNode {
+                has_children: children_with_descendants.contains(&path),
+                path,
+                name,
+                kind: NodeEntryKind::Directory,
+                updated_at: None,
+                etag: None,
+                size_bytes: None,
+                is_virtual: true,
+            }
+        })
+        .collect()
+}
+
+fn load_descendant_child_paths(
+    conn: &Connection,
+    parent_path: &str,
+) -> Result<BTreeSet<String>, String> {
+    let (prefix, upper, _relative_start) = list_child_query_bounds(parent_path);
+    let mut stmt = conn
+        .prepare(
+            "SELECT path
+             FROM fs_nodes
+             WHERE path >= ?1
+               AND path < ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = stmt
+        .query_map(params![prefix, upper], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let (name, is_direct) = child_name(parent_path, &path)?;
+            (!is_direct).then(|| child_path(parent_path, &name))
+        })
+        .collect())
+}
+
+fn child_prefix(parent_path: &str) -> String {
+    if parent_path == "/" {
+        "/".to_string()
+    } else {
+        format!("{parent_path}/")
+    }
+}
+
+fn list_child_query_bounds(parent_path: &str) -> (String, String, i64) {
+    let prefix = child_prefix(parent_path);
+    let upper = prefix_upper_bound(&prefix);
+    // SQLite `substr` is 1-based. Start after the normalized parent prefix so
+    // `instr(relative, '/')` distinguishes direct rows from descendants.
+    let relative_start = (prefix.len() + 1) as i64;
+    (prefix, upper, relative_start)
+}
+
+fn prefix_upper_bound(prefix: &str) -> String {
+    format!("{prefix}\u{10ffff}")
+}
+
+fn child_name(parent_path: &str, path: &str) -> Option<(String, bool)> {
+    let relative = relative_to_prefix(parent_path, path)?;
+    if relative.is_empty() {
+        return None;
+    }
+    match relative.split_once('/') {
+        Some((name, _)) if !name.is_empty() => Some((name.to_string(), false)),
+        None => Some((relative, true)),
+        _ => None,
+    }
+}
+
+fn child_path(parent_path: &str, name: &str) -> String {
+    if parent_path == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent_path}/{name}")
+    }
+}
+
+fn entry_kind_from_node_kind(kind: &NodeKind) -> NodeEntryKind {
+    match kind {
+        NodeKind::File => NodeEntryKind::File,
+        NodeKind::Source => NodeEntryKind::Source,
+    }
+}
+
 fn create_new_node(path: String, request: WriteNodeRequest, now: i64) -> Result<Node, String> {
     if request.expected_etag.is_some() {
         return Err(format!("expected_etag must be None for new node: {path}"));
@@ -1299,6 +1718,206 @@ fn split_search_terms(query_text: &str) -> Option<Vec<String>> {
 fn split_path_search_terms(query_text: &str) -> Option<Vec<String>> {
     split_search_terms(query_text)
         .map(|terms| terms.into_iter().map(|term| term.to_lowercase()).collect())
+}
+
+fn normalize_memory_namespace(namespace: Option<&str>) -> Result<String, String> {
+    namespace
+        .map(|value| normalize_node_path(value, true))
+        .transpose()
+        .map(|value| value.unwrap_or_else(|| WIKI_ROOT_PATH.to_string()))
+}
+
+fn budget_chars(token_budget: u32) -> usize {
+    let tokens = if token_budget == 0 {
+        1_000
+    } else {
+        token_budget
+    };
+    tokens as usize * TOKEN_CHAR_APPROX
+}
+
+fn context_query_text(task: &str, entities: &[String]) -> Result<String, String> {
+    let mut parts = Vec::new();
+    let task = task.trim();
+    if !task.is_empty() {
+        parts.push(task.to_string());
+    }
+    parts.extend(
+        entities
+            .iter()
+            .map(|entity| entity.trim())
+            .filter(|entity| !entity.is_empty())
+            .map(str::to_string),
+    );
+    if parts.is_empty() {
+        return Err("task or entities must not be empty".to_string());
+    }
+    Ok(parts.join(" "))
+}
+
+fn canonical_context_paths(namespace: &str) -> Vec<String> {
+    ["index.md", "overview.md", "schema.md"]
+        .into_iter()
+        .map(|name| format!("{}/{}", namespace.trim_end_matches('/'), name))
+        .collect()
+}
+
+fn trim_search_hits_to_budget(
+    hits: Vec<SearchNodeHit>,
+    budget_chars: usize,
+) -> (Vec<SearchNodeHit>, usize, bool) {
+    let mut kept = Vec::new();
+    let mut used_chars = 0usize;
+    let mut truncated = false;
+    for hit in hits {
+        let hit_chars = estimate_search_hit_chars(&hit);
+        if used_chars.saturating_add(hit_chars) > budget_chars {
+            truncated = true;
+            break;
+        }
+        used_chars = used_chars.saturating_add(hit_chars);
+        kept.push(hit);
+    }
+    (kept, used_chars, truncated)
+}
+
+fn ordered_context_candidate_paths(namespace: &str, search_hits: &[SearchNodeHit]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut seen = BTreeSet::new();
+    for path in canonical_context_paths(namespace)
+        .into_iter()
+        .chain(search_hits.iter().map(|hit| hit.path.clone()))
+    {
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn provenance_path_for(node_path: &str) -> Option<String> {
+    let parent = node_path.rsplit_once('/')?.0;
+    if parent.is_empty() {
+        return None;
+    }
+    Some(format!("{parent}/provenance.md"))
+}
+
+fn scope_root_provenance_path_for(node_path: &str) -> Option<String> {
+    let mut parts = node_path.trim_matches('/').split('/');
+    let root = parts.next()?;
+    let scope = parts.next()?;
+    if root != "Wiki" {
+        return None;
+    }
+    Some(format!("/{root}/{scope}/provenance.md"))
+}
+
+fn load_node_context_for_memory(
+    conn: &Connection,
+    path: &str,
+    limit: u32,
+) -> Result<Option<NodeContext>, String> {
+    let Some(node) = load_node(conn, path)? else {
+        return Ok(None);
+    };
+    Ok(Some(NodeContext {
+        incoming_links: load_incoming_links(conn, path, capped_query_limit(limit))?,
+        outgoing_links: load_outgoing_links(conn, path, capped_query_limit(limit))?,
+        node,
+    }))
+}
+
+fn source_evidence_for_path(conn: &Connection, node_path: &str) -> Result<SourceEvidence, String> {
+    let mut refs = Vec::new();
+    let mut seen = BTreeSet::new();
+    collect_source_refs_from_path(conn, node_path, &mut refs, &mut seen)?;
+    if let Some(provenance_path) = provenance_path_for(node_path) {
+        collect_source_refs_from_path(conn, &provenance_path, &mut refs, &mut seen)?;
+    }
+    if let Some(provenance_path) = scope_root_provenance_path_for(node_path) {
+        collect_source_refs_from_path(conn, &provenance_path, &mut refs, &mut seen)?;
+    }
+    Ok(SourceEvidence {
+        node_path: node_path.to_string(),
+        refs,
+    })
+}
+
+fn collect_source_refs_from_path(
+    conn: &Connection,
+    path: &str,
+    refs: &mut Vec<SourceEvidenceRef>,
+    seen: &mut BTreeSet<(String, String, String)>,
+) -> Result<(), String> {
+    let Some(_) = load_node(conn, path)? else {
+        return Ok(());
+    };
+    for edge in load_outgoing_links(conn, path, capped_query_limit(QUERY_RESULT_LIMIT_MAX))? {
+        if !edge.target_path.starts_with("/Sources/") {
+            continue;
+        }
+        let key = (
+            edge.target_path.clone(),
+            edge.source_path.clone(),
+            edge.raw_href.clone(),
+        );
+        if seen.insert(key) {
+            refs.push(SourceEvidenceRef {
+                source_path: edge.target_path,
+                via_path: edge.source_path,
+                raw_href: edge.raw_href,
+                link_text: edge.link_text,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn estimate_search_hit_chars(hit: &SearchNodeHit) -> usize {
+    hit.path.chars().count()
+        + hit.snippet.as_deref().map(str::len).unwrap_or_default()
+        + hit
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.excerpt.as_deref())
+            .map(str::len)
+            .unwrap_or_default()
+        + hit.match_reasons.iter().map(String::len).sum::<usize>()
+}
+
+fn estimate_node_context_chars(context: &NodeContext) -> usize {
+    context.node.path.chars().count()
+        + context.node.content.chars().count()
+        + context.node.metadata_json.chars().count()
+        + context
+            .incoming_links
+            .iter()
+            .chain(context.outgoing_links.iter())
+            .map(estimate_link_edge_chars)
+            .sum::<usize>()
+}
+
+fn estimate_link_edge_chars(edge: &LinkEdge) -> usize {
+    edge.source_path.chars().count()
+        + edge.target_path.chars().count()
+        + edge.raw_href.chars().count()
+        + edge.link_text.chars().count()
+        + edge.link_kind.chars().count()
+}
+
+fn estimate_source_evidence_chars(evidence: &SourceEvidence) -> usize {
+    evidence.node_path.chars().count()
+        + evidence
+            .refs
+            .iter()
+            .map(|item| {
+                item.source_path.chars().count()
+                    + item.via_path.chars().count()
+                    + item.raw_href.chars().count()
+                    + item.link_text.chars().count()
+            })
+            .sum::<usize>()
 }
 
 fn glob_type_matches(node_type: &GlobNodeType, entry_kind: &NodeEntryKind) -> bool {

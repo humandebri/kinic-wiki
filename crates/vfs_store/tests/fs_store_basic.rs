@@ -2,9 +2,10 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListNodesRequest,
-    MoveNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodePathsRequest,
-    SearchNodesRequest, SearchPreviewField, SearchPreviewMode, WriteNodeRequest,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListChildrenRequest,
+    ListNodesRequest, MoveNodeRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest,
+    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, SearchPreviewField,
+    SearchPreviewMode, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -87,9 +88,19 @@ fn fs_migrations_create_tables() {
         .expect("version query should run")
         .collect::<Result<Vec<_>, _>>()
         .expect("versions should collect");
-    assert_eq!(versions, vec!["wiki_store:000_fs_schema".to_string()]);
+    assert_eq!(
+        versions,
+        vec![
+            "wiki_store:000_fs_schema".to_string(),
+            "wiki_store:001_fs_links".to_string()
+        ]
+    );
 
-    for table in ["fs_snapshot_sessions", "fs_snapshot_session_paths"] {
+    for table in [
+        "fs_snapshot_sessions",
+        "fs_snapshot_session_paths",
+        "fs_links",
+    ] {
         let exists = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
@@ -104,6 +115,8 @@ fn fs_migrations_create_tables() {
         "fs_nodes_path_covering_idx",
         "fs_nodes_recent_covering_idx",
         "fs_snapshot_sessions_expires_at_idx",
+        "fs_links_target_path_idx",
+        "fs_links_source_path_idx",
     ] {
         let exists = conn
             .query_row(
@@ -147,6 +160,52 @@ fn list_and_recent_queries_use_covering_indexes() {
     assert!(
         recent_plan.contains("COVERING INDEX fs_nodes_recent_covering_idx"),
         "recent should avoid table lookups: {recent_plan}"
+    );
+}
+
+#[test]
+fn list_children_queries_use_path_index_range_scans() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/indexed.md", None, 10);
+    write_file(&store, "/Wiki/nested/child.md", None, 11);
+    let conn = Connection::open(store.database_path()).expect("db should open");
+
+    let direct_plan = explain_query_plan_dynamic(
+        &conn,
+        "SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
+         FROM fs_nodes
+         WHERE path >= ?1
+           AND path < ?2
+           AND instr(substr(path, ?3), '/') = 0
+         ORDER BY path ASC",
+        &[
+            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
+            &"/Wiki/\u{10ffff}".to_string(),
+            &7_i64,
+        ],
+    );
+    assert!(
+        direct_plan.contains("USING INDEX") && direct_plan.contains("path>? AND path<?"),
+        "direct child query should use path range scan: {direct_plan}"
+    );
+
+    let virtual_plan = explain_query_plan_dynamic(
+        &conn,
+        "SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
+         FROM fs_nodes
+         WHERE path >= ?1
+           AND path < ?2
+           AND instr(substr(path, ?3), '/') > 0
+         ORDER BY 1 ASC",
+        &[
+            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
+            &"/Wiki/\u{10ffff}".to_string(),
+            &7_i64,
+        ],
+    );
+    assert!(
+        virtual_plan.contains("USING") && virtual_plan.contains("path>? AND path<?"),
+        "virtual child query should use path range scan: {virtual_plan}"
     );
 }
 
@@ -216,6 +275,7 @@ fn assert_prefix_scope_with_wildcards(
             query_text: "page".to_string(),
             prefix: Some(prefix.to_string()),
             top_k: 100,
+            preview_mode: None,
         })
         .expect("path search should succeed")
         .into_iter()
@@ -294,6 +354,14 @@ fn update_searchable_file(store: &FsStore, path: &str, etag: &str, now: i64) {
 }
 
 fn explain_query_plan(conn: &Connection, sql: &str, params: [&str; 2]) -> String {
+    explain_query_plan_dynamic(conn, sql, &[&params[0] as &dyn rusqlite::ToSql, &params[1]])
+}
+
+fn explain_query_plan_dynamic(
+    conn: &Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> String {
     conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
         .expect("explain should prepare")
         .query_map(params, |row| row.get::<_, String>(3))
@@ -420,7 +488,13 @@ fn fs_migrations_are_idempotent() {
         .expect("version query should run")
         .collect::<Result<Vec<_>, _>>()
         .expect("versions should collect");
-    assert_eq!(versions, vec!["wiki_store:000_fs_schema".to_string()]);
+    assert_eq!(
+        versions,
+        vec![
+            "wiki_store:000_fs_schema".to_string(),
+            "wiki_store:001_fs_links".to_string()
+        ]
+    );
 
     let tracked_paths = conn
         .query_row("SELECT COUNT(*) FROM fs_path_state", [], |row| {
@@ -428,6 +502,53 @@ fn fs_migrations_are_idempotent() {
         })
         .expect("path state count should succeed");
     assert_eq!(tracked_paths, 2);
+}
+
+#[test]
+fn fs_links_migration_backfills_existing_nodes() {
+    let dir = tempdir().expect("temp dir should exist");
+    let database_path = dir.path().join("wiki.sqlite3");
+    let conn = Connection::open(&database_path).expect("db should open");
+    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
+        .expect("schema migrations table should create");
+    conn.execute_batch(include_str!("../migrations/000_fs_schema.sql"))
+        .expect("base schema should create");
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)",
+        ["wiki_store:000_fs_schema"],
+    )
+    .expect("base migration version should insert");
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, 'file', ?2, 10, 20, 'etag-source', '{}')",
+        [
+            "/Wiki/source.md",
+            "[Target](/Wiki/target.md) and [[/Wiki/other.md]]",
+        ],
+    )
+    .expect("existing node should insert");
+    drop(conn);
+
+    let store = FsStore::new(database_path);
+    store
+        .run_fs_migrations()
+        .expect("fs links migration should succeed");
+
+    let outgoing = store
+        .outgoing_links(OutgoingLinksRequest {
+            path: "/Wiki/source.md".to_string(),
+            limit: 10,
+        })
+        .expect("outgoing links should load");
+    let targets = outgoing
+        .into_iter()
+        .map(|edge| edge.target_path)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        vec!["/Wiki/other.md".to_string(), "/Wiki/target.md".to_string()]
+    );
 }
 
 #[test]
@@ -869,6 +990,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             query_text: "NeStEd".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -913,6 +1035,208 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 }
 
 #[test]
+fn list_children_returns_direct_children_with_virtual_directories() {
+    let (_dir, store) = new_store();
+    let alpha_etag = write_file(&store, "/Wiki/alpha.md", None, 10);
+    write_file(&store, "/Wiki/zeta.md", None, 11);
+    let tree_etag = write_file(&store, "/Wiki/tree", None, 12);
+    write_file(&store, "/Wiki/nested/beta.md", None, 12);
+    write_file(&store, "/Wiki/aaa/gamma.md", None, 13);
+    write_file(&store, "/Wiki/tree/leaf.md", None, 14);
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/".to_string(),
+        })
+        .expect("children should list");
+    let paths = children
+        .iter()
+        .map(|child| child.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![
+            "/Wiki/aaa",
+            "/Wiki/nested",
+            "/Wiki/alpha.md",
+            "/Wiki/tree",
+            "/Wiki/zeta.md"
+        ]
+    );
+
+    let directory = children
+        .iter()
+        .find(|child| child.path == "/Wiki/aaa")
+        .expect("virtual directory should exist");
+    assert_eq!(directory.kind, NodeEntryKind::Directory);
+    assert_eq!(directory.name, "aaa");
+    assert_eq!(directory.updated_at, None);
+    assert_eq!(directory.etag, None);
+    assert_eq!(directory.size_bytes, None);
+    assert!(directory.is_virtual);
+
+    let alpha = children
+        .iter()
+        .find(|child| child.path == "/Wiki/alpha.md")
+        .expect("file child should exist");
+    assert_eq!(alpha.kind, NodeEntryKind::File);
+    assert_eq!(alpha.name, "alpha.md");
+    assert_eq!(alpha.updated_at, Some(10));
+    assert_eq!(alpha.etag.as_deref(), Some(alpha_etag.as_str()));
+    assert_eq!(alpha.size_bytes, Some("content revision 10".len() as u64));
+    assert!(!alpha.is_virtual);
+
+    let tree = children
+        .iter()
+        .find(|child| child.path == "/Wiki/tree")
+        .expect("concrete child with descendants should exist");
+    assert_eq!(tree.kind, NodeEntryKind::File);
+    assert_eq!(tree.name, "tree");
+    assert_eq!(tree.updated_at, Some(12));
+    assert_eq!(tree.etag.as_deref(), Some(tree_etag.as_str()));
+    assert_eq!(tree.size_bytes, Some("content revision 12".len() as u64));
+    assert!(!tree.is_virtual);
+    assert!(tree.has_children);
+
+    let nested = children
+        .iter()
+        .find(|child| child.path == "/Wiki/nested")
+        .expect("virtual child with descendants should exist");
+    assert!(nested.has_children);
+
+    assert!(
+        !children
+            .iter()
+            .find(|child| child.path == "/Wiki/alpha.md")
+            .expect("leaf file child should exist")
+            .has_children
+    );
+
+    let tree_children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/tree".to_string(),
+        })
+        .expect("concrete node with descendants should list children");
+    assert_eq!(
+        tree_children
+            .iter()
+            .map(|child| child.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/Wiki/tree/leaf.md"]
+    );
+    assert!(!tree_children[0].has_children);
+}
+
+#[test]
+fn list_children_reports_missing_directory_paths() {
+    let (_dir, store) = new_store();
+
+    let missing_error = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/no-such-dir".to_string(),
+        })
+        .expect_err("missing directory should be rejected");
+    assert_eq!(missing_error, "path not found: /Wiki/no-such-dir");
+
+    for path in ["/", "/Wiki", "/Sources"] {
+        let children = store
+            .list_children(ListChildrenRequest {
+                path: path.to_string(),
+            })
+            .expect("root-like directory should allow empty listing");
+        assert!(children.is_empty());
+    }
+}
+
+#[test]
+fn list_children_reports_utf8_content_size_in_bytes() {
+    let (_dir, store) = new_store();
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/japanese.md".to_string(),
+                kind: NodeKind::File,
+                content: "こんにちは".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            10,
+        )
+        .expect("write should succeed");
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki".to_string(),
+        })
+        .expect("children should list");
+    let child = children
+        .iter()
+        .find(|child| child.path == "/Wiki/japanese.md")
+        .expect("file child should exist");
+    assert_eq!(child.size_bytes, Some("こんにちは".len() as u64));
+}
+
+#[test]
+fn list_children_rejects_non_directory_paths() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/alpha.md", None, 10);
+
+    let file_error = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki/alpha.md".to_string(),
+        })
+        .expect_err("file path should be rejected");
+    assert_eq!(file_error, "not a directory: /Wiki/alpha.md");
+
+    let relative_error = store
+        .list_children(ListChildrenRequest {
+            path: "Wiki".to_string(),
+        })
+        .expect_err("relative path should be rejected");
+    assert_eq!(relative_error, "path must start with '/': Wiki");
+}
+
+#[test]
+fn list_children_collapses_many_descendants_to_direct_entries() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/alpha.md", None, 10);
+    for index in 0..300 {
+        write_file(
+            &store,
+            &format!("/Wiki/bulk-{}/leaf-{}.md", index % 3, index),
+            None,
+            20 + index,
+        );
+    }
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            path: "/Wiki".to_string(),
+        })
+        .expect("children should list");
+    let paths = children
+        .iter()
+        .map(|child| child.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![
+            "/Wiki/bulk-0",
+            "/Wiki/bulk-1",
+            "/Wiki/bulk-2",
+            "/Wiki/alpha.md"
+        ]
+    );
+    assert_eq!(
+        children
+            .iter()
+            .filter(|child| child.kind == NodeEntryKind::Directory)
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn root_prefix_searches_all_nodes() {
     let (_dir, store) = new_store();
     write_file(&store, "/Wiki/root-search.md", None, 10);
@@ -938,6 +1262,7 @@ fn root_prefix_searches_all_nodes() {
             query_text: "root-search".to_string(),
             prefix: Some("/".to_string()),
             top_k: 10,
+            preview_mode: None,
         })
         .expect("root path search should succeed");
     let path_search_paths = path_hits
@@ -1076,6 +1401,139 @@ fn search_nodes_defaults_to_light_preview_when_mode_is_omitted() {
 
     assert_eq!(hits.len(), 1);
     assert!(hits[0].preview.is_some());
+}
+
+#[test]
+fn search_node_paths_content_start_preview_returns_body_prefix() {
+    let (_dir, store) = new_store();
+    let content = format!("{}\n\nignored tail", "x".repeat(240));
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/path-preview/topic-note.md".to_string(),
+                kind: NodeKind::File,
+                content,
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            202,
+        )
+        .expect("write should succeed");
+
+    let hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "topic-note".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 5,
+            preview_mode: Some(SearchPreviewMode::ContentStart),
+        })
+        .expect("path search should succeed");
+
+    assert_eq!(hits.len(), 1);
+    let preview = hits[0]
+        .preview
+        .as_ref()
+        .expect("content start preview should exist");
+    assert_eq!(preview.field, SearchPreviewField::Content);
+    assert_eq!(preview.match_reason, "content_start");
+    assert_eq!(preview.char_offset, 0);
+    assert_eq!(preview.excerpt.as_deref(), Some("x".repeat(200).as_str()));
+}
+
+#[test]
+fn search_nodes_content_start_preview_covers_content_and_path_hits() {
+    let (_dir, store) = new_store();
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/content-start/path-hit.md".to_string(),
+                kind: NodeKind::File,
+                content: "path body\nwith\tspacing".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            203,
+        )
+        .expect("path hit write should succeed");
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/content-start/content-hit.md".to_string(),
+                kind: NodeKind::File,
+                content: "shared-token content\nwith\tspacing".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            204,
+        )
+        .expect("content hit write should succeed");
+
+    let path_hits = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "path-hit".to_string(),
+            prefix: Some("/Wiki/content-start".to_string()),
+            top_k: 5,
+            preview_mode: Some(SearchPreviewMode::ContentStart),
+        })
+        .expect("path hit search should succeed");
+    let content_hits = store
+        .search_nodes(SearchNodesRequest {
+            query_text: "shared-token".to_string(),
+            prefix: Some("/Wiki/content-start".to_string()),
+            top_k: 5,
+            preview_mode: Some(SearchPreviewMode::ContentStart),
+        })
+        .expect("content hit search should succeed");
+
+    assert_eq!(
+        path_hits[0]
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.excerpt.as_deref()),
+        Some("path body with spacing")
+    );
+    assert_eq!(
+        content_hits[0]
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.excerpt.as_deref()),
+        Some("shared-token content with spacing")
+    );
+}
+
+#[test]
+fn search_content_start_preview_keeps_empty_body_excerpt_empty() {
+    let (_dir, store) = new_store();
+    store
+        .write_node(
+            WriteNodeRequest {
+                path: "/Wiki/empty-body.md".to_string(),
+                kind: NodeKind::File,
+                content: " \n\t ".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            205,
+        )
+        .expect("write should succeed");
+
+    let hits = store
+        .search_node_paths(SearchNodePathsRequest {
+            query_text: "empty-body".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 5,
+            preview_mode: Some(SearchPreviewMode::ContentStart),
+        })
+        .expect("path search should succeed");
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0]
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.excerpt.as_ref()),
+        None
+    );
 }
 
 #[test]
@@ -1435,6 +1893,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
             query_text: "renamed-note".to_string(),
             prefix: Some("/Wiki/move".to_string()),
             top_k: 5,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     assert_eq!(path_hits.len(), 1);
@@ -1603,6 +2062,7 @@ fn query_limits_are_capped_at_one_hundred() {
             query_text: "node".to_string(),
             prefix: Some("/Wiki/capped".to_string()),
             top_k: 1_000,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     assert_eq!(path_search.len(), 100);
@@ -1644,6 +2104,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
             query_text: "NESTED note".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 10,
+            preview_mode: None,
         })
         .expect("path search should succeed");
     let paths = hits.into_iter().map(|hit| hit.path).collect::<Vec<_>>();

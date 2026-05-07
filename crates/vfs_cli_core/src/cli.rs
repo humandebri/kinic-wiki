@@ -3,7 +3,7 @@
 // Why: The app-facing CLI package should reuse these shared command shapes without owning the VFS surface.
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use vfs_types::{GlobNodeType, NodeKind};
+use vfs_types::{GlobNodeType, NodeKind, SearchPreviewMode};
 
 pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
 
@@ -40,6 +40,12 @@ pub enum VfsCommand {
         prefix: String,
         #[arg(long)]
         recursive: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    ListChildren {
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        path: String,
         #[arg(long)]
         json: bool,
     },
@@ -136,6 +142,48 @@ pub enum VfsCommand {
         #[arg(long)]
         json: bool,
     },
+    ReadNodeContext {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        link_limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    GraphNeighborhood {
+        #[arg(long)]
+        center_path: String,
+        #[arg(long, default_value_t = 1)]
+        depth: u32,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    GraphLinks {
+        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        prefix: String,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    IncomingLinks {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    OutgoingLinks {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     MultiEditNode {
         #[arg(long)]
         path: String,
@@ -152,6 +200,8 @@ pub enum VfsCommand {
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,
+        #[arg(long, value_enum)]
+        preview_mode: Option<SearchPreviewModeArg>,
         #[arg(long)]
         json: bool,
     },
@@ -161,6 +211,8 @@ pub enum VfsCommand {
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,
+        #[arg(long, value_enum)]
+        preview_mode: Option<SearchPreviewModeArg>,
         #[arg(long)]
         json: bool,
     },
@@ -179,6 +231,13 @@ pub enum GlobNodeTypeArg {
     Any,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPreviewModeArg {
+    None,
+    Light,
+    ContentStart,
+}
+
 impl NodeKindArg {
     pub fn to_node_kind(self) -> NodeKind {
         match self {
@@ -194,6 +253,16 @@ impl GlobNodeTypeArg {
             Self::File => GlobNodeType::File,
             Self::Directory => GlobNodeType::Directory,
             Self::Any => GlobNodeType::Any,
+        }
+    }
+}
+
+impl SearchPreviewModeArg {
+    pub fn to_search_preview_mode(self) -> SearchPreviewMode {
+        match self {
+            Self::None => SearchPreviewMode::None,
+            Self::Light => SearchPreviewMode::Light,
+            Self::ContentStart => SearchPreviewMode::ContentStart,
         }
     }
 }

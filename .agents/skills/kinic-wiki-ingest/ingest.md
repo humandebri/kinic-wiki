@@ -9,7 +9,7 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 1. Inspect the source material and the user focus.
 2. If the source is noisy web or PDF-derived text, normalize it first.
 3. Decide whether the source should also be persisted under `/Sources/raw/...`.
-4. Read existing wiki context by starting from `index.md` and the canonical role-matched notes before broad search.
+4. Read existing wiki context with `read-node-context` by starting from `index.md` and the canonical role-matched notes before broad search.
 5. Use `search-remote` or `search-path-remote` only when the relevant canonical notes are missing, ambiguous, or insufficient.
 6. Choose the minimum coherent set of pages to update.
 7. Edit `/Wiki/...` directly through `vfs-cli` remote VFS commands.
@@ -20,9 +20,27 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 12. Run `rebuild-scope-index --scope <scope>` by default for new page creation, deletion, or large single-scope restructures. Use `rebuild-index` only for cross-scope restructures or explicit full repair. Skip rebuilds for routine small edits.
 13. Stop at review-ready unless the user explicitly asks for push.
 
+## LLM Wiki Scope Setup
+
+Use this workflow when creating a new scope, repairing a thin benchmark import, or converting raw notes into a compounding LLM Wiki.
+
+1. Identify the scope root, for example `/Wiki/<scope>`, and list existing pages under it before writing.
+2. Confirm raw sources live under `/Sources/raw/...`; do not move or rewrite raw source nodes during scope setup.
+3. Create or update these scope-level pages:
+   - `index.md`: content-oriented catalog and navigation entry point.
+   - `overview.md`: corpus-level synthesis and reading guide.
+   - `schema.md`: scope-local conventions and maintenance rules.
+   - `log.md`: append-only chronological record of ingest, restructure, lint, and query-derived updates.
+   - `topics/*.md`: category or topic synthesis pages that connect related source-level notes.
+4. Keep `index.md` compact. Link to `overview.md`, `schema.md`, `log.md`, topic pages, and important child pages instead of embedding the full synthesis.
+5. Put corpus-wide meaning in `overview.md`, topic-level synthesis in `topics/*.md`, and source/conversation recap in each child `summary.md`.
+6. When regenerating `summary.md`, read the raw source path and existing `events.md`, `plans.md`, `open_questions.md`, and `provenance.md` first. Write recap, outcome, important decisions, unresolved points, and source links; do not promote exact stable facts into summary.
+7. Use source path-level evidence links by default unless the user asks for turn, line, or claim-level provenance.
+8. After setup, append one `log.md` entry for the workflow and rebuild the scope index when the repo workflow requires it.
+
 ## Working Rules
 
-- Current repo-local note schema lives in [WIKI_CANONICALITY.md](../../../docs/internal/WIKI_CANONICALITY.md). Use it for concrete note names and current role mapping.
+- Current repo-local note schema lives in [docs/internal/WIKI_CANONICALITY.md](../../../docs/internal/WIKI_CANONICALITY.md). Use it for concrete note names and current role mapping.
 - Runtime `facts.md` extraction policy currently lives in [facts_policy.rs](../../../crates/vfs_cli_app/src/facts_policy.rs). Keep skill guidance aligned with that rule, not with benchmark-specific phrasing.
 - Treat local `Wiki/` content as the human review surface.
 - Prefer fewer stronger pages over many shallow stubs.
@@ -71,7 +89,7 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 - Raw source append path: `/Sources/raw/<source_id>/<source_id>.md`
 - Wiki target root: `/Wiki/...`
 - Preferred primitives:
-  - CLI commands: `read-node`, `write-node`, `append-node`, `edit-node`, `delete-node`, `delete-tree`, `list-nodes`, `glob-nodes`, `recent-nodes`, `search-remote`, `search-path-remote`, `rebuild-scope-index`, `rebuild-index`
+  - CLI commands: `read-node-context`, `read-node`, `write-node`, `append-node`, `edit-node`, `delete-node`, `delete-tree`, `list-nodes`, `glob-nodes`, `recent-nodes`, `search-remote`, `search-path-remote`, `graph-neighborhood`, `incoming-links`, `outgoing-links`, `rebuild-scope-index`, `rebuild-index`
 - Delete semantics:
   - `delete-node`: delete one node path
   - `delete-tree`: delete real node paths under a prefix, deepest-first

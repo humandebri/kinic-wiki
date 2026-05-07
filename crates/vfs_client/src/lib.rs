@@ -6,19 +6,34 @@ use async_trait::async_trait;
 use candid::{Decode, Encode};
 use ic_agent::{Agent, export::Principal};
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodesRequest, ListNodesRequest, MkdirNodeRequest, MkdirNodeResult,
-    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeEntry,
+    AppendNodeRequest, CanisterHealth, ChildNode, DeleteNodeRequest, DeleteNodeResult,
+    EditNodeRequest, EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse,
+    FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MemoryManifest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest,
+    MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext,
+    NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
     RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    Status, WriteNodeRequest, WriteNodeResult,
+    SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 #[async_trait]
-pub trait VfsApi {
+pub trait VfsApi: Sync {
     async fn status(&self) -> Result<Status>;
+    async fn canister_health(&self) -> Result<CanisterHealth> {
+        Err(anyhow!("canister_health is not implemented by this client"))
+    }
+    async fn memory_manifest(&self) -> Result<MemoryManifest> {
+        Err(anyhow!("memory_manifest is not implemented by this client"))
+    }
     async fn read_node(&self, path: &str) -> Result<Option<Node>>;
+    async fn read_node_context(&self, _request: NodeContextRequest) -> Result<Option<NodeContext>> {
+        Err(anyhow!(
+            "read_node_context is not implemented by this client"
+        ))
+    }
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>>;
+    async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>>;
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult>;
     async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult>;
     async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult>;
@@ -27,8 +42,31 @@ pub trait VfsApi {
     async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult>;
     async fn glob_nodes(&self, request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>>;
     async fn recent_nodes(&self, request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>>;
+    async fn graph_links(&self, _request: GraphLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("graph_links is not implemented by this client"))
+    }
+    async fn graph_neighborhood(
+        &self,
+        _request: GraphNeighborhoodRequest,
+    ) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!(
+            "graph_neighborhood is not implemented by this client"
+        ))
+    }
+    async fn incoming_links(&self, _request: IncomingLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("incoming_links is not implemented by this client"))
+    }
+    async fn outgoing_links(&self, _request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>> {
+        Err(anyhow!("outgoing_links is not implemented by this client"))
+    }
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult>;
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>>;
+    async fn query_context(&self, _request: QueryContextRequest) -> Result<QueryContext> {
+        Err(anyhow!("query_context is not implemented by this client"))
+    }
+    async fn source_evidence(&self, _request: SourceEvidenceRequest) -> Result<SourceEvidence> {
+        Err(anyhow!("source_evidence is not implemented by this client"))
+    }
     async fn search_node_paths(
         &self,
         request: SearchNodePathsRequest,
@@ -104,14 +142,33 @@ impl VfsApi for CanisterVfsClient {
         self.query("status", &()).await
     }
 
+    async fn canister_health(&self) -> Result<CanisterHealth> {
+        self.query("canister_health", &()).await
+    }
+
+    async fn memory_manifest(&self) -> Result<MemoryManifest> {
+        self.query("memory_manifest", &()).await
+    }
+
     async fn read_node(&self, path: &str) -> Result<Option<Node>> {
         let result: Result<Option<Node>, String> =
             self.query("read_node", &path.to_string()).await?;
         result.map_err(|error| anyhow!(error))
     }
 
+    async fn read_node_context(&self, request: NodeContextRequest) -> Result<Option<NodeContext>> {
+        let result: Result<Option<NodeContext>, String> =
+            self.query("read_node_context", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
         let result: Result<Vec<NodeEntry>, String> = self.query("list_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
+        let result: Result<Vec<ChildNode>, String> = self.query("list_children", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 
@@ -156,6 +213,27 @@ impl VfsApi for CanisterVfsClient {
         result.map_err(|error| anyhow!(error))
     }
 
+    async fn graph_links(&self, request: GraphLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("graph_links", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn graph_neighborhood(&self, request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> =
+            self.query("graph_neighborhood", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn incoming_links(&self, request: IncomingLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("incoming_links", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn outgoing_links(&self, request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>> {
+        let result: Result<Vec<LinkEdge>, String> = self.query("outgoing_links", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
     async fn multi_edit_node(&self, request: MultiEditNodeRequest) -> Result<MultiEditNodeResult> {
         let result: Result<MultiEditNodeResult, String> =
             self.update("multi_edit_node", &request).await?;
@@ -165,6 +243,17 @@ impl VfsApi for CanisterVfsClient {
     async fn search_nodes(&self, request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
         let result: Result<Vec<SearchNodeHit>, String> =
             self.query("search_nodes", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn query_context(&self, request: QueryContextRequest) -> Result<QueryContext> {
+        let result: Result<QueryContext, String> = self.query("query_context", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn source_evidence(&self, request: SourceEvidenceRequest) -> Result<SourceEvidence> {
+        let result: Result<SourceEvidence, String> =
+            self.query("source_evidence", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

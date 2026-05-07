@@ -22,6 +22,7 @@
 /tmp/
 *.tmp
 *.tsbuildinfo
+.playwright-cli/
 __pycache__/
 *.pyc
 
@@ -37,6 +38,7 @@ __pycache__/
 /canbench_results.csv
 /.benchmarks/
 /artifacts/
+/extensions/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

@@ -2,9 +2,11 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use tempfile::tempdir;
-use vfs_types::NodeKind;
+use vfs_types::{NodeKind, SearchPreviewMode};
 
-use crate::cli::{Cli, Command, ConnectionArgs, GlobNodeTypeArg, NodeKindArg};
+use crate::cli::{
+    Cli, Command, ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+};
 use crate::commands::run_command;
 use crate::commands_fs_tests::MockClient;
 
@@ -100,6 +102,25 @@ async fn append_node_command_supports_source_kind() {
     assert_eq!(appends.len(), 1);
     assert_eq!(appends[0].path, "/Sources/raw/source/source.md");
     assert_eq!(appends[0].kind, Some(NodeKind::Source));
+}
+
+#[tokio::test]
+async fn list_children_command_calls_canister_children() {
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::ListChildren {
+            path: "/Wiki".to_string(),
+            json: true,
+        }),
+    )
+    .await
+    .expect("list children command should succeed");
+
+    let requests = client.child_lists.lock().expect("child lists should lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/Wiki");
 }
 
 #[tokio::test]
@@ -367,6 +388,7 @@ async fn search_path_command_calls_canister_path_search() {
             query_text: "nested".to_string(),
             prefix: "/Wiki".to_string(),
             top_k: 7,
+            preview_mode: None,
             json: false,
         }),
     )
@@ -381,6 +403,55 @@ async fn search_path_command_calls_canister_path_search() {
     assert_eq!(searches[0].query_text, "nested");
     assert_eq!(searches[0].prefix.as_deref(), Some("/Wiki"));
     assert_eq!(searches[0].top_k, 7);
+    assert_eq!(searches[0].preview_mode, None);
+}
+
+#[tokio::test]
+async fn search_commands_pass_explicit_content_start_preview_mode() {
+    let client = MockClient::default();
+
+    run_command(
+        &client,
+        test_cli(Command::SearchRemote {
+            query_text: "body".to_string(),
+            prefix: "/Wiki".to_string(),
+            top_k: 3,
+            preview_mode: Some(SearchPreviewModeArg::ContentStart),
+            json: true,
+        }),
+    )
+    .await
+    .expect("search command should succeed");
+    run_command(
+        &client,
+        test_cli(Command::SearchPathRemote {
+            query_text: "nested".to_string(),
+            prefix: "/Wiki".to_string(),
+            top_k: 5,
+            preview_mode: Some(SearchPreviewModeArg::ContentStart),
+            json: true,
+        }),
+    )
+    .await
+    .expect("path search command should succeed");
+
+    let searches = client.searches.lock().expect("searches should lock");
+    assert_eq!(searches.len(), 1);
+    assert_eq!(
+        searches[0].preview_mode,
+        Some(SearchPreviewMode::ContentStart)
+    );
+    drop(searches);
+
+    let path_searches = client
+        .path_searches
+        .lock()
+        .expect("path searches should lock");
+    assert_eq!(path_searches.len(), 1);
+    assert_eq!(
+        path_searches[0].preview_mode,
+        Some(SearchPreviewMode::ContentStart)
+    );
 }
 
 #[tokio::test]

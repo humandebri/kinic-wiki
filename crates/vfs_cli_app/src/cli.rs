@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
-pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg};
+pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg};
 use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
 
 #[derive(Parser, Debug)]
@@ -36,6 +36,12 @@ pub enum Command {
         prefix: String,
         #[arg(long)]
         recursive: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    ListChildren {
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        path: String,
         #[arg(long)]
         json: bool,
     },
@@ -132,6 +138,48 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    ReadNodeContext {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        link_limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    GraphNeighborhood {
+        #[arg(long)]
+        center_path: String,
+        #[arg(long, default_value_t = 1)]
+        depth: u32,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    GraphLinks {
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        prefix: String,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    IncomingLinks {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    OutgoingLinks {
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     MultiEditNode {
         #[arg(long)]
         path: String,
@@ -152,6 +200,8 @@ pub enum Command {
             help = "Maximum 100; 0 is treated as 1 by the canister. Search preview defaults to light."
         )]
         top_k: u32,
+        #[arg(long, value_enum)]
+        preview_mode: Option<SearchPreviewModeArg>,
         #[arg(long)]
         json: bool,
     },
@@ -165,6 +215,8 @@ pub enum Command {
             help = "Maximum 100; 0 is treated as 1 by the canister"
         )]
         top_k: u32,
+        #[arg(long, value_enum)]
+        preview_mode: Option<SearchPreviewModeArg>,
         #[arg(long)]
         json: bool,
     },
@@ -214,6 +266,10 @@ impl Command {
             } => Some(VfsCommand::ListNodes {
                 prefix: prefix.clone(),
                 recursive: *recursive,
+                json: *json,
+            }),
+            Self::ListChildren { path, json } => Some(VfsCommand::ListChildren {
+                path: path.clone(),
                 json: *json,
             }),
             Self::WriteNode {
@@ -309,6 +365,45 @@ impl Command {
                 path: path.clone(),
                 json: *json,
             }),
+            Self::ReadNodeContext {
+                path,
+                link_limit,
+                json,
+            } => Some(VfsCommand::ReadNodeContext {
+                path: path.clone(),
+                link_limit: *link_limit,
+                json: *json,
+            }),
+            Self::GraphNeighborhood {
+                center_path,
+                depth,
+                limit,
+                json,
+            } => Some(VfsCommand::GraphNeighborhood {
+                center_path: center_path.clone(),
+                depth: *depth,
+                limit: *limit,
+                json: *json,
+            }),
+            Self::GraphLinks {
+                prefix,
+                limit,
+                json,
+            } => Some(VfsCommand::GraphLinks {
+                prefix: prefix.clone(),
+                limit: *limit,
+                json: *json,
+            }),
+            Self::IncomingLinks { path, limit, json } => Some(VfsCommand::IncomingLinks {
+                path: path.clone(),
+                limit: *limit,
+                json: *json,
+            }),
+            Self::OutgoingLinks { path, limit, json } => Some(VfsCommand::OutgoingLinks {
+                path: path.clone(),
+                limit: *limit,
+                json: *json,
+            }),
             Self::MultiEditNode {
                 path,
                 edits_file,
@@ -324,22 +419,26 @@ impl Command {
                 query_text,
                 prefix,
                 top_k,
+                preview_mode,
                 json,
             } => Some(VfsCommand::SearchRemote {
                 query_text: query_text.clone(),
                 prefix: prefix.clone(),
                 top_k: *top_k,
+                preview_mode: *preview_mode,
                 json: *json,
             }),
             Self::SearchPathRemote {
                 query_text,
                 prefix,
                 top_k,
+                preview_mode,
                 json,
             } => Some(VfsCommand::SearchPathRemote {
                 query_text: query_text.clone(),
                 prefix: prefix.clone(),
                 top_k: *top_k,
+                preview_mode: *preview_mode,
                 json: *json,
             }),
             _ => None,
@@ -349,8 +448,8 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
-    use clap::CommandFactory;
+    use super::{Cli, Command};
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn main_cli_help_does_not_list_beam_bench() {
@@ -358,5 +457,53 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(!help.contains("beam-bench"));
+    }
+
+    #[test]
+    fn main_cli_parses_link_commands() {
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "read-node-context",
+            "--path",
+            "/Wiki/a.md",
+            "--link-limit",
+            "7",
+            "--json",
+        ]);
+        let Command::ReadNodeContext {
+            path,
+            link_limit,
+            json,
+        } = cli.command
+        else {
+            panic!("expected read-node-context command");
+        };
+        assert_eq!(path, "/Wiki/a.md");
+        assert_eq!(link_limit, 7);
+        assert!(json);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "graph-neighborhood",
+            "--center-path",
+            "/Wiki/a.md",
+            "--depth",
+            "2",
+            "--limit",
+            "9",
+        ]);
+        let Command::GraphNeighborhood {
+            center_path,
+            depth,
+            limit,
+            json,
+        } = cli.command
+        else {
+            panic!("expected graph-neighborhood command");
+        };
+        assert_eq!(center_path, "/Wiki/a.md");
+        assert_eq!(depth, 2);
+        assert_eq!(limit, 9);
+        assert!(!json);
     }
 }

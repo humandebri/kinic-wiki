@@ -1,0 +1,35 @@
+{
+  "name": "wikibrowser",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "eslint .",
+    "smoke": "node scripts/smoke-ui.mjs",
+    "smoke:errors": "node scripts/smoke-errors.mjs",
+    "smoke:public": "node scripts/smoke-public.mjs",
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@icp-sdk/core": "^5.4.0",
+    "lucide-react": "0.555.0",
+    "next": "16.2.4",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "autoprefixer": "10.4.22",
+    "eslint": "9.39.1",
+    "eslint-config-next": "16.2.4",
+    "postcss": "8.5.6",
+    "tailwindcss": "3.4.18",
+    "typescript": "5.9.3"
+  }
+}
