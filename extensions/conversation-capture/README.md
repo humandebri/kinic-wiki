@@ -18,7 +18,7 @@ Load `extensions/conversation-capture` as an unpacked extension after `dist/serv
 ## Flow
 
 1. Open a ChatGPT conversation tab.
-2. Set canister ID and local IC host in the extension popup or injected panel.
+2. Set canister ID, database ID, and local IC host in the extension popup or injected panel.
 3. Use the page-level `Kinic Memory` button.
 4. Enter the number of recent chats to export. The default is `10`.
 5. Export to `/Sources/raw/<source_id>/<source_id>.md`.
@@ -34,6 +34,7 @@ The CLI creates a conversation wiki scaffold. Re-running it preserves hand-edite
 ## Safety Notes
 
 - Default host is `http://127.0.0.1:8001`.
+- Default database ID is `default`; the database is not created automatically.
 - Mainnet hosts require explicit confirmation before export.
 - Writes are anonymous and depend on the target canister accepting `write_node`.
 - ChatGPT export uses private `/backend-api/*` endpoints. Endpoint shape can change without notice.

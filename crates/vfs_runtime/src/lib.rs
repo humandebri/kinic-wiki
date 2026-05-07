@@ -27,6 +27,7 @@ const INDEX_SCHEMA_VERSION_LIFECYCLE: &str = "database_index:001_lifecycle";
 const INDEX_SCHEMA_VERSION_RESTORE_SIZE: &str = "database_index:002_restore_size";
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNKS: &str = "database_index:003_restore_chunks";
 const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events";
+const INDEX_SCHEMA_VERSION_MOUNT_HISTORY: &str = "database_index:005_mount_history";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -188,6 +189,7 @@ impl VfsService {
             ],
         )
         .map_err(|error| error.to_string())?;
+        record_mount_history(&tx, &database_id, mount_id, "create", now)?;
         tx.execute(
             "INSERT INTO database_members
              (database_id, principal, role, created_at_ms)
@@ -233,6 +235,7 @@ impl VfsService {
             ],
         )
         .map_err(|error| error.to_string())?;
+        record_mount_history(&tx, database_id, mount_id, "create", now)?;
         tx.execute(
             "INSERT INTO database_members
              (database_id, principal, role, created_at_ms)
@@ -274,6 +277,11 @@ impl VfsService {
         )
         .map_err(|error| error.to_string())?;
         tx.execute(
+            "DELETE FROM database_mount_history WHERE database_id = ?1",
+            params![database_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
             "DELETE FROM databases WHERE database_id = ?1",
             params![database_id],
         )
@@ -303,7 +311,11 @@ impl VfsService {
     pub fn delete_database(&self, database_id: &str, caller: &str, now: i64) -> Result<(), String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         let meta = self.database_meta(database_id)?;
-        let _ = remove_file(&meta.db_file_name);
+        if let Err(error) = remove_file(&meta.db_file_name)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
@@ -452,6 +464,7 @@ impl VfsService {
         let mut conn = self.open_index()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let mount_id = allocate_mount_id(&tx)?;
+        record_mount_history(&tx, database_id, mount_id, "restore", now)?;
         tx.execute(
             "DELETE FROM database_restore_chunks WHERE database_id = ?1",
             params![database_id],
@@ -1172,30 +1185,52 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }
-    if migration_applied(conn, INDEX_SCHEMA_VERSION_USAGE_EVENTS)? {
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_USAGE_EVENTS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE usage_events (
+               event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               method TEXT NOT NULL,
+               database_id TEXT,
+               caller TEXT NOT NULL,
+               success INTEGER NOT NULL,
+               cycles_delta INTEGER NOT NULL,
+               error TEXT,
+               created_at_ms INTEGER NOT NULL
+             );
+             CREATE INDEX usage_events_database_id_created_at_idx
+               ON usage_events(database_id, created_at_ms);
+             CREATE INDEX usage_events_caller_created_at_idx
+               ON usage_events(caller, created_at_ms);",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_USAGE_EVENTS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    if migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
         return Ok(());
     }
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     tx.execute_batch(
-        "CREATE TABLE usage_events (
-           event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-           method TEXT NOT NULL,
-           database_id TEXT,
-           caller TEXT NOT NULL,
-           success INTEGER NOT NULL,
-           cycles_delta INTEGER NOT NULL,
-           error TEXT,
-           created_at_ms INTEGER NOT NULL
+        "CREATE TABLE database_mount_history (
+           database_id TEXT NOT NULL,
+           mount_id INTEGER NOT NULL,
+           reason TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (mount_id)
          );
-         CREATE INDEX usage_events_database_id_created_at_idx
-           ON usage_events(database_id, created_at_ms);
-         CREATE INDEX usage_events_caller_created_at_idx
-           ON usage_events(caller, created_at_ms);",
+         INSERT OR IGNORE INTO database_mount_history
+           (database_id, mount_id, reason, created_at_ms)
+           SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
     )
     .map_err(|error| error.to_string())?;
     tx.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-        params![INDEX_SCHEMA_VERSION_USAGE_EVENTS],
+        params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
     )
     .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())
@@ -1323,11 +1358,8 @@ fn database_exists(conn: &Connection, database_id: &str) -> Result<bool, String>
 fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
     let used = conn
         .prepare(
-            "SELECT mount_id AS used_mount_id FROM databases
-             UNION
-             SELECT active_mount_id AS used_mount_id
-             FROM databases
-             WHERE active_mount_id IS NOT NULL
+            "SELECT mount_id AS used_mount_id
+             FROM database_mount_history
              ORDER BY used_mount_id ASC",
         )
         .map_err(|error| error.to_string())?
@@ -1353,6 +1385,23 @@ fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
         used.next();
     }
     Err("database mount_id capacity exhausted".to_string())
+}
+
+fn record_mount_history(
+    conn: &Connection,
+    database_id: &str,
+    mount_id: u16,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO database_mount_history
+         (database_id, mount_id, reason, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![database_id, i64::from(mount_id), reason, now],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn validate_snapshot_hash(snapshot_hash: &[u8]) -> Result<(), String> {

@@ -16,7 +16,14 @@ Open a database with:
 http://localhost:3000/<database-id>/Wiki
 ```
 
-`NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
+The browser is read-only and does not create databases. Prepare the target DB first:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+```
+
+`database create` prints the generated database ID. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
 
 ```bash
 # local icp network

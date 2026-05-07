@@ -45,8 +45,9 @@ Use these extension settings:
 
 - `IC host`: `http://127.0.0.1:8001`
 - `Canister ID`: the `wiki` canister ID from `local-wiki`
+- `Database ID`: the target database ID, usually `default`
 
-The extension defaults to `http://127.0.0.1:8001`. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
+The extension defaults to `http://127.0.0.1:8001` and database ID `default`. The database must already exist. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
 
 ## Export
 

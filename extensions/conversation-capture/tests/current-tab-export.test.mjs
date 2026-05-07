@@ -14,7 +14,7 @@ import {
   readExportState,
   writeExportState
 } from "../src/current-tab-export.js";
-import { handleMessage, validateSaveSource } from "../src/service-worker.js";
+import { handleMessage, setVfsActorFactoryForTest, validateSaveSource } from "../src/service-worker.js";
 import { isLocalHost } from "../src/vfs-actor.js";
 
 const VALID_CAPTURE = {
@@ -374,6 +374,68 @@ test("handleMessage does not overwrite cancelled export state with stale progres
   }
 });
 
+test("save-source calls read_node and write_node with database_id", async () => {
+  const restore = installChromeStorage(memoryStorage(), memoryStorage());
+  const calls = [];
+  setVfsActorFactoryForTest(async (config) => {
+    calls.push(["create", config]);
+    return {
+      async read_node(databaseId, path) {
+        calls.push(["read_node", databaseId, path]);
+        return { Ok: [{ etag: "etag-1" }] };
+      },
+      async write_node(request) {
+        calls.push(["write_node", request]);
+        return {
+          Ok: {
+            created: false,
+            node: {
+              path: request.path,
+              kind: request.kind,
+              updated_at: 1n,
+              etag: "etag-2"
+            }
+          }
+        };
+      }
+    };
+  });
+  try {
+    const response = await handleMessage(
+      {
+        type: "save-source",
+        config: {
+          canisterId: "aaaaa-aa",
+          databaseId: "team_wiki",
+          host: "http://127.0.0.1:8001"
+        },
+        capture: VALID_CAPTURE
+      },
+      VALID_SENDER
+    );
+
+    assert.equal(response.ok, true);
+    assert.deepEqual(calls[1], ["read_node", "team_wiki", "/Sources/raw/chatgpt-abc/chatgpt-abc.md"]);
+    assert.equal(calls[2][0], "write_node");
+    assert.equal(calls[2][1].database_id, "team_wiki");
+    assert.equal(calls[2][1].path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
+    assert.deepEqual(calls[2][1].expected_etag, ["etag-1"]);
+  } finally {
+    setVfsActorFactoryForTest(null);
+    restore();
+  }
+});
+
+test("load-config defaults databaseId to default", async () => {
+  const restore = installChromeStorage(memoryStorage(), memoryStorage());
+  try {
+    const response = await handleMessage({ type: "load-config" }, null);
+    assert.equal(response.config.databaseId, "default");
+  } finally {
+    restore();
+  }
+});
+
 test("isLocalHost only accepts parsed localhost hostnames", () => {
   assert.equal(isLocalHost("http://127.0.0.1:8001"), true);
   assert.equal(isLocalHost("http://localhost:8001"), true);
@@ -428,6 +490,9 @@ function memoryStorage() {
     },
     removeItem(key) {
       values.delete(key);
+    },
+    entries() {
+      return values.entries();
     }
   };
 }
@@ -478,6 +543,44 @@ function installChromeStorageSession(storage) {
           },
           async remove(key) {
             storage.removeItem(key);
+          }
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+}
+
+function installChromeStorage(syncStorage, sessionStorage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      storage: {
+        sync: {
+          async get(defaults) {
+            return { ...defaults, ...Object.fromEntries(syncStorage.entries()) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              syncStorage.setItem(key, value);
+            }
+          }
+        },
+        session: {
+          async get(key) {
+            return { [key]: sessionStorage.getItem(key) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              sessionStorage.setItem(key, value);
+            }
+          },
+          async remove(key) {
+            sessionStorage.removeItem(key);
           }
         }
       }

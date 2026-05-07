@@ -97,6 +97,16 @@ fn schema_migration_count(root: &std::path::Path, version: &str) -> i64 {
     .expect("migration count should load")
 }
 
+fn mount_history_row(root: &std::path::Path, mount_id: u16) -> (String, String) {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.query_row(
+        "SELECT database_id, reason FROM database_mount_history WHERE mount_id = ?1",
+        params![i64::from(mount_id)],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("mount history row should exist")
+}
+
 type UsageEventTuple = (
     String,
     Option<String>,
@@ -166,20 +176,26 @@ fn archive_bytes_for_chunk_size(
 }
 
 #[test]
-fn index_migrations_create_usage_events_once() {
+fn index_migrations_create_usage_events_and_mount_history_once() {
     let (service, root) = service_with_root();
 
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_events'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("usage table lookup should work");
-    assert_eq!(table_exists, 1);
+    for table_name in ["usage_events", "database_mount_history"] {
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table_name],
+                |row| row.get(0),
+            )
+            .expect("table lookup should work");
+        assert_eq!(table_exists, 1);
+    }
     assert_eq!(
         schema_migration_count(&root, "database_index:004_usage_events"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
 
@@ -188,6 +204,10 @@ fn index_migrations_create_usage_events_once() {
         .expect("index migrations should be idempotent");
     assert_eq!(
         schema_migration_count(&root, "database_index:004_usage_events"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
 }
@@ -446,6 +466,13 @@ fn rejects_database_creation_after_mount_capacity() {
             ],
         )
         .expect("reserved mount_id should insert");
+        conn.execute(
+            "INSERT INTO database_mount_history
+             (database_id, mount_id, reason, created_at_ms)
+             VALUES (?1, ?2, 'create', 1)",
+            params![format!("reserved_{mount_id}"), i64::from(mount_id)],
+        )
+        .expect("reserved mount history should insert");
     }
 
     let meta = service
@@ -552,6 +579,50 @@ fn tracks_logical_size_and_does_not_reuse_deleted_slots() {
         .create_database("beta", "owner", 4)
         .expect("beta should create with a fresh slot");
     assert_ne!(beta.mount_id, alpha.mount_id);
+    assert_eq!(
+        mount_history_row(&root, alpha.mount_id),
+        ("alpha".to_string(), "create".to_string())
+    );
+    assert_eq!(
+        mount_history_row(&root, beta.mount_id),
+        ("beta".to_string(), "create".to_string())
+    );
+}
+
+#[test]
+fn delete_database_allows_missing_file_but_rejects_other_remove_errors() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("missing_file", "owner", 1)
+        .expect("database should create");
+    let missing_file = service
+        .list_databases()
+        .expect("databases should load")
+        .into_iter()
+        .find(|meta| meta.database_id == "missing_file")
+        .expect("database meta should exist")
+        .db_file_name;
+    std::fs::remove_file(&missing_file).expect("database file should delete");
+    service
+        .delete_database("missing_file", "owner", 2)
+        .expect("missing file should not block delete");
+    assert_eq!(database_index_row(&root, "missing_file").0, "deleted");
+
+    service
+        .create_database("remove_error", "owner", 3)
+        .expect("database should create");
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.execute(
+        "UPDATE databases SET db_file_name = ?2 WHERE database_id = ?1",
+        params!["remove_error", root.to_string_lossy().as_ref()],
+    )
+    .expect("db file path should update");
+
+    let error = service
+        .delete_database("remove_error", "owner", 4)
+        .expect_err("non-NotFound remove error should fail");
+    assert!(!error.is_empty());
+    assert_eq!(database_index_row(&root, "remove_error").0, "hot");
 }
 
 #[test]
@@ -781,6 +852,64 @@ fn archives_and_restores_database_bytes() {
     assert_eq!(
         database_index_row(&root, "alpha").1,
         Some(restoring.1.unwrap())
+    );
+}
+
+#[test]
+fn restored_mount_id_is_not_reused_after_rearchive() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+
+    let archive = service
+        .begin_database_archive("alpha", "owner")
+        .expect("archive should begin");
+    let bytes = archive_bytes_for_chunk_size(&service, "alpha", archive.size_bytes, 17);
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
+        .expect("archive should finalize");
+    let restored = service
+        .begin_database_restore("alpha", "owner", snapshot_hash, archive.size_bytes, 4)
+        .expect("restore should begin");
+    service
+        .write_database_restore_chunk("alpha", "owner", 0, &bytes)
+        .expect("restore chunk should write");
+    service
+        .finalize_database_restore("alpha", "owner", 5)
+        .expect("restore should finalize");
+
+    let second_archive = service
+        .begin_database_archive("alpha", "owner")
+        .expect("second archive should begin");
+    let second_bytes =
+        archive_bytes_for_chunk_size(&service, "alpha", second_archive.size_bytes, 17);
+    service
+        .finalize_database_archive("alpha", "owner", sha256_bytes(&second_bytes), 6)
+        .expect("second archive should finalize");
+    let beta = service
+        .create_database("beta", "owner", 7)
+        .expect("beta should create");
+
+    assert_ne!(beta.mount_id, restored.mount_id);
+    assert_eq!(
+        mount_history_row(&root, restored.mount_id),
+        ("alpha".to_string(), "restore".to_string())
     );
 }
 

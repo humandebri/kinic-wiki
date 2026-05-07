@@ -8,7 +8,8 @@ import { DEFAULT_EXPORT_LIMIT, normalizeExportLimit } from "./history-links.js";
 
 const ROOT_ID = "kinic-conversation-capture-root";
 const DEFAULT_HOST = "http://127.0.0.1:8001";
-const config = signal({ canisterId: "", host: DEFAULT_HOST });
+const DEFAULT_DATABASE_ID = "default";
+const config = signal({ canisterId: "", databaseId: DEFAULT_DATABASE_ID, host: DEFAULT_HOST });
 const countText = signal(String(DEFAULT_EXPORT_LIMIT));
 const status = signal("idle");
 const error = signal("");
@@ -61,6 +62,10 @@ function Modal() {
         <label class="row">
           <span>Canister ID</span>
           <input value={config.value.canisterId} onInput={(event) => updateConfig({ canisterId: event.currentTarget.value })} />
+        </label>
+        <label class="row">
+          <span>Database ID</span>
+          <input value={config.value.databaseId} onInput={(event) => updateConfig({ databaseId: event.currentTarget.value })} />
         </label>
         <label class="row">
           <span>IC host</span>
@@ -151,7 +156,7 @@ async function cancelExport() {
 async function loadConfig() {
   try {
     const response = await send({ type: "load-config" });
-    config.value = response.config;
+    config.value = configWithDefaults(response.config);
   } catch (nextError) {
     error.value = messageForError(nextError);
   }
@@ -161,8 +166,20 @@ function updateConfig(patch) {
   config.value = { ...config.value, ...patch };
 }
 
+function configWithDefaults(value) {
+  return {
+    canisterId: String(value?.canisterId || ""),
+    databaseId: String(value?.databaseId || DEFAULT_DATABASE_ID),
+    host: String(value?.host || DEFAULT_HOST)
+  };
+}
+
 function normalizedConfig() {
-  return { canisterId: config.value.canisterId.trim(), host: config.value.host.trim() || DEFAULT_HOST };
+  return {
+    canisterId: config.value.canisterId.trim(),
+    databaseId: config.value.databaseId.trim() || DEFAULT_DATABASE_ID,
+    host: config.value.host.trim() || DEFAULT_HOST
+  };
 }
 
 function isMainnetHost(host) {
@@ -200,7 +217,7 @@ function exportCallbacks() {
     send,
     onState(nextState) {
       panelOpen.value = true;
-      config.value = nextState.config || config.value;
+      config.value = configWithDefaults(nextState.config || config.value);
       progress.value = nextState.progress;
       logs.value = nextState.logs || [];
       status.value = nextState.status;
