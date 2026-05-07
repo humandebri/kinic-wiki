@@ -2,6 +2,7 @@
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
 use crate::cli::{Cli, Command};
+use crate::conversation_wiki::generate_conversation_wiki;
 use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
 use crate::mirror::{
@@ -36,6 +37,22 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
         Command::RebuildScopeIndex { scope } => {
             rebuild_scope_index(client, &scope).await?;
             println!("scope index rebuilt: {scope}");
+        }
+        Command::GenerateConversationWiki {
+            source_path,
+            force,
+            json,
+        } => {
+            let result = generate_conversation_wiki(client, &source_path, force).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!(
+                    "conversation wiki scaffold generated: {} ({} pages written)",
+                    result.base_path,
+                    result.written_paths.len()
+                );
+            }
         }
         Command::LintLocal {
             vault_path,

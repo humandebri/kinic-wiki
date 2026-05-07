@@ -25,6 +25,14 @@ pub enum Command {
         #[arg(long)]
         scope: String,
     },
+    GenerateConversationWiki {
+        #[arg(long)]
+        source_path: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
     ReadNode {
         #[arg(long)]
         path: String,
@@ -505,5 +513,27 @@ mod tests {
         assert_eq!(depth, 2);
         assert_eq!(limit, 9);
         assert!(!json);
+    }
+
+    #[test]
+    fn main_cli_parses_conversation_wiki_command() {
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "generate-conversation-wiki",
+            "--source-path",
+            "/Sources/raw/chatgpt-abc/chatgpt-abc.md",
+            "--json",
+        ]);
+        let Command::GenerateConversationWiki {
+            source_path,
+            force,
+            json,
+        } = cli.command
+        else {
+            panic!("expected generate-conversation-wiki command");
+        };
+        assert_eq!(source_path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
+        assert!(!force);
+        assert!(json);
     }
 }

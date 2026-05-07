@@ -5,3 +5,16 @@ canisters:
         - type: script
           commands:
             - bash scripts/build-vfs-canister.sh
+
+networks:
+  - name: local-wiki
+    mode: managed
+    gateway:
+      bind: 127.0.0.1
+      port: 8001
+
+environments:
+  - name: local-wiki
+    network: local-wiki
+    canisters:
+      - wiki
