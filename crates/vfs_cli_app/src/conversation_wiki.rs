@@ -46,10 +46,11 @@ pub struct ConversationWikiResult {
 
 pub async fn generate_conversation_wiki(
     client: &impl VfsApi,
+    database_id: &str,
     source_path: &str,
 ) -> Result<ConversationWikiResult> {
     let source = client
-        .read_node(source_path)
+        .read_node(database_id, source_path)
         .await?
         .ok_or_else(|| anyhow!("source node not found: {source_path}"))?;
     if source.kind != NodeKind::Source {
@@ -61,10 +62,10 @@ pub async fn generate_conversation_wiki(
 
     let mut written_paths = Vec::with_capacity(documents.len() + 1);
     for document in documents {
-        upsert_file(client, &document.path, &document.content).await?;
+        upsert_file(client, database_id, &document.path, &document.content).await?;
         written_paths.push(document.path);
     }
-    let log_path = write_log_document(client, &base_path, &raw).await?;
+    let log_path = write_log_document(client, database_id, &base_path, &raw).await?;
     written_paths.push(log_path);
 
     Ok(ConversationWikiResult {
@@ -224,11 +225,12 @@ fn provenance_markdown(raw: &RawConversation, base_path: &str) -> String {
 
 async fn write_log_document(
     client: &impl VfsApi,
+    database_id: &str,
     base_path: &str,
     raw: &RawConversation,
 ) -> Result<String> {
     let path = format!("{base_path}/log.md");
-    let current = client.read_node(&path).await?;
+    let current = client.read_node(database_id, &path).await?;
     let expected_etag = current.as_ref().map(|node| node.etag.clone());
     let current_content = current
         .map(|node| node.content)
@@ -241,6 +243,7 @@ async fn write_log_document(
     let content = format!("{}\n{entry}", current_content.trim_end());
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.clone(),
             kind: NodeKind::File,
             content,
@@ -251,10 +254,19 @@ async fn write_log_document(
     Ok(path)
 }
 
-async fn upsert_file(client: &impl VfsApi, path: &str, content: &str) -> Result<()> {
-    let expected_etag = client.read_node(path).await?.map(|node| node.etag);
+async fn upsert_file(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: &str,
+    content: &str,
+) -> Result<()> {
+    let expected_etag = client
+        .read_node(database_id, path)
+        .await?
+        .map(|node| node.etag);
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.to_string(),
             kind: NodeKind::File,
             content: content.to_string(),
@@ -350,7 +362,7 @@ mod tests {
         let client = ConflictClient {
             writes: Mutex::new(Vec::new()),
         };
-        let error = write_log_document(&client, "/Wiki/conversations/chatgpt-abc", &raw)
+        let error = write_log_document(&client, "default", "/Wiki/conversations/chatgpt-abc", &raw)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("etag conflict"));
@@ -365,7 +377,7 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for ConflictClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             Err(anyhow!("not implemented"))
         }
 
@@ -377,7 +389,7 @@ mod tests {
             Err(anyhow!("not implemented"))
         }
 
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             Ok(Some(Node {
                 path: path.to_string(),
                 kind: NodeKind::File,
