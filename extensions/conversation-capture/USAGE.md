@@ -2,6 +2,8 @@
 
 Local usage guide for exporting recent ChatGPT conversations into the `local-wiki` canister.
 
+This extension is local-only. It uses an anonymous write-capable actor and must not be distributed publicly until the target canister has explicit write authorization.
+
 ## Prerequisites
 
 - `local-wiki` network is running.
@@ -44,6 +46,8 @@ Use these extension settings:
 - `IC host`: `http://127.0.0.1:8001`
 - `Canister ID`: the `wiki` canister ID from `local-wiki`
 
+The extension defaults to `http://127.0.0.1:8001`. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
+
 ## Export
 
 1. Open `https://chatgpt.com`.
@@ -53,6 +57,8 @@ Use these extension settings:
 5. Watch `Logs` for success or error entries.
 
 The extension fetches ChatGPT conversation data directly from ChatGPT backend API endpoints in the current tab session. It does not navigate the page, open background tabs, use DOM fallback, or use a fetch interceptor.
+
+Those `/backend-api/*` endpoints are private ChatGPT internals. If ChatGPT changes the response shape, export can fail or omit messages.
 
 Raw sources are saved as:
 
@@ -78,8 +84,10 @@ The extension only writes raw evidence. Generate wiki pages from the CLI:
 cargo run -p vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
 ```
 
+This command creates a wiki scaffold. Re-running it preserves existing `summary.md`, `facts.md`, `events.md`, `plans.md`, `preferences.md`, and `open_questions.md`. Use `--force` only when those pages should be regenerated.
+
 ## Known Limits
 
 - ChatGPT backend API shape can change.
 - Stopping an export can allow up to 2 in-flight conversations to finish saving.
-- Public distribution requires write authorization design before release.
+- Writes are anonymous. Public distribution requires write authorization design before release.

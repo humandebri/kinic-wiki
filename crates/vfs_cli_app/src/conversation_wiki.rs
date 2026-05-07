@@ -9,6 +9,7 @@ use vfs_types::{NodeKind, WriteNodeRequest};
 use wiki_domain::RAW_SOURCES_PREFIX;
 
 const CONVERSATION_WIKI_PREFIX: &str = "/Wiki/conversations";
+const GENERATED_METADATA_JSON: &str = r#"{"generated_by":"conversation_wiki","schema_version":1}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RawConversation {
@@ -35,6 +36,7 @@ struct RawConversationMetadata {
 struct WikiDocument {
     path: String,
     content: String,
+    overwrite: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +49,7 @@ pub struct ConversationWikiResult {
 pub async fn generate_conversation_wiki(
     client: &impl VfsApi,
     source_path: &str,
+    force: bool,
 ) -> Result<ConversationWikiResult> {
     let source = client
         .read_node(source_path)
@@ -61,8 +64,16 @@ pub async fn generate_conversation_wiki(
 
     let mut written_paths = Vec::with_capacity(documents.len() + 1);
     for document in documents {
-        upsert_file(client, &document.path, &document.content).await?;
-        written_paths.push(document.path);
+        if upsert_file(
+            client,
+            &document.path,
+            &document.content,
+            document.overwrite || force,
+        )
+        .await?
+        {
+            written_paths.push(document.path);
+        }
     }
     let log_path = write_log_document(client, &base_path, &raw).await?;
     written_paths.push(log_path);
@@ -160,34 +171,42 @@ fn build_wiki_documents(raw: &RawConversation, base_path: &str) -> Vec<WikiDocum
         WikiDocument {
             path: format!("{base_path}/index.md"),
             content: index_markdown(raw, base_path),
+            overwrite: true,
         },
         WikiDocument {
             path: format!("{base_path}/summary.md"),
             content: summary_markdown(raw, base_path),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/facts.md"),
             content: empty_note("Facts", base_path, &["index.md", "provenance.md"]),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/events.md"),
             content: empty_note("Events", base_path, &["index.md", "provenance.md"]),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/plans.md"),
             content: empty_note("Plans", base_path, &["index.md", "provenance.md"]),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/preferences.md"),
             content: empty_note("Preferences", base_path, &["index.md", "provenance.md"]),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/open_questions.md"),
             content: empty_note("Open Questions", base_path, &["index.md", "provenance.md"]),
+            overwrite: false,
         },
         WikiDocument {
             path: format!("{base_path}/provenance.md"),
             content: provenance_markdown(raw, base_path),
+            overwrite: true,
         },
     ]
 }
@@ -244,32 +263,45 @@ async fn write_log_document(
             path: path.clone(),
             kind: NodeKind::File,
             content,
-            metadata_json: "{}".to_string(),
+            metadata_json: GENERATED_METADATA_JSON.to_string(),
             expected_etag,
         })
         .await?;
     Ok(path)
 }
 
-async fn upsert_file(client: &impl VfsApi, path: &str, content: &str) -> Result<()> {
-    let expected_etag = client.read_node(path).await?.map(|node| node.etag);
+async fn upsert_file(
+    client: &impl VfsApi,
+    path: &str,
+    content: &str,
+    overwrite_existing: bool,
+) -> Result<bool> {
+    let current = client.read_node(path).await?;
+    if current.is_some() && !overwrite_existing {
+        return Ok(false);
+    }
+    let expected_etag = current.map(|node| node.etag);
     client
         .write_node(WriteNodeRequest {
             path: path.to_string(),
             kind: NodeKind::File,
             content: content.to_string(),
-            metadata_json: "{}".to_string(),
+            metadata_json: GENERATED_METADATA_JSON.to_string(),
             expected_etag,
         })
         .await?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_wiki_documents, parse_raw_conversation, write_log_document};
+    use super::{
+        GENERATED_METADATA_JSON, build_wiki_documents, generate_conversation_wiki,
+        parse_raw_conversation, write_log_document,
+    };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
     use vfs_client::VfsApi;
     use vfs_types::{
@@ -344,6 +376,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_conversation_wiki_preserves_existing_scaffold_pages() {
+        let client = MemoryClient::with_source();
+        let facts_path = "/Wiki/conversations/chatgpt-abc/facts.md";
+        client.insert(Node {
+            path: facts_path.to_string(),
+            kind: NodeKind::File,
+            content: "# Facts\n\nmanual fact\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "manual".to_string(),
+            metadata_json: "{}".to_string(),
+        });
+
+        let result =
+            generate_conversation_wiki(&client, "/Sources/raw/chatgpt-abc/chatgpt-abc.md", false)
+                .await
+                .expect("wiki should generate");
+
+        assert!(!result.written_paths.contains(&facts_path.to_string()));
+        assert_eq!(
+            client.read_node(facts_path).await.unwrap().unwrap().content,
+            "# Facts\n\nmanual fact\n"
+        );
+        let index = client
+            .read_node("/Wiki/conversations/chatgpt-abc/index.md")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(index.metadata_json, GENERATED_METADATA_JSON);
+    }
+
+    #[tokio::test]
+    async fn generate_conversation_wiki_force_overwrites_scaffold_pages() {
+        let client = MemoryClient::with_source();
+        let summary_path = "/Wiki/conversations/chatgpt-abc/summary.md";
+        client.insert(Node {
+            path: summary_path.to_string(),
+            kind: NodeKind::File,
+            content: "# Summary\n\nmanual summary\n".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            etag: "manual".to_string(),
+            metadata_json: "{}".to_string(),
+        });
+
+        let result =
+            generate_conversation_wiki(&client, "/Sources/raw/chatgpt-abc/chatgpt-abc.md", true)
+                .await
+                .expect("wiki should generate");
+
+        assert!(result.written_paths.contains(&summary_path.to_string()));
+        let summary = client.read_node(summary_path).await.unwrap().unwrap();
+        assert!(summary.content.contains("review scaffold"));
+        assert_eq!(summary.metadata_json, GENERATED_METADATA_JSON);
+    }
+
+    #[tokio::test]
     async fn write_log_document_surfaces_etag_conflicts() {
         let raw = parse_raw_conversation("/Sources/raw/chatgpt-abc/chatgpt-abc.md", RAW, METADATA)
             .expect("raw should parse");
@@ -361,6 +450,156 @@ mod tests {
 
     struct ConflictClient {
         writes: Mutex<Vec<WriteNodeRequest>>,
+    }
+
+    struct MemoryClient {
+        nodes: Mutex<BTreeMap<String, Node>>,
+    }
+
+    impl MemoryClient {
+        fn with_source() -> Self {
+            let client = Self {
+                nodes: Mutex::new(BTreeMap::new()),
+            };
+            client.insert(Node {
+                path: "/Sources/raw/chatgpt-abc/chatgpt-abc.md".to_string(),
+                kind: NodeKind::Source,
+                content: RAW.to_string(),
+                created_at: 1,
+                updated_at: 1,
+                etag: "source".to_string(),
+                metadata_json: METADATA.to_string(),
+            });
+            client
+        }
+
+        fn insert(&self, node: Node) {
+            self.nodes
+                .lock()
+                .expect("nodes lock")
+                .insert(node.path.clone(), node);
+        }
+    }
+
+    #[async_trait]
+    impl VfsApi for MemoryClient {
+        async fn status(&self) -> Result<Status> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn canister_health(&self) -> Result<CanisterHealth> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn memory_manifest(&self) -> Result<MemoryManifest> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+            Ok(self.nodes.lock().expect("nodes lock").get(path).cloned())
+        }
+
+        async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn list_children(&self, _request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
+            let mut nodes = self.nodes.lock().expect("nodes lock");
+            let created = !nodes.contains_key(&request.path);
+            if let Some(current) = nodes.get(&request.path) {
+                if Some(current.etag.clone()) != request.expected_etag {
+                    return Err(anyhow!("etag conflict"));
+                }
+            } else if request.expected_etag.is_some() {
+                return Err(anyhow!("etag conflict"));
+            }
+            let etag = format!("etag-{}", nodes.len() + 1);
+            nodes.insert(
+                request.path.clone(),
+                Node {
+                    path: request.path.clone(),
+                    kind: request.kind,
+                    content: request.content,
+                    created_at: 1,
+                    updated_at: 2,
+                    etag: etag.clone(),
+                    metadata_json: request.metadata_json,
+                },
+            );
+            Ok(WriteNodeResult {
+                node: vfs_types::NodeMutationAck {
+                    path: request.path,
+                    kind: NodeKind::File,
+                    updated_at: 2,
+                    etag,
+                },
+                created,
+            })
+        }
+
+        async fn append_node(&self, _request: AppendNodeRequest) -> Result<WriteNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn edit_node(&self, _request: EditNodeRequest) -> Result<EditNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn delete_node(&self, _request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn move_node(&self, _request: MoveNodeRequest) -> Result<MoveNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn mkdir_node(&self, _request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn glob_nodes(&self, _request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn recent_nodes(&self, _request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn multi_edit_node(
+            &self,
+            _request: MultiEditNodeRequest,
+        ) -> Result<MultiEditNodeResult> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn search_node_paths(
+            &self,
+            _request: SearchNodePathsRequest,
+        ) -> Result<Vec<SearchNodeHit>> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn export_snapshot(
+            &self,
+            _request: ExportSnapshotRequest,
+        ) -> Result<ExportSnapshotResponse> {
+            Err(anyhow!("not implemented"))
+        }
+
+        async fn fetch_updates(
+            &self,
+            _request: FetchUpdatesRequest,
+        ) -> Result<FetchUpdatesResponse> {
+            Err(anyhow!("not implemented"))
+        }
     }
 
     #[async_trait]

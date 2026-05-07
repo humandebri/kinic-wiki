@@ -129,21 +129,28 @@ async function processDirectExport(callbacks) {
 
 export async function processExportTargets(targets, state, callbacks, concurrency = EXPORT_CONCURRENCY) {
   let latest = (await readExportState()) || state;
+  let updateQueue = Promise.resolve();
+  function enqueueStateUpdate(fn) {
+    updateQueue = updateQueue.then(fn, fn);
+    return updateQueue;
+  }
   async function recordEvent(event) {
-    const stored = await readExportState();
-    if (stored?.status === "cancelled") {
-      latest = stored;
-      return;
-    }
-    latest = stored || latest;
-    latest = advanceState(latest, event);
-    await writeExportState(latest);
-    const afterWrite = await readExportState();
-    if (afterWrite?.status === "cancelled") {
-      latest = afterWrite;
-      return;
-    }
-    hydrate(callbacks, latest);
+    return enqueueStateUpdate(async () => {
+      const stored = await readExportState();
+      if (stored?.status === "cancelled") {
+        latest = stored;
+        return;
+      }
+      latest = stored || latest;
+      latest = advanceState(latest, event);
+      await writeExportState(latest);
+      const afterWrite = await readExportState();
+      if (afterWrite?.status === "cancelled") {
+        latest = afterWrite;
+        return;
+      }
+      hydrate(callbacks, latest);
+    });
   }
   await mapWithConcurrency(targets, concurrency, async (target) => {
     if (await exportIsCancelled()) return null;

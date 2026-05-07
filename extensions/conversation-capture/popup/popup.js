@@ -5,6 +5,7 @@ const canisterInput = document.querySelector("#canister-id");
 const hostInput = document.querySelector("#host");
 const saveButton = document.querySelector("#save-settings");
 const statusText = document.querySelector("#status");
+const DEFAULT_HOST = "http://127.0.0.1:8001";
 
 saveButton.addEventListener("click", async () => {
   try {
@@ -38,6 +39,6 @@ async function send(message) {
 function currentConfig() {
   return {
     canisterId: canisterInput.value.trim(),
-    host: hostInput.value.trim() || "https://icp0.io"
+    host: hostInput.value.trim() || DEFAULT_HOST
   };
 }

@@ -29,6 +29,8 @@ pub enum Command {
         #[arg(long)]
         source_path: String,
         #[arg(long)]
+        force: bool,
+        #[arg(long)]
         json: bool,
     },
     ReadNode {
@@ -522,10 +524,16 @@ mod tests {
             "/Sources/raw/chatgpt-abc/chatgpt-abc.md",
             "--json",
         ]);
-        let Command::GenerateConversationWiki { source_path, json } = cli.command else {
+        let Command::GenerateConversationWiki {
+            source_path,
+            force,
+            json,
+        } = cli.command
+        else {
             panic!("expected generate-conversation-wiki command");
         };
         assert_eq!(source_path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
+        assert!(!force);
         assert!(json);
     }
 }

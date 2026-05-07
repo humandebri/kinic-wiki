@@ -6,9 +6,13 @@ import { createVfsActor } from "./vfs-actor.js";
 
 const DEFAULT_CONFIG = {
   canisterId: "",
-  host: "https://icp0.io"
+  host: "http://127.0.0.1:8001"
 };
 const ALLOWED_CHATGPT_ORIGINS = new Set(["https://chatgpt.com", "https://chat.openai.com"]);
+const ALLOWED_MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
+const MAX_MESSAGE_COUNT = 500;
+const MAX_MESSAGE_CONTENT_CHARS = 200_000;
+const MAX_RAW_SOURCE_CHARS = 1_500_000;
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -83,16 +87,37 @@ export function validateSaveSource(capture, sender) {
   if (!isAllowedChatGptUrl(capture?.url)) {
     throw new Error("capture url must be a ChatGPT conversation");
   }
+  if (!isConversationUrl(capture.url)) {
+    throw new Error("capture url must use /c/<id>");
+  }
   if (capture.provider !== "chatgpt") {
     throw new Error("capture provider must be chatgpt");
   }
+  if (typeof capture.conversationTitle !== "string") {
+    throw new Error("capture conversationTitle must be a string");
+  }
+  if (!isIsoDateTime(capture.capturedAt)) {
+    throw new Error("capture capturedAt must be an ISO timestamp");
+  }
   if (!Array.isArray(capture.messages) || capture.messages.length === 0) {
     throw new Error("capture messages must be a non-empty array");
+  }
+  if (capture.messages.length > MAX_MESSAGE_COUNT) {
+    throw new Error(`capture messages must not exceed ${MAX_MESSAGE_COUNT}`);
   }
   for (const message of capture.messages) {
     if (typeof message?.role !== "string" || typeof message?.content !== "string") {
       throw new Error("capture messages must contain string role and content");
     }
+    if (!ALLOWED_MESSAGE_ROLES.has(message.role)) {
+      throw new Error("capture message role must be user, assistant, or system");
+    }
+    if (message.content.length > MAX_MESSAGE_CONTENT_CHARS) {
+      throw new Error(`capture message content must not exceed ${MAX_MESSAGE_CONTENT_CHARS} characters`);
+    }
+  }
+  if (estimatedRawSourceSize(capture) > MAX_RAW_SOURCE_CHARS) {
+    throw new Error(`capture raw source must not exceed ${MAX_RAW_SOURCE_CHARS} characters`);
   }
 }
 
@@ -102,6 +127,30 @@ function isAllowedChatGptUrl(value) {
   } catch {
     return false;
   }
+}
+
+function isConversationUrl(value) {
+  try {
+    return /^\/c\/[^/]+\/?$/.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isIsoDateTime(value) {
+  if (typeof value !== "string" || !value.includes("T")) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp);
+}
+
+function estimatedRawSourceSize(capture) {
+  return (
+    String(capture.provider || "").length +
+    String(capture.url || "").length +
+    String(capture.capturedAt || "").length +
+    String(capture.conversationTitle || "").length +
+    capture.messages.reduce((total, message) => total + message.role.length + message.content.length + 64, 256)
+  );
 }
 
 async function loadConfig() {

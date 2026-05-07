@@ -44,6 +44,47 @@ test("processExportTargets records out-of-order worker completions without losin
   }
 });
 
+test("processExportTargets serializes state writes that would otherwise lose progress", async () => {
+  const restore = installRuntimeStorage(memoryStorage(), {
+    async beforeSet(message) {
+      const next = JSON.parse(message.value);
+      if (next.progress?.done === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    }
+  });
+  const originalFetch = globalThis.fetch;
+  try {
+    const state = exportingState(2);
+    await writeExportState(state);
+    globalThis.fetch = async (url) => jsonResponse(conversationPayload(String(url).split("/").pop(), "Title"));
+
+    const latest = await processExportTargets(
+      [
+        { id: "one", title: "One", url: "https://chatgpt.com/c/one" },
+        { id: "two", title: "Two", url: "https://chatgpt.com/c/two" }
+      ],
+      state,
+      {
+        async send(message) {
+          if (message.capture.url.endsWith("/one")) {
+            throw new Error("write failed");
+          }
+          return { result: { path: "/Sources/raw/chatgpt-two/chatgpt-two.md", created: true } };
+        }
+      },
+      2
+    );
+
+    assert.deepEqual(latest.progress, { total: 2, done: 2, ok: 1, failed: 1 });
+    assert.equal(latest.logs.length, 2);
+    assert.equal(latest.logs.some((log) => log.kind === "error"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restore();
+  }
+});
+
 test("processExportTargets suppresses events completed after cancellation", async () => {
   const restore = installRuntimeStorage(memoryStorage());
   const originalFetch = globalThis.fetch;
@@ -212,7 +253,7 @@ function installRuntimeStorage(storage, hooks = {}) {
             return { ok: true, value: storage.getItem(message.key) };
           }
           if (message.type === "export-state-set") {
-            hooks.beforeSet?.(message);
+            await hooks.beforeSet?.(message);
             if (JSON.parse(storage.getItem(message.key) || "{}").status === "cancelled") {
               return { ok: true };
             }

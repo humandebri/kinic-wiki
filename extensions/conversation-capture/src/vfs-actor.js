@@ -45,6 +45,11 @@ function idlFactory({ IDL: idl }) {
   });
 }
 
-function isLocalHost(host) {
-  return host.includes("127.0.0.1") || host.includes("localhost");
+export function isLocalHost(host) {
+  try {
+    const { hostname } = new URL(host);
+    return hostname === "127.0.0.1" || hostname === "localhost";
+  } catch {
+    return false;
+  }
 }

@@ -36,13 +36,17 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
             rebuild_scope_index(client, &scope).await?;
             println!("scope index rebuilt: {scope}");
         }
-        Command::GenerateConversationWiki { source_path, json } => {
-            let result = generate_conversation_wiki(client, &source_path).await?;
+        Command::GenerateConversationWiki {
+            source_path,
+            force,
+            json,
+        } => {
+            let result = generate_conversation_wiki(client, &source_path, force).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!(
-                    "conversation wiki generated: {} ({} pages)",
+                    "conversation wiki scaffold generated: {} ({} pages written)",
                     result.base_path,
                     result.written_paths.len()
                 );
