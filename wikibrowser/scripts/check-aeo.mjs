@@ -55,7 +55,7 @@ if (!robotsSource.includes("disallow: [\"/w/\"]")) {
 if (configSource.includes("output: \"export\"")) {
   failures.push("next.config.ts must not use static export");
 }
-for (const field of ["title", "description", "answer_summary", "updated", "index"]) {
+for (const field of ["title", "description", "answer_summary", "updated", "index", "sources"]) {
   if (!parserSource.includes(field)) {
     failures.push(`frontmatter parser does not check ${field}`);
   }

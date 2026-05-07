@@ -10,6 +10,7 @@ export type AeoFrontmatter = {
   index: true;
   canonical: string | null;
   entities: string[];
+  sources: string[];
 };
 
 export type ParsedAeoMarkdown = {
@@ -25,6 +26,7 @@ type RawFrontmatter = {
   index?: string;
   canonical?: string;
   entities?: string[];
+  sources?: string[];
 };
 
 export function parseAeoMarkdown(content: string): ParsedAeoMarkdown | null {
@@ -48,7 +50,7 @@ export function parseAeoMarkdown(content: string): ParsedAeoMarkdown | null {
 
 function parseFrontmatterBlock(block: string): RawFrontmatter {
   const raw: RawFrontmatter = {};
-  let listKey: "entities" | null = null;
+  let listKey: "entities" | "sources" | null = null;
   for (const line of block.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) {
@@ -65,9 +67,9 @@ function parseFrontmatterBlock(block: string): RawFrontmatter {
     }
     const key = trimmed.slice(0, separator).trim();
     const value = trimmed.slice(separator + 1).trim();
-    if (key === "entities" && value === "") {
-      raw.entities = [];
-      listKey = "entities";
+    if ((key === "entities" || key === "sources") && value === "") {
+      raw[key] = [];
+      listKey = key;
       continue;
     }
     assignScalar(raw, key, unquote(value));
@@ -98,6 +100,9 @@ function normalizeFrontmatter(raw: RawFrontmatter): AeoFrontmatter | null {
   if (raw.index !== "true") {
     return null;
   }
+  if (!raw.sources || raw.sources.length === 0) {
+    return null;
+  }
   return {
     title: raw.title,
     description: raw.description,
@@ -105,7 +110,8 @@ function normalizeFrontmatter(raw: RawFrontmatter): AeoFrontmatter | null {
     updated: raw.updated,
     index: true,
     canonical: raw.canonical ?? null,
-    entities: raw.entities ?? []
+    entities: raw.entities ?? [],
+    sources: raw.sources ?? []
   };
 }
 

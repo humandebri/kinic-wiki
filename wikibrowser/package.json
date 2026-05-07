@@ -9,7 +9,7 @@
     "smoke": "node scripts/smoke-ui.mjs",
     "smoke:errors": "node scripts/smoke-errors.mjs",
     "smoke:public": "node scripts/smoke-public.mjs",
-    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs && node scripts/check-aeo.mjs",
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs && node scripts/check-aeo.mjs && node scripts/check-frontend-aeo-skill.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {

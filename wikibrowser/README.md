@@ -141,6 +141,9 @@ index: true
 entities:
   - Kinic
   - AI memory
+sources:
+  - README.md
+  - app/page.tsx
 ---
 ```
 
