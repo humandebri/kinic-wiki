@@ -7,7 +7,8 @@ import { cancelCurrentTabExport, resumeCurrentTabExport, startCurrentTabExport }
 import { DEFAULT_EXPORT_LIMIT, normalizeExportLimit } from "./history-links.js";
 
 const ROOT_ID = "kinic-conversation-capture-root";
-const config = signal({ canisterId: "", host: "https://icp0.io" });
+const DEFAULT_HOST = "http://127.0.0.1:8001";
+const config = signal({ canisterId: "", host: DEFAULT_HOST });
 const countText = signal(String(DEFAULT_EXPORT_LIMIT));
 const status = signal("idle");
 const error = signal("");
@@ -125,10 +126,15 @@ async function startExport() {
   phase.value = "fetching";
   progress.value = { total: limit, done: 0, ok: 0, failed: 0 };
   try {
-    await send({ type: "save-config", config: normalizedConfig() });
+    const nextConfig = normalizedConfig();
+    if (isMainnetHost(nextConfig.host) && !confirmMainnetExport()) {
+      status.value = "idle";
+      return;
+    }
+    await send({ type: "save-config", config: nextConfig });
     await startCurrentTabExport({
       limit,
-      config: normalizedConfig(),
+      config: nextConfig,
       originalUrl: location.href,
       callbacks: exportCallbacks()
     });
@@ -156,7 +162,22 @@ function updateConfig(patch) {
 }
 
 function normalizedConfig() {
-  return { canisterId: config.value.canisterId.trim(), host: config.value.host.trim() || "https://icp0.io" };
+  return { canisterId: config.value.canisterId.trim(), host: config.value.host.trim() || DEFAULT_HOST };
+}
+
+function isMainnetHost(host) {
+  try {
+    const { hostname } = new URL(host);
+    return hostname === "icp0.io" || hostname.endsWith(".icp0.io");
+  } catch {
+    return false;
+  }
+}
+
+function confirmMainnetExport() {
+  return globalThis.confirm(
+    "This will write ChatGPT conversations to a mainnet IC host using an anonymous extension actor. Continue?"
+  );
 }
 
 async function send(message) {

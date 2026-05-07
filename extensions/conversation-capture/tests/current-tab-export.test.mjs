@@ -15,6 +15,7 @@ import {
   writeExportState
 } from "../src/current-tab-export.js";
 import { handleMessage, validateSaveSource } from "../src/service-worker.js";
+import { isLocalHost } from "../src/vfs-actor.js";
 
 const VALID_CAPTURE = {
   provider: "chatgpt",
@@ -275,6 +276,10 @@ test("validateSaveSource rejects non-ChatGPT senders and capture urls", () => {
     () => validateSaveSource({ ...VALID_CAPTURE, url: "https://evil.test/c/abc" }, VALID_SENDER),
     /capture url must be a ChatGPT conversation/
   );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, url: "https://chatgpt.com/" }, VALID_SENDER),
+    /must use \/c\/<id>/
+  );
 });
 
 test("validateSaveSource rejects wrong provider and malformed messages", () => {
@@ -289,6 +294,42 @@ test("validateSaveSource rejects wrong provider and malformed messages", () => {
   assert.throws(
     () => validateSaveSource({ ...VALID_CAPTURE, messages: [{ role: "user", content: 1 }] }, VALID_SENDER),
     /string role and content/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, capturedAt: "not a date" }, VALID_SENDER),
+    /ISO timestamp/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, conversationTitle: 1 }, VALID_SENDER),
+    /conversationTitle must be a string/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [{ role: "tool", content: "x" }] }, VALID_SENDER),
+    /role must be user, assistant, or system/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: [{ role: "user", content: "x".repeat(200_001) }] },
+        VALID_SENDER
+      ),
+    /content must not exceed/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: Array.from({ length: 501 }, () => ({ role: "user", content: "x" })) },
+        VALID_SENDER
+      ),
+    /messages must not exceed/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: Array.from({ length: 500 }, () => ({ role: "user", content: "x".repeat(3_000) })) },
+        VALID_SENDER
+      ),
+    /raw source must not exceed/
   );
 });
 
@@ -331,6 +372,14 @@ test("handleMessage does not overwrite cancelled export state with stale progres
   } finally {
     restore();
   }
+});
+
+test("isLocalHost only accepts parsed localhost hostnames", () => {
+  assert.equal(isLocalHost("http://127.0.0.1:8001"), true);
+  assert.equal(isLocalHost("http://localhost:8001"), true);
+  assert.equal(isLocalHost("https://example.com/?next=localhost"), false);
+  assert.equal(isLocalHost("https://localhost.evil.test"), false);
+  assert.equal(isLocalHost("not a url localhost"), false);
 });
 
 function jsonResponse(payload, ok = true, status = 200) {
