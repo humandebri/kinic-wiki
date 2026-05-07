@@ -57,7 +57,24 @@ if (configSource.includes("output: \"export\"")) {
 }
 for (const field of ["title", "description", "answer_summary", "updated", "index", "sources"]) {
   if (!parserSource.includes(field)) {
-    failures.push(`frontmatter parser does not check ${field}`);
+    failures.push(`frontmatter parser does not handle ${field}`);
+  }
+}
+if (!parserSource.includes("sources: raw.sources ?? []")) {
+  failures.push("frontmatter parser must default missing sources to []");
+}
+if (parserSource.includes("!raw.sources || raw.sources.length === 0")) {
+  failures.push("frontmatter parser must not reject legacy AEO Markdown without sources");
+}
+for (const requiredFragment of [
+  "!raw.title",
+  "!raw.description",
+  "!raw.answer_summary",
+  "!raw.updated",
+  'raw.index !== "true"'
+]) {
+  if (!parserSource.includes(requiredFragment)) {
+    failures.push(`frontmatter parser must still require ${requiredFragment}`);
   }
 }
 

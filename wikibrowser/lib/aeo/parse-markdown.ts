@@ -100,9 +100,6 @@ function normalizeFrontmatter(raw: RawFrontmatter): AeoFrontmatter | null {
   if (raw.index !== "true") {
     return null;
   }
-  if (!raw.sources || raw.sources.length === 0) {
-    return null;
-  }
   return {
     title: raw.title,
     description: raw.description,
