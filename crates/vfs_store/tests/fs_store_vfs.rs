@@ -25,6 +25,7 @@ fn append_node_creates_updates_and_checks_etag() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/log.md".to_string(),
                 content: "alpha".to_string(),
                 expected_etag: None,
@@ -48,6 +49,7 @@ fn append_node_creates_updates_and_checks_etag() {
     let updated = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/log.md".to_string(),
                 content: "beta".to_string(),
                 expected_etag: Some(created.node.etag.clone()),
@@ -71,6 +73,7 @@ fn append_node_creates_updates_and_checks_etag() {
     let stale = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/log.md".to_string(),
                 content: "gamma".to_string(),
                 expected_etag: Some("stale".to_string()),
@@ -91,6 +94,7 @@ fn append_node_preserves_existing_kind_and_metadata() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Sources/raw/log/log.md".to_string(),
                 content: "alpha".to_string(),
                 expected_etag: None,
@@ -105,6 +109,7 @@ fn append_node_preserves_existing_kind_and_metadata() {
     let _updated = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Sources/raw/log/log.md".to_string(),
                 content: "beta".to_string(),
                 expected_etag: Some(created.node.etag),
@@ -132,6 +137,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/source.md".to_string(),
                 content: "[Alpha](../alpha.md \"Alpha title\") [Paren](../paren.md (Paren title)) [After](../after.md) [[/Wiki/beta.md]] [[Project \"Alpha\".md]] [[Project (Alpha).md]] [External](https://example.com) [Custom](web+foo:bar) [Git](git+ssh://example/repo) [Urn](urn:isbn:123) [Anchor](#top)".to_string(),
                 expected_etag: None,
@@ -145,6 +151,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/alpha.md".to_string(),
                 limit: 10,
             })
@@ -155,6 +162,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/alpha.md".to_string(),
                 limit: 10,
             })
@@ -165,6 +173,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/paren.md".to_string(),
                 limit: 10,
             })
@@ -175,6 +184,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/after.md".to_string(),
                 limit: 10,
             })
@@ -185,6 +195,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/Project \"Alpha\".md".to_string(),
                 limit: 10,
             })
@@ -195,6 +206,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/Project (Alpha).md".to_string(),
                 limit: 10,
             })
@@ -205,6 +217,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .outgoing_links(OutgoingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/source.md".to_string(),
                 limit: 10,
             })
@@ -216,6 +229,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     let edited = store
         .edit_node(
             EditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/source.md".to_string(),
                 old_text: "../alpha.md \"Alpha title\"".to_string(),
                 new_text: "../gamma.md?view=raw#section \"Gamma title\"".to_string(),
@@ -228,6 +242,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/alpha.md".to_string(),
                 limit: 10,
             })
@@ -237,6 +252,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/gamma.md".to_string(),
                 limit: 10,
             })
@@ -248,6 +264,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     let appended = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/source.md".to_string(),
                 content: "[Delta](./delta.md)".to_string(),
                 expected_etag: Some(edited.node.etag.clone()),
@@ -261,6 +278,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/delta.md".to_string(),
                 limit: 10,
             })
@@ -272,6 +290,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Wiki/topic/source.md".to_string(),
                 to_path: "/Wiki/moved/source.md".to_string(),
                 expected_etag: Some(appended.node.etag.clone()),
@@ -283,6 +302,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert!(
         store
             .outgoing_links(OutgoingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/topic/source.md".to_string(),
                 limit: 10,
             })
@@ -292,6 +312,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert_eq!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/gamma.md".to_string(),
                 limit: 10,
             })
@@ -303,6 +324,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/moved/source.md".to_string(),
                 expected_etag: Some(moved.node.etag),
             },
@@ -312,6 +334,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
     assert!(
         store
             .incoming_links(IncomingLinksRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/gamma.md".to_string(),
                 limit: 10,
             })
@@ -327,6 +350,7 @@ fn graph_links_respects_prefix_and_limit() {
         store
             .append_node(
                 AppendNodeRequest {
+                    database_id: "default".to_string(),
                     path: format!("/Wiki/scope/source-{index}.md"),
                     content: format!("[Target](/Wiki/target-{index}.md)"),
                     expected_etag: None,
@@ -341,6 +365,7 @@ fn graph_links_respects_prefix_and_limit() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/other/source.md".to_string(),
                 content: "[Target](/Wiki/other-target.md)".to_string(),
                 expected_etag: None,
@@ -354,6 +379,7 @@ fn graph_links_respects_prefix_and_limit() {
 
     let graph = store
         .graph_links(GraphLinksRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki/scope".to_string(),
             limit: 2,
         })
@@ -372,6 +398,7 @@ fn node_context_returns_node_and_indexed_links() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/a.md".to_string(),
                 content: "[B](/Wiki/b.md)".to_string(),
                 expected_etag: None,
@@ -385,6 +412,7 @@ fn node_context_returns_node_and_indexed_links() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/c.md".to_string(),
                 content: "[A](/Wiki/a.md)".to_string(),
                 expected_etag: None,
@@ -398,6 +426,7 @@ fn node_context_returns_node_and_indexed_links() {
 
     let context = store
         .read_node_context(NodeContextRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/a.md".to_string(),
             link_limit: 10,
         })
@@ -409,6 +438,7 @@ fn node_context_returns_node_and_indexed_links() {
 
     let invalid_path = store
         .read_node_context(NodeContextRequest {
+            database_id: "default".to_string(),
             path: "Wiki/a.md".to_string(),
             link_limit: 10,
         })
@@ -417,6 +447,7 @@ fn node_context_returns_node_and_indexed_links() {
 
     let missing = store
         .read_node_context(NodeContextRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/missing.md".to_string(),
             link_limit: 10,
         })
@@ -455,6 +486,7 @@ fn memory_queries_return_context_and_scope_evidence() {
         store
             .append_node(
                 AppendNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.to_string(),
                     content: content.to_string(),
                     expected_etag: None,
@@ -473,6 +505,7 @@ fn memory_queries_return_context_and_scope_evidence() {
 
     let context = store
         .query_context(QueryContextRequest {
+            database_id: "default".to_string(),
             task: "beam reset".to_string(),
             entities: vec!["alpha".to_string()],
             namespace: Some("/Wiki/scope".to_string()),
@@ -499,6 +532,7 @@ fn memory_queries_return_context_and_scope_evidence() {
 
     let evidence = store
         .source_evidence(SourceEvidenceRequest {
+            database_id: "default".to_string(),
             node_path: "/Wiki/scope/overview.md".to_string(),
         })
         .expect("evidence should load");
@@ -512,6 +546,7 @@ fn memory_queries_return_context_and_scope_evidence() {
 
     let topic_evidence = store
         .source_evidence(SourceEvidenceRequest {
+            database_id: "default".to_string(),
             node_path: "/Wiki/scope/topics/foo.md".to_string(),
         })
         .expect("topic evidence should load");
@@ -521,6 +556,7 @@ fn memory_queries_return_context_and_scope_evidence() {
 
     let small_context = store
         .query_context(QueryContextRequest {
+            database_id: "default".to_string(),
             task: "summary".to_string(),
             entities: Vec::new(),
             namespace: Some("/Wiki/scope".to_string()),
@@ -532,6 +568,7 @@ fn memory_queries_return_context_and_scope_evidence() {
     assert!(small_context.truncated);
 
     let invalid_depth = store.query_context(QueryContextRequest {
+        database_id: "default".to_string(),
         task: "beam".to_string(),
         entities: Vec::new(),
         namespace: Some("/Wiki/scope".to_string()),
@@ -558,6 +595,7 @@ fn query_context_trims_search_hits_and_preserves_candidate_order() {
         store
             .append_node(
                 AppendNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.to_string(),
                     content: content.to_string(),
                     expected_etag: None,
@@ -572,6 +610,7 @@ fn query_context_trims_search_hits_and_preserves_candidate_order() {
 
     let ordered = store
         .query_context(QueryContextRequest {
+            database_id: "default".to_string(),
             task: "needle".to_string(),
             entities: Vec::new(),
             namespace: Some("/Wiki/order".to_string()),
@@ -599,6 +638,7 @@ fn query_context_trims_search_hits_and_preserves_candidate_order() {
     budget_store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/budget/long.md".to_string(),
                 content: "# Long\n\nneedle detail that cannot fit in a one token budget"
                     .to_string(),
@@ -613,6 +653,7 @@ fn query_context_trims_search_hits_and_preserves_candidate_order() {
 
     let small = budget_store
         .query_context(QueryContextRequest {
+            database_id: "default".to_string(),
             task: "needle".to_string(),
             entities: Vec::new(),
             namespace: Some("/Wiki/budget".to_string()),
@@ -638,6 +679,7 @@ fn graph_neighborhood_returns_center_hops() {
         store
             .append_node(
                 AppendNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.to_string(),
                     content: content.to_string(),
                     expected_etag: None,
@@ -652,6 +694,7 @@ fn graph_neighborhood_returns_center_hops() {
 
     let depth_one = store
         .graph_neighborhood(GraphNeighborhoodRequest {
+            database_id: "default".to_string(),
             center_path: "/Wiki/b.md".to_string(),
             depth: 1,
             limit: 10,
@@ -671,6 +714,7 @@ fn graph_neighborhood_returns_center_hops() {
 
     let depth_two = store
         .graph_neighborhood(GraphNeighborhoodRequest {
+            database_id: "default".to_string(),
             center_path: "/Wiki/b.md".to_string(),
             depth: 2,
             limit: 10,
@@ -684,6 +728,7 @@ fn graph_neighborhood_returns_center_hops() {
 
     let limited = store
         .graph_neighborhood(GraphNeighborhoodRequest {
+            database_id: "default".to_string(),
             center_path: "/Wiki/b.md".to_string(),
             depth: 1,
             limit: 2,
@@ -693,6 +738,7 @@ fn graph_neighborhood_returns_center_hops() {
 
     let invalid = store
         .graph_neighborhood(GraphNeighborhoodRequest {
+            database_id: "default".to_string(),
             center_path: "/Wiki/b.md".to_string(),
             depth: 3,
             limit: 10,
@@ -702,6 +748,7 @@ fn graph_neighborhood_returns_center_hops() {
 
     let invalid_path = store
         .graph_neighborhood(GraphNeighborhoodRequest {
+            database_id: "default".to_string(),
             center_path: "Wiki/b.md".to_string(),
             depth: 1,
             limit: 10,
@@ -716,6 +763,7 @@ fn edit_node_enforces_plain_text_replacement_rules() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/edit.md".to_string(),
                 content: "one two one".to_string(),
                 expected_etag: None,
@@ -730,6 +778,7 @@ fn edit_node_enforces_plain_text_replacement_rules() {
     let ambiguous = store
         .edit_node(
             EditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/edit.md".to_string(),
                 old_text: "one".to_string(),
                 new_text: "three".to_string(),
@@ -744,6 +793,7 @@ fn edit_node_enforces_plain_text_replacement_rules() {
     let edited = store
         .edit_node(
             EditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/edit.md".to_string(),
                 old_text: "one".to_string(),
                 new_text: "three".to_string(),
@@ -766,6 +816,7 @@ fn edit_node_enforces_plain_text_replacement_rules() {
     let missing = store
         .edit_node(
             EditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/edit.md".to_string(),
                 old_text: "absent".to_string(),
                 new_text: "x".to_string(),
@@ -783,6 +834,7 @@ fn mkdir_node_is_validation_only() {
     let (_dir, store) = new_store();
     let mkdir = store
         .mkdir_node(MkdirNodeRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/folder".to_string(),
         })
         .expect("mkdir should succeed");
@@ -790,6 +842,7 @@ fn mkdir_node_is_validation_only() {
 
     let invalid = store
         .mkdir_node(MkdirNodeRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/folder/".to_string(),
         })
         .expect_err("invalid mkdir path should fail");
@@ -805,6 +858,7 @@ fn mkdir_node_is_validation_only() {
 
     let list = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: false,
         })
@@ -818,6 +872,7 @@ fn move_node_renames_and_updates_search() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/from.md".to_string(),
                 content: "alpha".to_string(),
                 expected_etag: None,
@@ -841,6 +896,7 @@ fn move_node_renames_and_updates_search() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Wiki/from.md".to_string(),
                 to_path: "/Wiki/to.md".to_string(),
                 expected_etag: Some(created.node.etag.clone()),
@@ -876,6 +932,7 @@ fn move_node_renames_and_updates_search() {
 
     let hits = store
         .search_nodes(vfs_types::SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alpha".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -891,6 +948,7 @@ fn move_node_renames_and_updates_search() {
 
     let path_hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "TO".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -907,6 +965,7 @@ fn move_node_overwrite_replaces_live_target() {
     let source = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/from.md".to_string(),
                 content: "source".to_string(),
                 expected_etag: None,
@@ -920,6 +979,7 @@ fn move_node_overwrite_replaces_live_target() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/to.md".to_string(),
                 content: "target".to_string(),
                 expected_etag: None,
@@ -934,6 +994,7 @@ fn move_node_overwrite_replaces_live_target() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Wiki/from.md".to_string(),
                 to_path: "/Wiki/to.md".to_string(),
                 expected_etag: Some(source.node.etag),
@@ -967,6 +1028,7 @@ fn move_node_overwrite_reuses_deleted_target_path() {
     let source = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/from.md".to_string(),
                 content: "source".to_string(),
                 expected_etag: None,
@@ -980,6 +1042,7 @@ fn move_node_overwrite_reuses_deleted_target_path() {
     let target = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/to.md".to_string(),
                 content: "target".to_string(),
                 expected_etag: None,
@@ -993,6 +1056,7 @@ fn move_node_overwrite_reuses_deleted_target_path() {
     store
         .delete_node(
             vfs_types::DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/to.md".to_string(),
                 expected_etag: Some(target.node.etag),
             },
@@ -1003,6 +1067,7 @@ fn move_node_overwrite_reuses_deleted_target_path() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Wiki/from.md".to_string(),
                 to_path: "/Wiki/to.md".to_string(),
                 expected_etag: Some(source.node.etag),
@@ -1029,6 +1094,7 @@ fn glob_nodes_matches_files_and_virtual_directories() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/root.md".to_string(),
                 content: "root".to_string(),
                 expected_etag: None,
@@ -1042,6 +1108,7 @@ fn glob_nodes_matches_files_and_virtual_directories() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/nested/deep.md".to_string(),
                 content: "deep".to_string(),
                 expected_etag: None,
@@ -1055,6 +1122,7 @@ fn glob_nodes_matches_files_and_virtual_directories() {
 
     let direct_files = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "*.md".to_string(),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::File),
@@ -1065,6 +1133,7 @@ fn glob_nodes_matches_files_and_virtual_directories() {
 
     let nested_files = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "**/*.md".to_string(),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::File),
@@ -1074,6 +1143,7 @@ fn glob_nodes_matches_files_and_virtual_directories() {
 
     let directories = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "**".to_string(),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::Directory),
@@ -1093,6 +1163,7 @@ fn list_and_glob_do_not_depend_on_large_content_loading() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/large.md".to_string(),
                 content: large,
                 expected_etag: None,
@@ -1106,6 +1177,7 @@ fn list_and_glob_do_not_depend_on_large_content_loading() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/nested/child.md".to_string(),
                 content: "child".to_string(),
                 expected_etag: None,
@@ -1119,6 +1191,7 @@ fn list_and_glob_do_not_depend_on_large_content_loading() {
 
     let list = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: false,
         })
@@ -1128,6 +1201,7 @@ fn list_and_glob_do_not_depend_on_large_content_loading() {
 
     let glob = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "**/*.md".to_string(),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::File),
@@ -1142,6 +1216,7 @@ fn glob_nodes_rejects_overlong_patterns() {
     let (_dir, store) = new_store();
     let error = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "*".repeat(513),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::Any),
@@ -1158,6 +1233,7 @@ fn glob_nodes_tolerates_existing_paths_longer_than_previous_match_limit() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: long_path,
                 content: "long".to_string(),
                 expected_etag: None,
@@ -1171,6 +1247,7 @@ fn glob_nodes_tolerates_existing_paths_longer_than_previous_match_limit() {
     store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/short.md".to_string(),
                 content: "short".to_string(),
                 expected_etag: None,
@@ -1184,6 +1261,7 @@ fn glob_nodes_tolerates_existing_paths_longer_than_previous_match_limit() {
 
     let hits = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "*.md".to_string(),
             path: Some("/Wiki".to_string()),
             node_type: Some(GlobNodeType::File),
@@ -1199,6 +1277,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
     let first = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/one.md".to_string(),
                 content: "one".to_string(),
                 expected_etag: None,
@@ -1212,6 +1291,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
     let second = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/two.md".to_string(),
                 content: "two".to_string(),
                 expected_etag: None,
@@ -1225,6 +1305,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
     store
         .delete_node(
             vfs_types::DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/one.md".to_string(),
                 expected_etag: Some(first.node.etag),
             },
@@ -1234,6 +1315,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
 
     let visible = store
         .recent_nodes(RecentNodesRequest {
+            database_id: "default".to_string(),
             limit: 5,
             path: Some("/Wiki".to_string()),
         })
@@ -1244,6 +1326,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
 
     let all = store
         .recent_nodes(RecentNodesRequest {
+            database_id: "default".to_string(),
             limit: 5,
             path: Some("/Wiki".to_string()),
         })
@@ -1258,6 +1341,7 @@ fn multi_edit_node_is_atomic() {
     let created = store
         .append_node(
             AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/multi.md".to_string(),
                 content: "alpha beta gamma".to_string(),
                 expected_etag: None,
@@ -1272,6 +1356,7 @@ fn multi_edit_node_is_atomic() {
     let updated = store
         .multi_edit_node(
             MultiEditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/multi.md".to_string(),
                 edits: vec![
                     MultiEdit {
@@ -1301,6 +1386,7 @@ fn multi_edit_node_is_atomic() {
     let failed = store
         .multi_edit_node(
             MultiEditNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/multi.md".to_string(),
                 edits: vec![
                     MultiEdit {

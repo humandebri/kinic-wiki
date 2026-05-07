@@ -37,6 +37,14 @@ Current scope:
 - `/Wiki/...` as the primary durable wiki root
 - `/Sources/...` for raw and session source nodes
 
+Storage constraints:
+
+- Hot or restoring databases use stable-memory mount IDs `11..=32767`, so one canister can keep up to 32757 active database mounts at once.
+- Archived or deleted databases release their active mount ID.
+- See [`docs/DB_LIFECYCLE.md`](docs/DB_LIFECYCLE.md) for DB status, slot reuse, archive, and restore behavior.
+- Link graph queries are backed by `fs_links`; SQLite size grows with stored link edges and two link indexes.
+- Node writes update the link index in the same transaction as node content and FTS updates.
+
 ## Quick Start
 
 ### Workspace checks

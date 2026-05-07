@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
@@ -21,6 +21,7 @@ fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: format!("content revision {now}"),
@@ -96,11 +97,7 @@ fn fs_migrations_create_tables() {
         ]
     );
 
-    for table in [
-        "fs_snapshot_sessions",
-        "fs_snapshot_session_paths",
-        "fs_links",
-    ] {
+    for table in ["fs_links"] {
         let exists = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
@@ -114,7 +111,6 @@ fn fs_migrations_create_tables() {
     for index in [
         "fs_nodes_path_covering_idx",
         "fs_nodes_recent_covering_idx",
-        "fs_snapshot_sessions_expires_at_idx",
         "fs_links_target_path_idx",
         "fs_links_source_path_idx",
     ] {
@@ -377,6 +373,7 @@ fn status_counts_live_files_and_sources() {
     let file = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/file.md".to_string(),
                 kind: NodeKind::File,
                 content: "alpha".to_string(),
@@ -389,6 +386,7 @@ fn status_counts_live_files_and_sources() {
     let source = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKind::Source,
                 content: "source".to_string(),
@@ -401,6 +399,7 @@ fn status_counts_live_files_and_sources() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/file.md".to_string(),
                 expected_etag: Some(file.node.etag),
             },
@@ -452,6 +451,7 @@ fn fs_path_state_tracks_latest_change_revision() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/file.md".to_string(),
                 expected_etag: Some(second),
             },
@@ -522,21 +522,73 @@ fn fs_links_migration_backfills_existing_nodes() {
         "INSERT INTO fs_nodes
          (path, kind, content, created_at, updated_at, etag, metadata_json)
          VALUES (?1, 'file', ?2, 10, 20, 'etag-source', '{}')",
-        [
+        params![
             "/Wiki/source.md",
             "[Target](/Wiki/target.md) and [[/Wiki/other.md]]",
         ],
     )
-    .expect("existing node should insert");
+    .expect("first existing node should insert");
+    let large_content = format!(
+        "{}\n[Large Target](/Wiki/large-target.md)",
+        "large body ".repeat(20_000)
+    );
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, 'file', ?2, 11, 21, 'etag-large', '{}')",
+        params!["/Wiki/large.md", large_content],
+    )
+    .expect("large existing node should insert");
+    let dense_links = (0..50)
+        .map(|index| format!("[Node {index}](/Wiki/dense/{index}.md)"))
+        .chain([
+            "[Dup](/Wiki/dup.md)".to_string(),
+            "[Dup again](/Wiki/dup.md)".to_string(),
+        ])
+        .collect::<Vec<_>>()
+        .join("\n");
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, 'file', ?2, 12, 22, 'etag-dense', '{}')",
+        params!["/Wiki/dense.md", dense_links],
+    )
+    .expect("dense existing node should insert");
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, 'file', ?2, 13, 23, 'etag-plain', '{}')",
+        params!["/Wiki/plain.md", "plain body without links"],
+    )
+    .expect("plain existing node should insert");
     drop(conn);
 
-    let store = FsStore::new(database_path);
+    let store = FsStore::new(database_path.clone());
     store
         .run_fs_migrations()
         .expect("fs links migration should succeed");
+    let conn = Connection::open(database_path).expect("db should reopen");
+    let link_count = conn
+        .query_row("SELECT COUNT(*) FROM fs_links", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("link count should load");
+    assert_eq!(link_count, 54);
+    let duplicate_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fs_links
+             WHERE source_path = '/Wiki/dense.md'
+               AND target_path = '/Wiki/dup.md'
+               AND raw_href = '/Wiki/dup.md'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("duplicate link count should load");
+    assert_eq!(duplicate_count, 1);
 
     let outgoing = store
         .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/source.md".to_string(),
             limit: 10,
         })
@@ -549,6 +601,30 @@ fn fs_links_migration_backfills_existing_nodes() {
         targets,
         vec!["/Wiki/other.md".to_string(), "/Wiki/target.md".to_string()]
     );
+    let large_outgoing = store
+        .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/large.md".to_string(),
+            limit: 10,
+        })
+        .expect("large outgoing links should load");
+    assert_eq!(large_outgoing[0].target_path, "/Wiki/large-target.md");
+    let dense_outgoing = store
+        .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/dense.md".to_string(),
+            limit: 100,
+        })
+        .expect("dense outgoing links should load");
+    assert_eq!(dense_outgoing.len(), 51);
+    let plain_outgoing = store
+        .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/plain.md".to_string(),
+            limit: 100,
+        })
+        .expect("plain outgoing links should load");
+    assert!(plain_outgoing.is_empty());
 }
 
 #[test]
@@ -650,6 +726,7 @@ fn search_nodes_returns_error_for_invalid_stored_kind() {
 
     let error = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "searchable".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 10,
@@ -665,6 +742,7 @@ fn fs_nodes_fts_stores_title_using_current_basename_rule() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/nested/archive.tar.gz".to_string(),
                 kind: NodeKind::File,
                 content: "payload".to_string(),
@@ -677,6 +755,7 @@ fn fs_nodes_fts_stores_title_using_current_basename_rule() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/nested/.env".to_string(),
                 kind: NodeKind::File,
                 content: "payload".to_string(),
@@ -689,6 +768,7 @@ fn fs_nodes_fts_stores_title_using_current_basename_rule() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/nested/trailing.".to_string(),
                 kind: NodeKind::File,
                 content: "payload".to_string(),
@@ -731,6 +811,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let first = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 kind: NodeKind::File,
                 content: "alpha".to_string(),
@@ -759,6 +840,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let stale_error = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 kind: NodeKind::File,
                 content: "beta".to_string(),
@@ -773,6 +855,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let second = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 kind: NodeKind::File,
                 content: "beta".to_string(),
@@ -793,6 +876,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let _deleted = store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 expected_etag: Some(second.node.etag.clone()),
             },
@@ -802,6 +886,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let stale_delete = store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 expected_etag: Some(second.node.etag),
             },
@@ -819,6 +904,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
     let recreated = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 kind: NodeKind::File,
                 content: "gamma".to_string(),
@@ -846,6 +932,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     write_file(&store, "/Wiki/deleted/leaf.md", None, 13);
     let root_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: false,
         })
@@ -878,6 +965,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let nested_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki/nested".to_string(),
             recursive: true,
         })
@@ -889,6 +977,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/alpha.md".to_string(),
                 expected_etag: Some(alpha),
             },
@@ -898,6 +987,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     let _deleted_leaf = store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/deleted/leaf.md".to_string(),
                 expected_etag: Some(
                     store
@@ -912,6 +1002,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
         .expect("deleted leaf delete should succeed");
     let visible_after_delete = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: true,
         })
@@ -935,6 +1026,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let root_after_delete = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: false,
         })
@@ -947,6 +1039,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let deleted_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: true,
         })
@@ -955,6 +1048,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let deleted_root_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki".to_string(),
             recursive: false,
         })
@@ -967,6 +1061,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let search_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "nested".to_string(),
             prefix: Some("/Wiki/nested".to_string()),
             top_k: 5,
@@ -987,6 +1082,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let path_hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "NeStEd".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1006,6 +1102,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let missing_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alpha".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1016,6 +1113,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 
     let snapshot = store
         .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
             prefix: Some("/Wiki".to_string()),
             limit: 100,
             cursor: None,
@@ -1046,6 +1144,7 @@ fn list_children_returns_direct_children_with_virtual_directories() {
 
     let children = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/".to_string(),
         })
         .expect("children should list");
@@ -1133,6 +1232,7 @@ fn list_children_reports_missing_directory_paths() {
 
     let missing_error = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/no-such-dir".to_string(),
         })
         .expect_err("missing directory should be rejected");
@@ -1141,6 +1241,7 @@ fn list_children_reports_missing_directory_paths() {
     for path in ["/", "/Wiki", "/Sources"] {
         let children = store
             .list_children(ListChildrenRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
             })
             .expect("root-like directory should allow empty listing");
@@ -1154,6 +1255,7 @@ fn list_children_reports_utf8_content_size_in_bytes() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/japanese.md".to_string(),
                 kind: NodeKind::File,
                 content: "こんにちは".to_string(),
@@ -1166,6 +1268,7 @@ fn list_children_reports_utf8_content_size_in_bytes() {
 
     let children = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki".to_string(),
         })
         .expect("children should list");
@@ -1183,6 +1286,7 @@ fn list_children_rejects_non_directory_paths() {
 
     let file_error = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/alpha.md".to_string(),
         })
         .expect_err("file path should be rejected");
@@ -1190,6 +1294,7 @@ fn list_children_rejects_non_directory_paths() {
 
     let relative_error = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "Wiki".to_string(),
         })
         .expect_err("relative path should be rejected");
@@ -1211,6 +1316,7 @@ fn list_children_collapses_many_descendants_to_direct_entries() {
 
     let children = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki".to_string(),
         })
         .expect("children should list");
@@ -1297,6 +1403,7 @@ fn search_nodes_clamps_snippets_from_large_single_token_content() {
         store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.to_string(),
                     kind: NodeKind::File,
                     content: content.clone(),
@@ -1309,6 +1416,7 @@ fn search_nodes_clamps_snippets_from_large_single_token_content() {
 
         let hits = store
             .search_nodes(SearchNodesRequest {
+                database_id: "default".to_string(),
                 query_text: content,
                 prefix: Some("/Wiki".to_string()),
                 top_k: 5,
@@ -1335,6 +1443,7 @@ fn search_nodes_light_preview_reports_content_offset_and_excerpt() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/preview.md".to_string(),
                 kind: NodeKind::File,
                 content: "prefix text AlphaBeta suffix text".to_string(),
@@ -1347,6 +1456,7 @@ fn search_nodes_light_preview_reports_content_offset_and_excerpt() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alphabeta".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1380,6 +1490,7 @@ fn search_nodes_defaults_to_light_preview_when_mode_is_omitted() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/default-preview.md".to_string(),
                 kind: NodeKind::File,
                 content: "prefix text AlphaBeta suffix text".to_string(),
@@ -1392,6 +1503,7 @@ fn search_nodes_defaults_to_light_preview_when_mode_is_omitted() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alphabeta".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1410,6 +1522,7 @@ fn search_node_paths_content_start_preview_returns_body_prefix() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/path-preview/topic-note.md".to_string(),
                 kind: NodeKind::File,
                 content,
@@ -1422,6 +1535,7 @@ fn search_node_paths_content_start_preview_returns_body_prefix() {
 
     let hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "topic-note".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1446,6 +1560,7 @@ fn search_nodes_content_start_preview_covers_content_and_path_hits() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/content-start/path-hit.md".to_string(),
                 kind: NodeKind::File,
                 content: "path body\nwith\tspacing".to_string(),
@@ -1458,6 +1573,7 @@ fn search_nodes_content_start_preview_covers_content_and_path_hits() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/content-start/content-hit.md".to_string(),
                 kind: NodeKind::File,
                 content: "shared-token content\nwith\tspacing".to_string(),
@@ -1470,6 +1586,7 @@ fn search_nodes_content_start_preview_covers_content_and_path_hits() {
 
     let path_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "path-hit".to_string(),
             prefix: Some("/Wiki/content-start".to_string()),
             top_k: 5,
@@ -1478,6 +1595,7 @@ fn search_nodes_content_start_preview_covers_content_and_path_hits() {
         .expect("path hit search should succeed");
     let content_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "shared-token".to_string(),
             prefix: Some("/Wiki/content-start".to_string()),
             top_k: 5,
@@ -1507,6 +1625,7 @@ fn search_content_start_preview_keeps_empty_body_excerpt_empty() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/empty-body.md".to_string(),
                 kind: NodeKind::File,
                 content: " \n\t ".to_string(),
@@ -1519,6 +1638,7 @@ fn search_content_start_preview_keeps_empty_body_excerpt_empty() {
 
     let hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "empty-body".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 5,
@@ -1544,6 +1664,7 @@ fn search_nodes_handles_ten_large_hits_without_loading_full_content() {
         store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: format!("/Wiki/large/node-{index:03}.md"),
                     kind: NodeKind::File,
                     content: payload.clone(),
@@ -1557,6 +1678,7 @@ fn search_nodes_handles_ten_large_hits_without_loading_full_content() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "shared-bench-search".to_string(),
             prefix: Some("/Wiki/large".to_string()),
             top_k: 10,
@@ -1586,6 +1708,7 @@ fn search_nodes_mixed_large_and_small_hits_can_omit_content_snippets() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/mixed/large.md".to_string(),
                 kind: NodeKind::File,
                 content: large_payload,
@@ -1598,6 +1721,7 @@ fn search_nodes_mixed_large_and_small_hits_can_omit_content_snippets() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/mixed/small.md".to_string(),
                 kind: NodeKind::File,
                 content: small_payload,
@@ -1610,6 +1734,7 @@ fn search_nodes_mixed_large_and_small_hits_can_omit_content_snippets() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "shared-bench-search".to_string(),
             prefix: Some("/Wiki/mixed".to_string()),
             top_k: 10,
@@ -1636,6 +1761,7 @@ fn search_nodes_prefers_basename_matches_over_content_only_hits() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/ranking/alpha-beta.md".to_string(),
                 kind: NodeKind::File,
                 content: "ranking body".to_string(),
@@ -1648,6 +1774,7 @@ fn search_nodes_prefers_basename_matches_over_content_only_hits() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/ranking/other.md".to_string(),
                 kind: NodeKind::File,
                 content: "alpha beta body only".to_string(),
@@ -1660,6 +1787,7 @@ fn search_nodes_prefers_basename_matches_over_content_only_hits() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alpha-beta".to_string(),
             prefix: Some("/Wiki/ranking".to_string()),
             top_k: 5,
@@ -1686,6 +1814,7 @@ fn search_nodes_recovers_partial_multi_term_matches() {
         store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: format!("/Wiki/recall/node-{index}.md"),
                     kind: NodeKind::File,
                     content: content.to_string(),
@@ -1699,6 +1828,7 @@ fn search_nodes_recovers_partial_multi_term_matches() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "alpha beta missing".to_string(),
             prefix: Some("/Wiki/recall".to_string()),
             top_k: 10,
@@ -1722,6 +1852,7 @@ fn search_nodes_supports_japanese_queries_without_spaces() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/日本語/検索改善メモ.md".to_string(),
                 kind: NodeKind::File,
                 content: "検索精度改善の作業メモ".to_string(),
@@ -1734,6 +1865,7 @@ fn search_nodes_supports_japanese_queries_without_spaces() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "検索改善".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 10,
@@ -1757,6 +1889,7 @@ fn search_nodes_path_only_hits_keep_path_snippets() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/path-only/unique-title.md".to_string(),
                 kind: NodeKind::File,
                 content: "irrelevant body".to_string(),
@@ -1769,6 +1902,7 @@ fn search_nodes_path_only_hits_keep_path_snippets() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "unique-title".to_string(),
             prefix: Some("/Wiki/path-only".to_string()),
             top_k: 5,
@@ -1794,6 +1928,7 @@ fn search_nodes_keeps_basename_exact_hits_above_fts_only_hits() {
         store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: format!("/Wiki/fts-heavy/doc-{index:02}.md"),
                     kind: NodeKind::File,
                     content: "focus-token appears in the body".to_string(),
@@ -1807,6 +1942,7 @@ fn search_nodes_keeps_basename_exact_hits_above_fts_only_hits() {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/fts-heavy/focus-token.md".to_string(),
                 kind: NodeKind::File,
                 content: "body without the keyword".to_string(),
@@ -1819,6 +1955,7 @@ fn search_nodes_keeps_basename_exact_hits_above_fts_only_hits() {
 
     let hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "focus-token".to_string(),
             prefix: Some("/Wiki/fts-heavy".to_string()),
             top_k: 5,
@@ -1841,6 +1978,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
     let created = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/move/source-name.md".to_string(),
                 kind: NodeKind::File,
                 content: "stable body".to_string(),
@@ -1853,6 +1991,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
     store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Wiki/move/source-name.md".to_string(),
                 to_path: "/Wiki/move/renamed-note.md".to_string(),
                 expected_etag: Some(created.node.etag),
@@ -1864,6 +2003,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
 
     let new_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "renamed-note".to_string(),
             prefix: Some("/Wiki/move".to_string()),
             top_k: 5,
@@ -1880,6 +2020,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
 
     let stale_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "source-name".to_string(),
             prefix: Some("/Wiki/move".to_string()),
             top_k: 5,
@@ -1890,6 +2031,7 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
 
     let path_hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "renamed-note".to_string(),
             prefix: Some("/Wiki/move".to_string()),
             top_k: 5,
@@ -1911,6 +2053,7 @@ fn move_node_allows_noncanonical_target_for_source_nodes() {
     let created = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKind::Source,
                 content: "source body".to_string(),
@@ -1924,6 +2067,7 @@ fn move_node_allows_noncanonical_target_for_source_nodes() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Sources/raw/source/source.md".to_string(),
                 to_path: "/Sources/raw/renamed/wrong.md".to_string(),
                 expected_etag: Some(created.node.etag),
@@ -1942,6 +2086,7 @@ fn move_node_accepts_canonical_target_for_source_nodes() {
     let created = store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKind::Source,
                 content: "source body".to_string(),
@@ -1955,6 +2100,7 @@ fn move_node_accepts_canonical_target_for_source_nodes() {
     let moved = store
         .move_node(
             MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: "/Sources/raw/source/source.md".to_string(),
                 to_path: "/Sources/sessions/renamed/renamed.md".to_string(),
                 expected_etag: Some(created.node.etag),
@@ -1979,6 +2125,7 @@ fn source_nodes_allow_domain_specific_prefix_lookalike_paths() {
         let result = store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.to_string(),
                     kind: NodeKind::Source,
                     content: "source body".to_string(),
@@ -2005,6 +2152,7 @@ fn source_nodes_accept_canonical_paths_under_both_roots() {
     {
         let result = store.write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::Source,
                 content: "source body".to_string(),
@@ -2028,6 +2176,7 @@ fn query_limits_are_capped_at_one_hundred() {
         store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: format!("/Wiki/capped/node-{index:03}.md"),
                     kind: NodeKind::File,
                     content: format!("shared-cap-token path-cap-{index}"),
@@ -2041,6 +2190,7 @@ fn query_limits_are_capped_at_one_hundred() {
 
     let recent = store
         .recent_nodes(RecentNodesRequest {
+            database_id: "default".to_string(),
             limit: 1_000,
             path: Some("/Wiki/capped".to_string()),
         })
@@ -2049,6 +2199,7 @@ fn query_limits_are_capped_at_one_hundred() {
 
     let search = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "shared-cap-token".to_string(),
             prefix: Some("/Wiki/capped".to_string()),
             top_k: 1_000,
@@ -2059,6 +2210,7 @@ fn query_limits_are_capped_at_one_hundred() {
 
     let path_search = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "node".to_string(),
             prefix: Some("/Wiki/capped".to_string()),
             top_k: 1_000,
@@ -2078,6 +2230,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/zzz/nested-note.md".to_string(),
                 expected_etag: Some(first),
             },
@@ -2092,6 +2245,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/zzz/nested-note.md".to_string(),
                 expected_etag: Some(latest.etag),
             },
@@ -2101,6 +2255,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
 
     let hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "NESTED note".to_string(),
             prefix: Some("/Wiki".to_string()),
             top_k: 10,

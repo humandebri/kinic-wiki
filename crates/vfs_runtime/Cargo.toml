@@ -7,9 +7,9 @@ edition = "2024"
 bench-disable-fts = ["vfs-store/bench-disable-fts"]
 
 [dependencies]
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 vfs-types = { path = "../vfs_types" }
 vfs-store = { path = "../vfs_store" }
 
 [dev-dependencies]
-rusqlite = { version = "0.37.0", features = ["bundled"] }
 tempfile = "3.23.0"

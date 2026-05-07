@@ -74,6 +74,7 @@ mod tests {
             store
                 .write_node(
                     WriteNodeRequest {
+                        database_id: "default".to_string(),
                         path: format!("/Wiki/bench/node-{index:03}.md"),
                         kind: NodeKind::File,
                         content: make_searchable_payload(payload_size_bytes, index),
@@ -119,6 +120,7 @@ mod tests {
                 for _ in 0..50 {
                     let hits = store
                         .search_nodes(SearchNodesRequest {
+                            database_id: "default".to_string(),
                             query_text: "shared-bench-search".to_string(),
                             prefix: Some("/Wiki/bench".to_string()),
                             top_k: 10,
