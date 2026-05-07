@@ -34,6 +34,10 @@ async fn main() -> Result<()> {
         BeamPrepareArgs {
             dataset_path: cli.dataset_path,
             split: cli.split,
+            database_id: cli
+                .connection
+                .database_id
+                .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?,
             limit: cli.limit,
             namespace: cli.namespace,
         },

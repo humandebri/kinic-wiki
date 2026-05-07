@@ -4,7 +4,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
-pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg};
+pub use vfs_cli::cli::{
+    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+};
 use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
 
 #[derive(Parser, Debug)]
@@ -20,6 +22,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
     RebuildIndex,
     RebuildScopeIndex {
         #[arg(long)]
@@ -255,6 +261,9 @@ pub enum Command {
 impl Command {
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
+            Self::Database { command } => Some(VfsCommand::Database {
+                command: command.clone(),
+            }),
             Self::ReadNode { path, json } => Some(VfsCommand::ReadNode {
                 path: path.clone(),
                 json: *json,

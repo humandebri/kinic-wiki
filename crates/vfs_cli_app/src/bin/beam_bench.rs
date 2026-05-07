@@ -78,6 +78,10 @@ async fn main() -> Result<()> {
         BeamBenchArgs {
             dataset_path: cli.dataset_path,
             split: cli.split,
+            database_id: cli
+                .connection
+                .database_id
+                .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?,
             model: cli.model,
             output_dir: cli.output_dir,
             eval_mode: match cli.eval_mode {

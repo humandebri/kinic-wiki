@@ -13,20 +13,32 @@ use vfs_types::{
     MultiEditNodeRequest, NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest,
     SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
 };
+use wiki_domain::{WIKI_ROOT_PATH, validate_source_path_for_kind};
 
-use crate::cli::VfsCommand;
+use crate::cli::{DatabaseCommand, VfsCommand};
 
 pub const SYNC_PAGE_LIMIT: u32 = 100;
 pub const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
 pub const SNAPSHOT_INVALID_ERROR: &str = "known_snapshot_revision is invalid";
 pub const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no longer current";
-pub const SNAPSHOT_SESSION_EXPIRED_ERROR: &str = "snapshot_session_id has expired";
 
-pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Result<()> {
+pub async fn run_vfs_command(
+    client: &impl VfsApi,
+    database_id: Option<&str>,
+    command: VfsCommand,
+) -> Result<()> {
+    if let VfsCommand::Database { command } = command {
+        run_database_command(client, command).await?;
+        return Ok(());
+    }
+    let database_id = require_database_id(database_id)?;
     match command {
+        VfsCommand::Database { .. } => {
+            unreachable!("database command handled before db requirement")
+        }
         VfsCommand::ReadNode { path, json } => {
             let node = client
-                .read_node(&path)
+                .read_node(database_id, &path)
                 .await?
                 .ok_or_else(|| anyhow!("node not found: {path}"))?;
             if json {
@@ -41,7 +53,11 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             json,
         } => {
             let entries = client
-                .list_nodes(ListNodesRequest { prefix, recursive })
+                .list_nodes(ListNodesRequest {
+                    database_id: database_id.to_string(),
+                    prefix,
+                    recursive,
+                })
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -52,7 +68,12 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             }
         }
         VfsCommand::ListChildren { path, json } => {
-            let children = client.list_children(ListChildrenRequest { path }).await?;
+            let children = client
+                .list_children(ListChildrenRequest {
+                    database_id: database_id.to_string(),
+                    path,
+                })
+                .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&children)?);
             } else {
@@ -75,8 +96,10 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             json,
         } => {
             let content = fs::read_to_string(&input)?;
+            validate_source_path_for_write(&path, kind.to_node_kind())?;
             let result = client
                 .write_node(WriteNodeRequest {
+                    database_id: database_id.to_string(),
                     path,
                     kind: kind.to_node_kind(),
                     content,
@@ -100,8 +123,12 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             json,
         } => {
             let content = fs::read_to_string(&input)?;
+            if let Some(kind_arg) = kind {
+                validate_source_path_for_write(&path, kind_arg.to_node_kind())?;
+            }
             let result = client
                 .append_node(AppendNodeRequest {
+                    database_id: database_id.to_string(),
                     path,
                     content,
                     expected_etag,
@@ -126,6 +153,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let result = client
                 .edit_node(EditNodeRequest {
+                    database_id: database_id.to_string(),
                     path,
                     old_text,
                     new_text,
@@ -146,6 +174,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let result = client
                 .delete_node(DeleteNodeRequest {
+                    database_id: database_id.to_string(),
                     path,
                     expected_etag,
                 })
@@ -157,7 +186,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             }
         }
         VfsCommand::DeleteTree { path, json } => {
-            let deleted_paths = delete_tree(client, &path).await?;
+            let deleted_paths = delete_tree(client, database_id, &path).await?;
             if json {
                 println!(
                     "{}",
@@ -173,7 +202,12 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             }
         }
         VfsCommand::MkdirNode { path, json } => {
-            let result = client.mkdir_node(MkdirNodeRequest { path }).await?;
+            let result = client
+                .mkdir_node(MkdirNodeRequest {
+                    database_id: database_id.to_string(),
+                    path,
+                })
+                .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -187,8 +221,13 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             overwrite,
             json,
         } => {
+            if let Some(current) = client.read_node(database_id, &from_path).await? {
+                validate_source_path_for_kind(&to_path, &current.kind)
+                    .map_err(anyhow::Error::msg)?;
+            }
             let result = client
                 .move_node(MoveNodeRequest {
+                    database_id: database_id.to_string(),
                     from_path,
                     to_path,
                     expected_etag,
@@ -209,6 +248,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let hits = client
                 .glob_nodes(GlobNodesRequest {
+                    database_id: database_id.to_string(),
                     pattern,
                     path: Some(path),
                     node_type: node_type.map(|value| value.to_glob_node_type()),
@@ -225,6 +265,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         VfsCommand::RecentNodes { limit, path, json } => {
             let hits = client
                 .recent_nodes(RecentNodesRequest {
+                    database_id: database_id.to_string(),
                     limit,
                     path: Some(path),
                 })
@@ -243,7 +284,11 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             json,
         } => {
             let context = client
-                .read_node_context(NodeContextRequest { path, link_limit })
+                .read_node_context(NodeContextRequest {
+                    database_id: database_id.to_string(),
+                    path,
+                    link_limit,
+                })
                 .await?
                 .ok_or_else(|| anyhow!("node not found"))?;
             if json {
@@ -262,6 +307,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let links = client
                 .graph_neighborhood(GraphNeighborhoodRequest {
+                    database_id: database_id.to_string(),
                     center_path,
                     depth,
                     limit,
@@ -275,19 +321,31 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             json,
         } => {
             let links = client
-                .graph_links(GraphLinksRequest { prefix, limit })
+                .graph_links(GraphLinksRequest {
+                    database_id: database_id.to_string(),
+                    prefix,
+                    limit,
+                })
                 .await?;
             print_links(links, json)?;
         }
         VfsCommand::IncomingLinks { path, limit, json } => {
             let links = client
-                .incoming_links(IncomingLinksRequest { path, limit })
+                .incoming_links(IncomingLinksRequest {
+                    database_id: database_id.to_string(),
+                    path,
+                    limit,
+                })
                 .await?;
             print_links(links, json)?;
         }
         VfsCommand::OutgoingLinks { path, limit, json } => {
             let links = client
-                .outgoing_links(OutgoingLinksRequest { path, limit })
+                .outgoing_links(OutgoingLinksRequest {
+                    database_id: database_id.to_string(),
+                    path,
+                    limit,
+                })
                 .await?;
             print_links(links, json)?;
         }
@@ -300,6 +358,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
             let edits = read_multi_edit_file(&edits_file)?;
             let result = client
                 .multi_edit_node(MultiEditNodeRequest {
+                    database_id: database_id.to_string(),
                     path,
                     edits,
                     expected_etag,
@@ -320,6 +379,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let hits = client
                 .search_nodes(SearchNodesRequest {
+                    database_id: database_id.to_string(),
                     query_text,
                     prefix: Some(prefix),
                     top_k,
@@ -349,6 +409,7 @@ pub async fn run_vfs_command(client: &impl VfsApi, command: VfsCommand) -> Resul
         } => {
             let hits = client
                 .search_node_paths(SearchNodePathsRequest {
+                    database_id: database_id.to_string(),
                     query_text,
                     prefix: Some(prefix),
                     top_k,
@@ -381,6 +442,54 @@ fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
     Ok(())
 }
 
+async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) -> Result<()> {
+    match command {
+        DatabaseCommand::Create { database_id } => {
+            client.create_database(&database_id).await?;
+            println!("{database_id}");
+        }
+        DatabaseCommand::Grant {
+            database_id,
+            principal,
+            role,
+        } => {
+            client
+                .grant_database_access(&database_id, &principal, role.to_database_role())
+                .await?;
+            println!("{database_id}\t{principal}\t{:?}", role.to_database_role());
+        }
+        DatabaseCommand::Revoke {
+            database_id,
+            principal,
+        } => {
+            client
+                .revoke_database_access(&database_id, &principal)
+                .await?;
+            println!("{database_id}\t{principal}");
+        }
+        DatabaseCommand::Members { database_id, json } => {
+            let members = client.list_database_members(&database_id).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&members)?);
+            } else {
+                for member in members {
+                    println!(
+                        "{}\t{}\t{:?}\t{}",
+                        member.database_id, member.principal, member.role, member.created_at_ms
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_database_id(database_id: Option<&str>) -> Result<&str> {
+    database_id
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("--database-id is required for DB-backed VFS operations"))
+}
+
 fn print_link_summary(label: &str, links: &[LinkEdge]) {
     println!("{label}\t{}", links.len());
     for link in links {
@@ -393,29 +502,28 @@ fn print_link_summary(label: &str, links: &[LinkEdge]) {
 
 pub async fn collect_paged_snapshot(
     client: &impl VfsApi,
-    prefix: &str,
+    database_id: &str,
 ) -> Result<ExportSnapshotResponse> {
     let mut cursor = None;
     let mut snapshot_revision = None;
-    let mut snapshot_session_id = None;
     let mut nodes = Vec::new();
     loop {
         let page = client
             .export_snapshot(ExportSnapshotRequest {
-                prefix: Some(prefix.to_string()),
+                database_id: database_id.to_string(),
+                prefix: Some(WIKI_ROOT_PATH.to_string()),
                 limit: SYNC_PAGE_LIMIT,
                 cursor: cursor.clone(),
                 snapshot_revision: snapshot_revision.clone(),
-                snapshot_session_id: snapshot_session_id.clone(),
+                snapshot_session_id: None,
             })
             .await?;
         snapshot_revision = Some(page.snapshot_revision.clone());
-        snapshot_session_id = page.snapshot_session_id.clone();
         nodes.extend(page.nodes);
         let Some(next_cursor) = page.next_cursor else {
             return Ok(ExportSnapshotResponse {
                 snapshot_revision: snapshot_revision.unwrap_or_default(),
-                snapshot_session_id,
+                snapshot_session_id: None,
                 nodes,
                 next_cursor: None,
             });
@@ -426,7 +534,7 @@ pub async fn collect_paged_snapshot(
 
 pub async fn collect_paged_updates(
     client: &impl VfsApi,
-    prefix: &str,
+    database_id: &str,
     known_snapshot_revision: &str,
     target_snapshot_revision: Option<String>,
 ) -> Result<FetchUpdatesResponse> {
@@ -437,8 +545,9 @@ pub async fn collect_paged_updates(
     loop {
         let page = client
             .fetch_updates(FetchUpdatesRequest {
+                database_id: database_id.to_string(),
                 known_snapshot_revision: known_snapshot_revision.to_string(),
-                prefix: Some(prefix.to_string()),
+                prefix: Some(WIKI_ROOT_PATH.to_string()),
                 limit: SYNC_PAGE_LIMIT,
                 cursor: cursor.clone(),
                 target_snapshot_revision: target_snapshot_revision.clone(),
@@ -470,18 +579,17 @@ pub fn resync_required_error(error: anyhow::Error) -> anyhow::Error {
 
 pub fn snapshot_restart_required_error(error: anyhow::Error) -> anyhow::Error {
     let message = error.to_string();
-    if message.contains(SNAPSHOT_NO_LONGER_CURRENT_ERROR)
-        || message.contains(SNAPSHOT_SESSION_EXPIRED_ERROR)
-    {
+    if message.contains(SNAPSHOT_NO_LONGER_CURRENT_ERROR) {
         anyhow!("{message}; rerun pull")
     } else {
         error
     }
 }
 
-async fn delete_tree(client: &impl VfsApi, path: &str) -> Result<Vec<String>> {
+async fn delete_tree(client: &impl VfsApi, database_id: &str, path: &str) -> Result<Vec<String>> {
     let mut entries = client
         .list_nodes(ListNodesRequest {
+            database_id: database_id.to_string(),
             prefix: path.to_string(),
             recursive: true,
         })
@@ -497,6 +605,7 @@ async fn delete_tree(client: &impl VfsApi, path: &str) -> Result<Vec<String>> {
     for entry in entries {
         let result = client
             .delete_node(DeleteNodeRequest {
+                database_id: database_id.to_string(),
                 path: entry.path,
                 expected_etag: Some(entry.etag),
             })
@@ -504,6 +613,10 @@ async fn delete_tree(client: &impl VfsApi, path: &str) -> Result<Vec<String>> {
         deleted_paths.push(result.path);
     }
     Ok(deleted_paths)
+}
+
+fn validate_source_path_for_write(path: &str, kind: vfs_types::NodeKind) -> Result<()> {
+    validate_source_path_for_kind(path, &kind).map_err(anyhow::Error::msg)
 }
 
 fn read_multi_edit_file(path: &std::path::Path) -> Result<Vec<MultiEdit>> {
@@ -533,10 +646,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
             Ok(None)
         }
         async fn read_node_context(
@@ -571,7 +684,6 @@ mod tests {
                 etag: Some("etag".to_string()),
                 size_bytes: Some(5),
                 is_virtual: false,
-                has_children: false,
             }])
         }
         async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
@@ -651,6 +763,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
+            Some("alpha"),
             VfsCommand::WriteNode {
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKindArg::Source,
@@ -670,6 +783,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
+            Some("alpha"),
             VfsCommand::ListChildren {
                 path: "/Wiki".to_string(),
                 json: true,
@@ -685,6 +799,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
+            Some("alpha"),
             VfsCommand::ReadNodeContext {
                 path: "/Wiki/a.md".to_string(),
                 link_limit: 7,
@@ -703,6 +818,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
+            Some("alpha"),
             VfsCommand::GraphNeighborhood {
                 center_path: "/Wiki/a.md".to_string(),
                 depth: 2,

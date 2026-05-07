@@ -51,11 +51,16 @@ pub fn raw_source_path(namespace: &str, conversation_id: &str) -> String {
     format!("{SOURCES_ROOT_PREFIX}/{source_id}/{source_id}.md")
 }
 
-pub async fn sync_beam_indexes(client: &impl VfsApi, namespace: &str) -> Result<()> {
+pub async fn sync_beam_indexes(
+    client: &impl VfsApi,
+    database_id: &str,
+    namespace: &str,
+) -> Result<()> {
     let namespace_prefix = namespace_base_path(namespace);
     let index_path = namespace_index_path(namespace);
     let entries = client
         .list_nodes(ListNodesRequest {
+            database_id: database_id.to_string(),
             prefix: namespace_prefix.clone(),
             recursive: true,
         })
@@ -75,7 +80,7 @@ pub async fn sync_beam_indexes(client: &impl VfsApi, namespace: &str) -> Result<
     let mut rows = Vec::with_capacity(conversation_indexes.len());
     for path in &conversation_indexes {
         let summary = client
-            .read_node(path)
+            .read_node(database_id, path)
             .await?
             .map(|node| extract_identifier_summary(&node.content))
             .unwrap_or_default();
@@ -85,10 +90,10 @@ pub async fn sync_beam_indexes(client: &impl VfsApi, namespace: &str) -> Result<
         });
     }
     let beam_index = render_beam_index(&rows);
-    upsert_node(client, &index_path, &beam_index).await?;
+    upsert_node(client, database_id, &index_path, &beam_index).await?;
 
     let current_root = client
-        .read_node(WIKI_INDEX_PATH)
+        .read_node(database_id, WIKI_INDEX_PATH)
         .await?
         .map(|node| node.content)
         .unwrap_or_else(default_root_index);
@@ -102,14 +107,23 @@ pub async fn sync_beam_indexes(client: &impl VfsApi, namespace: &str) -> Result<
         &beam_entry,
         &index_path,
     );
-    upsert_node(client, WIKI_INDEX_PATH, &root_index).await?;
+    upsert_node(client, database_id, WIKI_INDEX_PATH, &root_index).await?;
     Ok(())
 }
 
-async fn upsert_node(client: &impl VfsApi, path: &str, content: &str) -> Result<()> {
-    let expected_etag = client.read_node(path).await?.map(|node| node.etag);
+async fn upsert_node(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: &str,
+    content: &str,
+) -> Result<()> {
+    let expected_etag = client
+        .read_node(database_id, path)
+        .await?
+        .map(|node| node.etag);
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.to_string(),
             kind: NodeKind::File,
             content: content.to_string(),
@@ -363,10 +377,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<vfs_types::Status> {
+        async fn status(&self, _database_id: &str) -> Result<vfs_types::Status> {
             unreachable!()
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             if path.ends_with("/conv-1/index.md") {
                 return Ok(Some(Node {
                     path: path.to_string(),
@@ -491,7 +505,7 @@ mod tests {
             writes: Mutex::new(Vec::new()),
         };
 
-        sync_beam_indexes(&client, "Run A")
+        sync_beam_indexes(&client, "default", "Run A")
             .await
             .expect("index sync should succeed");
 

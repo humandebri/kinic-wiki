@@ -64,14 +64,19 @@ pub fn plan_imported_conversation(
 
 pub async fn import_conversation(
     client: &impl VfsApi,
+    database_id: &str,
     namespace: &str,
     conversation: &BeamConversation,
 ) -> Result<ImportedConversation> {
     let imported = plan_imported_conversation(namespace, conversation);
     for note in &imported.notes {
-        let expected_etag = client.read_node(&note.path).await?.map(|node| node.etag);
+        let expected_etag = client
+            .read_node(database_id, &note.path)
+            .await?
+            .map(|node| node.etag);
         client
             .write_node(WriteNodeRequest {
+                database_id: database_id.to_string(),
                 path: note.path.clone(),
                 kind: NodeKind::File,
                 content: note.content.clone(),
@@ -121,10 +126,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
             Ok(None)
         }
         async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -218,7 +223,7 @@ mod tests {
     async fn import_conversation_uses_namespace_in_base_path() {
         let client = MockClient::default();
 
-        let imported = import_conversation(&client, "Run A", &sample_conversation())
+        let imported = import_conversation(&client, "default", "Run A", &sample_conversation())
             .await
             .expect("conversation should import");
 

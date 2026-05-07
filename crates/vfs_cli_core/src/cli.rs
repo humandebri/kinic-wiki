@@ -3,9 +3,8 @@
 // Why: The app-facing CLI package should reuse these shared command shapes without owning the VFS surface.
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use vfs_types::{GlobNodeType, NodeKind, SearchPreviewMode};
-
-pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
+use vfs_types::{DatabaseRole, GlobNodeType, NodeKind, SearchPreviewMode};
+use wiki_domain::WIKI_ROOT_PATH;
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -25,10 +24,17 @@ pub struct ConnectionArgs {
 
     #[arg(long, help = "Override VFS_CANISTER_ID or user config")]
     pub canister_id: Option<String>,
+
+    #[arg(long, help = "Target database id for DB-backed VFS operations")]
+    pub database_id: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum VfsCommand {
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
     ReadNode {
         #[arg(long)]
         path: String,
@@ -36,7 +42,7 @@ pub enum VfsCommand {
         json: bool,
     },
     ListNodes {
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         prefix: String,
         #[arg(long)]
         recursive: bool,
@@ -44,7 +50,7 @@ pub enum VfsCommand {
         json: bool,
     },
     ListChildren {
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -127,7 +133,7 @@ pub enum VfsCommand {
     },
     GlobNodes {
         pattern: String,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         path: String,
         #[arg(long, value_enum)]
         node_type: Option<GlobNodeTypeArg>,
@@ -137,7 +143,7 @@ pub enum VfsCommand {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -161,7 +167,7 @@ pub enum VfsCommand {
         json: bool,
     },
     GraphLinks {
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 100)]
         limit: u32,
@@ -196,7 +202,7 @@ pub enum VfsCommand {
     },
     SearchRemote {
         query_text: String,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,
@@ -207,12 +213,34 @@ pub enum VfsCommand {
     },
     SearchPathRemote {
         query_text: String,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, default_value = WIKI_ROOT_PATH)]
         prefix: String,
         #[arg(long, default_value_t = 10)]
         top_k: u32,
         #[arg(long, value_enum)]
         preview_mode: Option<SearchPreviewModeArg>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DatabaseCommand {
+    Create {
+        database_id: String,
+    },
+    Grant {
+        database_id: String,
+        principal: String,
+        #[arg(value_enum)]
+        role: DatabaseRoleArg,
+    },
+    Revoke {
+        database_id: String,
+        principal: String,
+    },
+    Members {
+        database_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -236,6 +264,13 @@ pub enum SearchPreviewModeArg {
     None,
     Light,
     ContentStart,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseRoleArg {
+    Owner,
+    Writer,
+    Reader,
 }
 
 impl NodeKindArg {
@@ -263,6 +298,16 @@ impl SearchPreviewModeArg {
             Self::None => SearchPreviewMode::None,
             Self::Light => SearchPreviewMode::Light,
             Self::ContentStart => SearchPreviewMode::ContentStart,
+        }
+    }
+}
+
+impl DatabaseRoleArg {
+    pub fn to_database_role(self) -> DatabaseRole {
+        match self {
+            Self::Owner => DatabaseRole::Owner,
+            Self::Writer => DatabaseRole::Writer,
+            Self::Reader => DatabaseRole::Reader,
         }
     }
 }
