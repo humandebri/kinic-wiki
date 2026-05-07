@@ -2,7 +2,6 @@ export type ApiErrorCode =
   | "canister_not_found"
   | "ic_host_unreachable"
   | "wiki_api_missing"
-  | "path_policy_access_denied"
   | "invalid_canister_id"
   | "wiki_request_failed";
 
@@ -46,13 +45,6 @@ export function classifyApiError(error: unknown, host: string): PublicApiError {
       error: "This canister does not expose the Wiki VFS API",
       hint: "Use a Kinic Wiki canister with read_node_context, list_children, graph_neighborhood, search, and recent_nodes methods.",
       code: "wiki_api_missing"
-    };
-  }
-  if (/path policy .*access denied|role required/i.test(raw)) {
-    return {
-      error: "Path policy access denied",
-      hint: "This namespace is restricted. Log in with Internet Identity and confirm the Principal has Reader, Writer, or Admin.",
-      code: "path_policy_access_denied"
     };
   }
   return {

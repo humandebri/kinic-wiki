@@ -5,33 +5,37 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import type { ChildNode } from "@/lib/types";
-import { errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
+import { canExpandChildNode, errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
 export function ExplorerTree({
   canisterId,
+  databaseId,
   selectedPath,
   autoExpandSelected = true
 }: {
   canisterId: string;
+  databaseId: string;
   selectedPath: string;
   autoExpandSelected?: boolean;
 }) {
   return (
     <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
-      <TreeNode canisterId={canisterId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
-      <TreeNode canisterId={canisterId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
+      <TreeNode canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
+      <TreeNode canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
     </div>
   );
 }
 
 function TreeNode({
   canisterId,
+  databaseId,
   node,
   selectedPath,
   depth,
   autoExpandSelected
 }: {
   canisterId: string;
+  databaseId: string;
   node: ChildNode;
   selectedPath: string;
   depth: number;
@@ -40,15 +44,15 @@ function TreeNode({
   const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
   const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
   const requestedPath = useRef<string | null>(null);
-  const isDirectory = node.kind === "directory";
+  const canExpand = canExpandChildNode(node);
   const selected = selectedPath === node.path;
 
   useEffect(() => {
-    if (!expanded || !isDirectory || children.data || children.error || requestedPath.current === node.path) return;
+    if (!expanded || !canExpand || children.data || children.error || requestedPath.current === node.path) return;
     let cancelled = false;
     requestedPath.current = node.path;
     import("@/lib/vfs-client")
-      .then(({ listChildren }) => listChildren(canisterId, node.path))
+      .then(({ listChildren }) => listChildren(canisterId, databaseId, node.path))
       .then((data) => {
         if (!cancelled) setChildren({ data, error: null, loading: false });
       })
@@ -62,7 +66,7 @@ function TreeNode({
       cancelled = true;
       if (requestedPath.current === node.path) requestedPath.current = null;
     };
-  }, [canisterId, children.data, children.error, expanded, isDirectory, node.path]);
+  }, [canisterId, canExpand, children.data, children.error, expanded, node.path]);
 
   return (
     <div>
@@ -72,18 +76,19 @@ function TreeNode({
         }`}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
       >
-        {isDirectory ? <Toggle expanded={expanded} setExpanded={setExpanded} /> : <span className="w-[18px]" />}
-        {directoryIcon(isDirectory, expanded)}
+        {canExpand ? <Toggle expanded={expanded} setExpanded={setExpanded} /> : <span className="w-[18px]" />}
+        {directoryIcon(canExpand, expanded)}
         <Link
           className="min-w-0 flex-1 truncate no-underline"
-          href={hrefForPath(canisterId, node.path)}
+          href={hrefForPath(canisterId, databaseId, node.path)}
         >
           {node.name}
         </Link>
       </div>
-      {expanded && isDirectory ? (
+      {expanded && canExpand ? (
         <ChildrenList
           canisterId={canisterId}
+          databaseId={databaseId}
           childrenState={children}
           depth={depth}
           selectedPath={selectedPath}
@@ -109,12 +114,14 @@ function Toggle({ expanded, setExpanded }: { expanded: boolean; setExpanded: (va
 
 function ChildrenList({
   canisterId,
+  databaseId,
   childrenState,
   depth,
   selectedPath,
   autoExpandSelected
 }: {
   canisterId: string;
+  databaseId: string;
   childrenState: LoadState<ChildNode[]>;
   depth: number;
   selectedPath: string;
@@ -128,6 +135,7 @@ function ChildrenList({
         <TreeNode
           key={child.path}
           canisterId={canisterId}
+          databaseId={databaseId}
           node={child}
           selectedPath={selectedPath}
           depth={depth + 1}

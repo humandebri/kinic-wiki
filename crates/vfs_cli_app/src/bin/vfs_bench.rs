@@ -60,6 +60,8 @@ enum Command {
         #[arg(long)]
         prefix: String,
         #[arg(long)]
+        database_id: String,
+        #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long)]
         file_count: usize,
@@ -88,6 +90,8 @@ enum Command {
         #[arg(long)]
         prefix: String,
         #[arg(long)]
+        database_id: String,
+        #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long, default_value_t = 1000)]
         iterations: usize,
@@ -107,6 +111,8 @@ enum Command {
         canister_id: Option<String>,
         #[arg(long)]
         prefix: String,
+        #[arg(long)]
+        database_id: String,
         #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long)]
@@ -134,6 +140,8 @@ enum Command {
         #[arg(long)]
         prefix: String,
         #[arg(long)]
+        database_id: String,
+        #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long)]
         file_count: usize,
@@ -160,6 +168,8 @@ enum Command {
         #[arg(long)]
         prefix: String,
         #[arg(long)]
+        database_id: String,
+        #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long, value_enum)]
         operation: LatencyOperation,
@@ -175,6 +185,8 @@ enum Command {
         canister_id: Option<String>,
         #[arg(long)]
         prefix: String,
+        #[arg(long)]
+        database_id: String,
         #[arg(long)]
         payload_size_bytes: usize,
         #[arg(long, default_value_t = 1000)]
@@ -193,6 +205,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             file_count,
             directory_shape,
@@ -208,6 +221,7 @@ async fn main() -> Result<()> {
                 replica_host: connection.replica_host,
                 canister_id: connection.canister_id,
                 prefix,
+                database_id,
                 payload_size_bytes,
                 file_count,
                 directory_shape,
@@ -227,6 +241,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             iterations,
             warmup_iterations,
@@ -238,6 +253,7 @@ async fn main() -> Result<()> {
                 replica_host: connection.replica_host,
                 canister_id: connection.canister_id,
                 prefix,
+                database_id,
                 payload_size_bytes,
                 iterations,
                 warmup_iterations,
@@ -253,6 +269,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             file_count,
             directory_shape,
@@ -269,6 +286,7 @@ async fn main() -> Result<()> {
                     replica_host: connection.replica_host,
                     canister_id: connection.canister_id,
                     prefix,
+                    database_id,
                     payload_size_bytes,
                     file_count,
                     directory_shape,
@@ -288,6 +306,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             file_count,
             directory_shape,
@@ -302,6 +321,7 @@ async fn main() -> Result<()> {
                 replica_host: connection.replica_host,
                 canister_id: connection.canister_id,
                 prefix,
+                database_id,
                 payload_size_bytes,
                 file_count,
                 directory_shape,
@@ -321,6 +341,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             operation,
         } => {
@@ -332,6 +353,7 @@ async fn main() -> Result<()> {
                     replica_host: connection.replica_host,
                     canister_id: connection.canister_id,
                     prefix,
+                    database_id,
                     payload_size_bytes,
                     iterations: 0,
                     warmup_iterations: 0,
@@ -347,6 +369,7 @@ async fn main() -> Result<()> {
             local,
             canister_id,
             prefix,
+            database_id,
             payload_size_bytes,
             iterations,
             operation,
@@ -357,6 +380,7 @@ async fn main() -> Result<()> {
                 replica_host: connection.replica_host,
                 canister_id: connection.canister_id,
                 prefix,
+                database_id,
                 payload_size_bytes,
                 iterations,
                 warmup_iterations: 0,

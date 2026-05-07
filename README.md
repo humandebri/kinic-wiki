@@ -28,7 +28,7 @@ Detailed structure map:
 - Search, snapshot export, and delta sync
 - Link graph and node-context queries for wiki navigation
 - Agent Memory API v1 for canister-backed long-term context reads
-- Skill Registry preview for private/team `SKILL.md` packages plus Admin-curated public catalog
+- Skill Registry paths for private/team `SKILL.md` packages plus public catalog nodes
 - Benchmark and validation workflows for VFS behavior
 
 Current scope:
@@ -37,6 +37,14 @@ Current scope:
 - text-first
 - `/Wiki/...` as the primary durable wiki root
 - `/Sources/...` for raw and session source nodes
+
+Storage constraints:
+
+- Hot or restoring databases use stable-memory mount IDs `11..=32767`, so one canister can keep up to 32757 active database mounts at once.
+- Archived or deleted databases release their active mount ID.
+- See [`docs/DB_LIFECYCLE.md`](docs/DB_LIFECYCLE.md) for DB status, slot reuse, archive, and restore behavior.
+- Link graph queries are backed by `fs_links`; SQLite size grows with stored link edges and two link indexes.
+- Node writes update the link index in the same transaction as node content and FTS updates.
 
 ## Quick Start
 
@@ -78,7 +86,7 @@ Use `--local` to target the local replica. Otherwise the default host is `https:
 
 Use `vfs-cli` when working from a shell or script.
 See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
-See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Registry layout, manifest fields, audit behavior, and Browser support.
+See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Registry layout, manifest fields, database-role access, and Browser support.
 
 Main commands:
 
@@ -107,16 +115,11 @@ Main commands:
 - `status`
 - `pull`
 - `push`
-- `skill import`
-- `skill update`
+- `skill upsert`
+- `skill find`
 - `skill inspect`
-- `skill list`
-- `skill audit`
-- `skill install`
-- `skill local`
-- `skill versions`
-- `skill public`
-- `skill policy`
+- `skill record-run`
+- `skill set-status`
 - `github ingest`
 
 ### Library Tool Calling

@@ -41,10 +41,9 @@ pub(crate) fn backfill_node_links(tx: &Transaction<'_>) -> Result<(), String> {
                 row.get::<_, i64>(2)?,
             ))
         })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    for (source_path, content, updated_at) in rows {
+    for row in rows {
+        let (source_path, content, updated_at) = row.map_err(|error| error.to_string())?;
         for edge in extract_link_edges(&source_path, &content, updated_at) {
             tx.execute(
                 "INSERT OR REPLACE INTO fs_links

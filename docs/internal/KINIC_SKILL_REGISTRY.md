@@ -41,16 +41,13 @@ provenance:
 
 ## Current Surface
 
-- CLI: `skill import`, `skill inspect`, `skill list`, `skill audit`, `skill install`, `skill policy`.
-- Browser: read-only Inspector card for `kind: kinic.skill` manifests under `/Wiki/skills`, plus Internet Identity login.
+- CLI: `skill upsert`, `skill find`, `skill inspect`, `skill record-run`, and `skill set-status` with explicit `database_id`.
+- Browser: read-only Inspector card for `kind: kinic.skill` manifests under `/Wiki/skills`.
 - Storage: existing VFS nodes only. No canister migration or dedicated registry API.
-- Import: v1 accepts only a local directory containing `SKILL.md`; remote GitHub fetch is deferred.
-- Parsing: Rust CLI validates normal YAML frontmatter. Browser uses a small v1 subset parser for display only.
-- Path policy: Principal roles are the source of truth. `open` mode preserves existing behavior; `restricted` mode gates `/Wiki/skills` with `Admin`, `Writer`, and `Reader`.
-- Path policy implementation: canister entrypoints use a generic path_policy module for guards and result filters.
-- Policy UX: v1 shows Principal, mode, roles, and read/write/admin capabilities in CLI and Browser. Browser policy management is not implemented.
-- Stabilization: PR-prep tests cover restricted leakage prevention across read/list/search/recent/glob/graph/context/source-evidence/snapshot/update-delta surfaces.
-- Compatibility: path policy API is intentionally breaking from the old Skill Registry-specific access-control shape.
+- Import: `skill upsert` writes package files as wiki nodes; GitHub remains provenance/source context.
+- Parsing: CLI parses YAML frontmatter for updates. Browser uses a small v1 subset parser for display only.
+- Access control: Skill Registry nodes follow database `Owner`, `Writer`, and `Reader` roles.
+- Stabilization: CLI tests cover node-backed find/inspect/status/run behavior, and Browser tests cover manifest display parsing.
 
 ## Deferred
 
@@ -59,6 +56,4 @@ provenance:
 - Remote update automation.
 - Payment and revenue share.
 - Public Store UI.
-- Browser policy management UI.
 - GitHub org/team role sync.
-- Explicit CLI commands for arbitrary knowledge path policy.

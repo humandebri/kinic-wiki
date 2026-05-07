@@ -22,6 +22,7 @@ struct ToolMockClient {
     edit_requests: std::sync::Mutex<Vec<EditNodeRequest>>,
     mkdir_requests: std::sync::Mutex<Vec<MkdirNodeRequest>>,
     move_requests: std::sync::Mutex<Vec<MoveNodeRequest>>,
+    list_requests: std::sync::Mutex<Vec<ListNodesRequest>>,
     glob_requests: std::sync::Mutex<Vec<GlobNodesRequest>>,
     recent_requests: std::sync::Mutex<Vec<RecentNodesRequest>>,
     context_requests: std::sync::Mutex<Vec<vfs_types::NodeContextRequest>>,
@@ -36,14 +37,14 @@ struct ToolMockClient {
 
 #[async_trait]
 impl VfsApi for ToolMockClient {
-    async fn status(&self) -> Result<Status> {
+    async fn status(&self, _database_id: &str) -> Result<Status> {
         Ok(Status {
             file_count: 0,
             source_count: 0,
         })
     }
 
-    async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+    async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
         Ok(Some(sample_node(path, "body", "etag-1")))
     }
 
@@ -62,7 +63,11 @@ impl VfsApi for ToolMockClient {
         }))
     }
 
-    async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+    async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+        self.list_requests
+            .lock()
+            .expect("list lock should succeed")
+            .push(request);
         Ok(Vec::new())
     }
 
@@ -267,6 +272,76 @@ impl VfsApi for ToolMockClient {
     }
 }
 
+#[tokio::test]
+async fn agent_tools_default_read_scopes_to_vfs_root() {
+    let client = ToolMockClient::default();
+    for (name, input) in [
+        ("ls", serde_json::json!({ "database_id": "default" })),
+        (
+            "glob",
+            serde_json::json!({ "database_id": "default", "pattern": "**/*.md" }),
+        ),
+        (
+            "recent",
+            serde_json::json!({ "database_id": "default", "limit": 5 }),
+        ),
+        (
+            "search",
+            serde_json::json!({ "database_id": "default", "query_text": "nested" }),
+        ),
+        (
+            "search_paths",
+            serde_json::json!({ "database_id": "default", "query_text": "nested" }),
+        ),
+    ] {
+        let result = handle_anthropic_tool_call(&client, name, input)
+            .await
+            .expect("tool should succeed");
+        assert!(!result.is_error);
+    }
+
+    assert_eq!(
+        client
+            .list_requests
+            .lock()
+            .expect("list lock should succeed")[0]
+            .prefix,
+        "/"
+    );
+    assert_eq!(
+        client
+            .glob_requests
+            .lock()
+            .expect("glob lock should succeed")[0]
+            .path,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .recent_requests
+            .lock()
+            .expect("recent lock should succeed")[0]
+            .path,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .search_requests
+            .lock()
+            .expect("search lock should succeed")[0]
+            .prefix,
+        Some("/".to_string())
+    );
+    assert_eq!(
+        client
+            .path_search_requests
+            .lock()
+            .expect("path search lock should succeed")[0]
+            .prefix,
+        Some("/".to_string())
+    );
+}
+
 #[test]
 fn tool_schemas_include_minimal_vfs_tools() {
     let openai = create_openai_tools();
@@ -340,7 +415,7 @@ async fn openai_dispatch_routes_append_and_edit() {
     let append = handle_openai_tool_call(
         &client,
         "append",
-        r#"{"path":"/Wiki/a.md","content":"tail","expected_etag":"etag-1","separator":"\n"}"#,
+        r#"{"database_id":"default","path":"/Wiki/a.md","content":"tail","expected_etag":"etag-1","separator":"\n"}"#,
     )
     .await
     .expect("append dispatch should succeed");
@@ -349,7 +424,7 @@ async fn openai_dispatch_routes_append_and_edit() {
     let edit = handle_openai_tool_call(
         &client,
         "edit",
-        r#"{"path":"/Wiki/a.md","old_text":"before","new_text":"after","replace_all":false}"#,
+        r#"{"database_id":"default","path":"/Wiki/a.md","old_text":"before","new_text":"after","replace_all":false}"#,
     )
     .await
     .expect("edit dispatch should succeed");
@@ -378,6 +453,7 @@ async fn anthropic_dispatch_returns_tool_error_for_edit_failures() {
         &client,
         "edit",
         serde_json::json!({
+            "database_id": "default",
             "path": "/Wiki/a.md",
             "old_text": "missing",
             "new_text": "after",
@@ -397,7 +473,7 @@ async fn anthropic_dispatch_routes_mkdir() {
     let result = handle_anthropic_tool_call(
         &client,
         "mkdir",
-        serde_json::json!({ "path": "/Wiki/new-dir" }),
+        serde_json::json!({ "database_id": "default", "path": "/Wiki/new-dir" }),
     )
     .await
     .expect("mkdir tool should succeed");
@@ -418,6 +494,7 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
         &client,
         "mv",
         serde_json::json!({
+            "database_id": "default",
             "from_path": "/Wiki/a.md",
             "to_path": "/Wiki/b.md",
             "expected_etag": "etag-1",
@@ -432,6 +509,7 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
         &client,
         "glob",
         serde_json::json!({
+            "database_id": "default",
             "pattern": "**/*.md",
             "path": "/Wiki",
             "node_type": "directory"
@@ -445,6 +523,7 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
         &client,
         "recent",
         serde_json::json!({
+            "database_id": "default",
             "limit": 5,
             "path": "/Wiki"
         }),
@@ -457,6 +536,7 @@ async fn anthropic_dispatch_routes_move_glob_recent_and_multi_edit() {
         &client,
         "multi_edit",
         serde_json::json!({
+            "database_id": "default",
             "path": "/Wiki/a.md",
             "expected_etag": "etag-1",
             "edits": [
@@ -519,6 +599,7 @@ async fn anthropic_dispatch_routes_search_paths() {
         &client,
         "search_paths",
         serde_json::json!({
+            "database_id": "default",
             "query_text": "nested",
             "prefix": "/Wiki",
             "top_k": 5,
@@ -547,6 +628,7 @@ async fn anthropic_dispatch_routes_search_preview_mode() {
         &client,
         "search",
         serde_json::json!({
+            "database_id": "default",
             "query_text": "body",
             "prefix": "/Wiki",
             "top_k": 5,
@@ -574,23 +656,23 @@ async fn anthropic_dispatch_routes_link_tools() {
     for (name, input) in [
         (
             "read_context",
-            serde_json::json!({ "path": "/Wiki/a.md", "link_limit": 7 }),
+            serde_json::json!({ "database_id": "default", "path": "/Wiki/a.md", "link_limit": 7 }),
         ),
         (
             "graph_neighborhood",
-            serde_json::json!({ "center_path": "/Wiki/a.md", "depth": 2, "limit": 9 }),
+            serde_json::json!({ "database_id": "default", "center_path": "/Wiki/a.md", "depth": 2, "limit": 9 }),
         ),
         (
             "graph_links",
-            serde_json::json!({ "prefix": "/Wiki", "limit": 11 }),
+            serde_json::json!({ "database_id": "default", "prefix": "/Wiki", "limit": 11 }),
         ),
         (
             "incoming_links",
-            serde_json::json!({ "path": "/Wiki/a.md", "limit": 13 }),
+            serde_json::json!({ "database_id": "default", "path": "/Wiki/a.md", "limit": 13 }),
         ),
         (
             "outgoing_links",
-            serde_json::json!({ "path": "/Wiki/a.md", "limit": 15 }),
+            serde_json::json!({ "database_id": "default", "path": "/Wiki/a.md", "limit": 15 }),
         ),
     ] {
         let result = handle_anthropic_tool_call(&client, name, input)

@@ -9,14 +9,11 @@
     "smoke": "node scripts/smoke-ui.mjs",
     "smoke:errors": "node scripts/smoke-errors.mjs",
     "smoke:public": "node scripts/smoke-public.mjs",
-    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs",
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@dfinity/agent": "3.4.0",
-    "@dfinity/auth-client": "3.4.0",
-    "@dfinity/candid": "3.4.0",
-    "@dfinity/principal": "3.4.0",
+    "@icp-sdk/core": "^5.4.0",
     "lucide-react": "0.555.0",
     "next": "16.2.4",
     "react": "19.2.5",

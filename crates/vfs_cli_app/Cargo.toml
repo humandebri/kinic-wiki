@@ -21,7 +21,6 @@ serde_json = "1.0.145"
 serde_yaml = "0.9.34"
 sha2 = "0.10.9"
 tokio = { version = "1.47.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync"] }
-toml = "0.9.8"
 vfs-cli = { package = "vfs-cli-core", path = "../vfs_cli_core" }
 vfs-client = { path = "../vfs_client" }
 vfs-types = { path = "../vfs_types" }

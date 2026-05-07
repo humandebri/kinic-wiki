@@ -36,6 +36,7 @@ fn write_file(
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: content.to_string(),
@@ -60,6 +61,7 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
         let created = store
             .write_node(
                 WriteNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.clone(),
                     kind: NodeKind::File,
                     content: content.clone(),
@@ -82,6 +84,7 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
         let appended = store
             .append_node(
                 AppendNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.clone(),
                     content: "\nappend marker".to_string(),
                     expected_etag: Some(created.node.etag.clone()),
@@ -105,6 +108,7 @@ fn markdown_size_variants_roundtrip_through_write_append_and_edit() {
         let edited = store
             .edit_node(
                 vfs_types::EditNodeRequest {
+                    database_id: "default".to_string(),
                     path: path.clone(),
                     old_text: marker.clone(),
                     new_text: format!("UPDATED_{size}"),
@@ -138,6 +142,7 @@ fn list_nodes_scales_to_thousand_entries() {
 
     let root_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki/scale".to_string(),
             recursive: false,
         })
@@ -151,6 +156,7 @@ fn list_nodes_scales_to_thousand_entries() {
 
     let recursive_entries = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: "/Wiki/scale".to_string(),
             recursive: true,
         })
@@ -176,6 +182,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
             store
                 .delete_node(
                     DeleteNodeRequest {
+                        database_id: "default".to_string(),
                         path,
                         expected_etag: Some(etag),
                     },
@@ -187,6 +194,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
 
     let glob_hits = store
         .glob_nodes(GlobNodesRequest {
+            database_id: "default".to_string(),
             pattern: "**/*.md".to_string(),
             path: Some("/Wiki/projects/alpha".to_string()),
             node_type: Some(GlobNodeType::File),
@@ -201,6 +209,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
 
     let search_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "needle".to_string(),
             prefix: Some("/Wiki/projects/alpha".to_string()),
             top_k: 100,
@@ -220,6 +229,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
 
     let path_hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "TOPIC-000".to_string(),
             prefix: Some("/Wiki/projects/alpha".to_string()),
             top_k: 100,
@@ -257,6 +267,7 @@ fn path_search_smoke_reports_latency_and_hits() {
         let started_at = Instant::now();
         let hits = store
             .search_node_paths(SearchNodePathsRequest {
+                database_id: "default".to_string(),
                 query_text: query_text.to_string(),
                 prefix: Some("/Wiki/bench".to_string()),
                 top_k: 20,
@@ -289,6 +300,7 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
 
     let base = store
         .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
             prefix: Some("/Wiki/snapshot".to_string()),
             limit: 100,
             cursor: None,
@@ -318,6 +330,7 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
     store
         .delete_node(
             DeleteNodeRequest {
+                database_id: "default".to_string(),
                 path: "/Wiki/snapshot/note-0002.md".to_string(),
                 expected_etag: Some(deleted_etag),
             },
@@ -328,6 +341,7 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
 
     let updates = store
         .fetch_updates(FetchUpdatesRequest {
+            database_id: "default".to_string(),
             known_snapshot_revision: base.snapshot_revision,
             prefix: Some("/Wiki/snapshot".to_string()),
             limit: 100,

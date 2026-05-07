@@ -4,6 +4,68 @@
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseRole {
+    #[serde(alias = "Owner")]
+    Owner,
+    #[serde(alias = "Writer")]
+    Writer,
+    #[serde(alias = "Reader")]
+    Reader,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseMember {
+    pub database_id: String,
+    pub principal: String,
+    pub role: DatabaseRole,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseStatus {
+    #[serde(alias = "Hot")]
+    Hot,
+    #[serde(alias = "Archived")]
+    Archived,
+    #[serde(alias = "Deleted")]
+    Deleted,
+    #[serde(alias = "Restoring")]
+    Restoring,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseInfo {
+    pub database_id: String,
+    pub status: DatabaseStatus,
+    pub mount_id: Option<u16>,
+    pub schema_version: String,
+    pub logical_size_bytes: u64,
+    pub snapshot_hash: Option<Vec<u8>>,
+    pub archived_at_ms: Option<i64>,
+    pub deleted_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseArchiveInfo {
+    pub database_id: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseArchiveChunk {
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseRestoreChunkRequest {
+    pub database_id: String,
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
@@ -37,12 +99,14 @@ pub struct Node {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ListNodesRequest {
+    pub database_id: String,
     pub prefix: String,
     pub recursive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ListChildrenRequest {
+    pub database_id: String,
     pub path: String,
 }
 
@@ -64,10 +128,12 @@ pub struct ChildNode {
     pub etag: Option<String>,
     pub size_bytes: Option<u64>,
     pub is_virtual: bool,
+    pub has_children: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct WriteNodeRequest {
+    pub database_id: String,
     pub path: String,
     pub kind: NodeKind,
     pub content: String,
@@ -91,6 +157,7 @@ pub struct WriteNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct AppendNodeRequest {
+    pub database_id: String,
     pub path: String,
     pub content: String,
     pub expected_etag: Option<String>,
@@ -101,6 +168,7 @@ pub struct AppendNodeRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct EditNodeRequest {
+    pub database_id: String,
     pub path: String,
     pub old_text: String,
     pub new_text: String,
@@ -116,6 +184,7 @@ pub struct EditNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MkdirNodeRequest {
+    pub database_id: String,
     pub path: String,
 }
 
@@ -127,6 +196,7 @@ pub struct MkdirNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MoveNodeRequest {
+    pub database_id: String,
     pub from_path: String,
     pub to_path: String,
     pub expected_etag: Option<String>,
@@ -153,6 +223,7 @@ pub enum GlobNodeType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct GlobNodesRequest {
+    pub database_id: String,
     pub pattern: String,
     pub path: Option<String>,
     pub node_type: Option<GlobNodeType>,
@@ -167,6 +238,7 @@ pub struct GlobNodeHit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct RecentNodesRequest {
+    pub database_id: String,
     pub limit: u32,
     pub path: Option<String>,
 }
@@ -181,24 +253,28 @@ pub struct RecentNodeHit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct IncomingLinksRequest {
+    pub database_id: String,
     pub path: String,
     pub limit: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct OutgoingLinksRequest {
+    pub database_id: String,
     pub path: String,
     pub limit: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct GraphLinksRequest {
+    pub database_id: String,
     pub prefix: String,
     pub limit: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct GraphNeighborhoodRequest {
+    pub database_id: String,
     pub center_path: String,
     pub depth: u32,
     pub limit: u32,
@@ -216,6 +292,7 @@ pub struct LinkEdge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct NodeContextRequest {
+    pub database_id: String,
     pub path: String,
     pub link_limit: u32,
 }
@@ -235,6 +312,7 @@ pub struct MultiEdit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct MultiEditNodeRequest {
+    pub database_id: String,
     pub path: String,
     pub edits: Vec<MultiEdit>,
     pub expected_etag: Option<String>,
@@ -248,6 +326,7 @@ pub struct MultiEditNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct DeleteNodeRequest {
+    pub database_id: String,
     pub path: String,
     pub expected_etag: Option<String>,
 }
@@ -259,6 +338,7 @@ pub struct DeleteNodeResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct SearchNodesRequest {
+    pub database_id: String,
     pub query_text: String,
     pub prefix: Option<String>,
     pub top_k: u32,
@@ -268,24 +348,12 @@ pub struct SearchNodesRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct SearchNodePathsRequest {
+    pub database_id: String,
     pub query_text: String,
     pub prefix: Option<String>,
     pub top_k: u32,
     #[serde(default)]
     pub preview_mode: Option<SearchPreviewMode>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
-pub struct PathPolicyEntry {
-    pub principal: String,
-    pub roles: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
-pub struct PathPolicy {
-    pub path: String,
-    pub mode: String,
-    pub roles: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, CandidType)]
@@ -329,6 +397,7 @@ pub struct SearchPreview {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct ExportSnapshotRequest {
+    pub database_id: String,
     pub prefix: Option<String>,
     pub limit: u32,
     pub cursor: Option<String>,
@@ -346,6 +415,7 @@ pub struct ExportSnapshotResponse {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct FetchUpdatesRequest {
+    pub database_id: String,
     pub known_snapshot_revision: String,
     pub prefix: Option<String>,
     pub limit: u32,
@@ -396,6 +466,7 @@ pub struct MemoryManifest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct QueryContextRequest {
+    pub database_id: String,
     pub task: String,
     pub entities: Vec<String>,
     pub namespace: Option<String>,
@@ -417,6 +488,7 @@ pub struct QueryContext {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct SourceEvidenceRequest {
+    pub database_id: String,
     pub node_path: String,
 }
 

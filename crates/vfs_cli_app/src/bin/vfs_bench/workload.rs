@@ -30,6 +30,7 @@ pub struct WorkloadBenchArgs {
     pub replica_host: String,
     pub canister_id: String,
     pub prefix: String,
+    pub database_id: String,
     pub payload_size_bytes: usize,
     pub file_count: usize,
     pub directory_shape: DirectoryShape,
@@ -47,6 +48,7 @@ pub struct WorkloadBenchResult {
     pub replica_host: String,
     pub canister_id: String,
     pub prefix: String,
+    pub database_id: String,
     pub operation: WorkloadOperation,
     /// OpenAI-compatible tool name (see `agent_tools::tool_names_slice`).
     pub openai_tool: String,
@@ -125,6 +127,7 @@ where
         replica_host: args.replica_host,
         canister_id: args.canister_id,
         prefix: args.prefix,
+        database_id: args.database_id,
         operation: args.operation,
         openai_tool,
         openai_tool_variant,
@@ -264,6 +267,7 @@ where
         replica_host: args.replica_host,
         canister_id: args.canister_id,
         prefix: args.prefix,
+        database_id: args.database_id,
         operation: args.operation,
         openai_tool,
         openai_tool_variant,
@@ -349,13 +353,16 @@ where
 {
     let payload = make_payload(args.payload_size_bytes);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let prefix = prefix.clone();
         let payload = payload.clone();
+        let database_id = database_id.clone();
         async move {
             let request = WriteNodeRequest {
+                database_id: database_id.clone(),
                 path: format!("{prefix}/create-{index:06}.md"),
                 kind: NodeKind::File,
                 content: payload,
@@ -379,6 +386,7 @@ where
     let updated = updated_payload(&base);
     let states = Arc::new(seed_states(client, args, &base, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
@@ -387,6 +395,7 @@ where
         let base = base.clone();
         let updated = updated.clone();
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let content = if state.toggle {
@@ -395,6 +404,7 @@ where
                 base.clone()
             };
             let request = WriteNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 kind: NodeKind::File,
                 content,
@@ -420,6 +430,7 @@ where
     let append = make_payload(args.payload_size_bytes);
     let states = Arc::new(seed_states(client, args, &base, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
@@ -427,9 +438,11 @@ where
         let states = Arc::clone(&states);
         let append = append.clone();
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let request = AppendNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 content: append,
                 expected_etag: Some(state.etag.clone()),
@@ -454,12 +467,14 @@ where
     let base = make_editable_payload(args.payload_size_bytes);
     let states = Arc::new(seed_states(client, args, &base, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let (old_text, new_text) = if state.toggle {
@@ -468,6 +483,7 @@ where
                 ("BENCH_TOKEN_OLD".to_string(), "BENCH_TOKEN_NEW".to_string())
             };
             let request = EditNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 old_text,
                 new_text,
@@ -518,9 +534,11 @@ where
             .collect::<Vec<_>>(),
     );
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let to_path = if state.current_path == state.primary_path {
@@ -529,6 +547,7 @@ where
                 state.primary_path.clone()
             };
             let request = MoveNodeRequest {
+                database_id: database_id.clone(),
                 from_path: state.current_path.clone(),
                 to_path,
                 expected_etag: Some(state.etag.clone()),
@@ -552,6 +571,7 @@ where
     let payload = make_payload(args.payload_size_bytes);
     let states = Arc::new(seed_states(client, args, &payload, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
@@ -559,9 +579,11 @@ where
         let states = Arc::clone(&states);
         let payload = payload.clone();
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let delete_request = DeleteNodeRequest {
+                database_id: database_id.clone(),
                 path: path.clone(),
                 expected_etag: Some(state.etag.clone()),
             };
@@ -569,6 +591,7 @@ where
             let delete_result = client.delete_node(delete_request.clone()).await?;
             let delete_metric = metric(started_at, &delete_request, &delete_result)?;
             let seed_request = WriteNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 kind: NodeKind::File,
                 content: payload,
@@ -595,6 +618,7 @@ where
     let updated = updated_payload(&base);
     let states = Arc::new(load_toggle_states(client, args, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
@@ -603,6 +627,7 @@ where
         let base = base.clone();
         let updated = updated.clone();
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let content = if state.toggle {
@@ -611,6 +636,7 @@ where
                 base.clone()
             };
             let request = WriteNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 kind: NodeKind::File,
                 content,
@@ -638,6 +664,7 @@ where
     let append = make_payload(args.payload_size_bytes);
     let states = Arc::new(load_toggle_states(client, args, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
@@ -645,9 +672,11 @@ where
         let states = Arc::clone(&states);
         let append = append.clone();
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let request = AppendNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 content: append,
                 expected_etag: Some(state.etag.clone()),
@@ -671,12 +700,14 @@ where
     let node_count = node_count(args)?;
     let states = Arc::new(load_toggle_states(client, args, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let (old_text, new_text) = if state.toggle {
@@ -685,6 +716,7 @@ where
                 ("BENCH_TOKEN_OLD".to_string(), "BENCH_TOKEN_NEW".to_string())
             };
             let request = EditNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 old_text,
                 new_text,
@@ -712,9 +744,11 @@ where
     let node_count = node_count(args)?;
     let states = Arc::new(load_move_states(client, args, node_count, cross_dir).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let to_path = if state.current_path == state.primary_path {
@@ -723,6 +757,7 @@ where
                 state.primary_path.clone()
             };
             let request = MoveNodeRequest {
+                database_id: database_id.clone(),
                 from_path: state.current_path.clone(),
                 to_path,
                 expected_etag: Some(state.etag.clone()),
@@ -748,15 +783,18 @@ where
     let seed_count = delete_seed_count(args)?;
     let states = Arc::new(load_delete_etags(client, args, seed_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
         let path = file_path(&prefix, shape, index);
+        let database_id = database_id.clone();
         async move {
             let state = states[index].lock().await;
             let request = DeleteNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 expected_etag: Some(state.etag.clone()),
             };
@@ -776,14 +814,16 @@ where
     let payload = make_payload(args.payload_size_bytes);
     seed_nodes(client, args, &payload, node_count).await?;
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let started_at = Instant::now();
-            let result = client.read_node(&path).await?;
+            let result = client.read_node(&database_id, &path).await?;
             metric(started_at, &path, &result)
         }
     })
@@ -796,14 +836,16 @@ where
 {
     let node_count = node_count(args)?;
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let started_at = Instant::now();
-            let result = client.read_node(&path).await?;
+            let result = client.read_node(&database_id, &path).await?;
             metric(started_at, &path, &result)
         }
     })
@@ -817,7 +859,9 @@ where
     let node_count = node_count(args)?;
     let payload = make_payload(args.payload_size_bytes);
     seed_nodes(client, args, &payload, node_count).await?;
+    let database_id = args.database_id.clone();
     let request = ListNodesRequest {
+        database_id: database_id.clone(),
         prefix: list_prefix(&args.prefix, args.directory_shape),
         recursive: false,
     };
@@ -838,7 +882,9 @@ async fn run_list_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Res
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let request = ListNodesRequest {
+        database_id: database_id.clone(),
         prefix: list_prefix(&args.prefix, args.directory_shape),
         recursive: false,
     };
@@ -860,8 +906,10 @@ where
     C: VfsApi + Send + Sync + 'static,
 {
     let node_count = node_count(args)?;
+    let database_id = args.database_id.clone();
     for index in 0..node_count {
         let request = WriteNodeRequest {
+            database_id: database_id.clone(),
             path: file_path(&args.prefix, args.directory_shape, index),
             kind: NodeKind::File,
             content: make_searchable_payload(args.payload_size_bytes, index),
@@ -871,6 +919,7 @@ where
         client.write_node(request).await?;
     }
     let request = SearchNodesRequest {
+        database_id: database_id.clone(),
         query_text: "shared-bench-search".to_string(),
         prefix: Some(args.prefix.clone()),
         top_k: 10,
@@ -896,7 +945,9 @@ async fn run_search_from_seed<C>(
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let request = SearchNodesRequest {
+        database_id: database_id.clone(),
         query_text: "shared-bench-search".to_string(),
         prefix: Some(args.prefix.clone()),
         top_k: 10,
@@ -920,12 +971,15 @@ where
     C: VfsApi + Send + Sync + 'static,
 {
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let prefix = prefix.clone();
+        let database_id = database_id.clone();
         async move {
             let request = MkdirNodeRequest {
+                database_id: database_id.clone(),
                 path: format!("{prefix}/mkdir-bench-{index:06}"),
             };
             let started_at = Instant::now();
@@ -953,7 +1007,9 @@ where
     let node_count = node_count(args)?;
     let payload = make_payload(args.payload_size_bytes);
     seed_nodes(client, args, &payload, node_count).await?;
+    let database_id = args.database_id.clone();
     let request = GlobNodesRequest {
+        database_id: database_id.clone(),
         pattern: glob_pattern(args.directory_shape).to_string(),
         path: Some(args.prefix.clone()),
         node_type: Some(GlobNodeType::File),
@@ -975,7 +1031,9 @@ async fn run_glob_from_seed<C>(client: &Arc<C>, args: &WorkloadBenchArgs) -> Res
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let request = GlobNodesRequest {
+        database_id: database_id.clone(),
         pattern: glob_pattern(args.directory_shape).to_string(),
         path: Some(args.prefix.clone()),
         node_type: Some(GlobNodeType::File),
@@ -1001,7 +1059,9 @@ where
     let payload = make_payload(args.payload_size_bytes);
     seed_nodes(client, args, &payload, node_count).await?;
     let limit = (node_count as u32).clamp(1, 10);
+    let database_id = args.database_id.clone();
     let request = RecentNodesRequest {
+        database_id: database_id.clone(),
         limit,
         path: Some(args.prefix.clone()),
     };
@@ -1027,7 +1087,9 @@ where
 {
     let node_count = node_count(args)?;
     let limit = (node_count as u32).clamp(1, 10);
+    let database_id = args.database_id.clone();
     let request = RecentNodesRequest {
+        database_id: database_id.clone(),
         limit,
         path: Some(args.prefix.clone()),
     };
@@ -1052,12 +1114,14 @@ where
     let base = make_multi_editable_payload(args.payload_size_bytes);
     let states = Arc::new(seed_states(client, args, &base, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let edits = if state.toggle {
@@ -1084,6 +1148,7 @@ where
                 ]
             };
             let request = MultiEditNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 edits,
                 expected_etag: Some(state.etag.clone()),
@@ -1108,12 +1173,14 @@ where
     let node_count = node_count(args)?;
     let states = Arc::new(load_toggle_states(client, args, node_count).await?);
     let client = Arc::clone(client);
+    let database_id = args.database_id.clone();
     let prefix = args.prefix.clone();
     let shape = args.directory_shape;
     run_parallel(args.iterations, args.concurrent_clients, move |index| {
         let client = Arc::clone(&client);
         let states = Arc::clone(&states);
         let path = file_path(&prefix, shape, index % node_count);
+        let database_id = database_id.clone();
         async move {
             let mut state = states[index % node_count].lock().await;
             let edits = if state.toggle {
@@ -1140,6 +1207,7 @@ where
                 ]
             };
             let request = MultiEditNodeRequest {
+                database_id: database_id.clone(),
                 path,
                 edits,
                 expected_etag: Some(state.etag.clone()),
@@ -1203,10 +1271,14 @@ async fn load_toggle_states<C>(
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let mut states = Vec::with_capacity(count);
     for index in 0..count {
         let node = client
-            .read_node(&file_path(&args.prefix, args.directory_shape, index))
+            .read_node(
+                &database_id,
+                &file_path(&args.prefix, args.directory_shape, index),
+            )
             .await?
             .ok_or_else(|| anyhow!("missing seeded node {}", args.benchmark_name))?;
         states.push(Mutex::new(ToggleState {
@@ -1226,11 +1298,12 @@ async fn load_move_states<C>(
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let mut states = Vec::with_capacity(count);
     for index in 0..count {
         let primary_path = file_path(&args.prefix, args.directory_shape, index);
         let node = client
-            .read_node(&primary_path)
+            .read_node(&database_id, &primary_path)
             .await?
             .ok_or_else(|| anyhow!("missing seeded move node {}", args.benchmark_name))?;
         let alternate_path = if cross_dir {
@@ -1268,9 +1341,11 @@ async fn seed_nodes<C>(
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     let mut etags = Vec::with_capacity(count);
     for index in 0..count {
         let request = WriteNodeRequest {
+            database_id: database_id.clone(),
             path: file_path(&args.prefix, args.directory_shape, index),
             kind: NodeKind::File,
             content: payload.to_string(),
@@ -1287,9 +1362,11 @@ async fn seed_search_nodes<C>(client: &Arc<C>, args: &WorkloadBenchArgs, count: 
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     for index in 0..count {
         client
             .write_node(WriteNodeRequest {
+                database_id: database_id.clone(),
                 path: file_path(&args.prefix, args.directory_shape, index),
                 kind: NodeKind::File,
                 content: make_searchable_payload(args.payload_size_bytes, index),
@@ -1388,13 +1465,13 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             Ok(Status {
                 file_count: 0,
                 source_count: 0,
             })
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             self.ops.lock().unwrap().push(format!("read:{path}"));
             Ok(self.nodes.lock().unwrap().get(path).cloned())
         }
@@ -1450,6 +1527,7 @@ mod tests {
                 .cloned()
                 .unwrap();
             self.write_node(WriteNodeRequest {
+                database_id: request.database_id.clone(),
                 path: request.path,
                 kind: NodeKind::File,
                 content: format!("{}{}", current.content, request.content),
@@ -1471,6 +1549,7 @@ mod tests {
                 .replace(&request.old_text, &request.new_text);
             let result = self
                 .write_node(WriteNodeRequest {
+                    database_id: request.database_id.clone(),
                     path: request.path,
                     kind: NodeKind::File,
                     content: replaced,
@@ -1563,6 +1642,7 @@ mod tests {
             }
             let result = self
                 .write_node(WriteNodeRequest {
+                    database_id: request.database_id.clone(),
                     path: request.path.clone(),
                     kind: NodeKind::File,
                     content,
@@ -1622,6 +1702,7 @@ mod tests {
 
     fn args(operation: WorkloadOperation) -> WorkloadBenchArgs {
         WorkloadBenchArgs {
+            database_id: "default".to_string(),
             benchmark_name: "bench".to_string(),
             replica_host: "http://127.0.0.1:8000".to_string(),
             canister_id: "aaaaa-aa".to_string(),

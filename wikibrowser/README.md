@@ -13,7 +13,7 @@ pnpm dev
 Open a canister with:
 
 ```text
-http://localhost:3000/w/<canister-id>/Wiki
+http://localhost:3000/w/<canister-id>/db/<database-id>/Wiki
 ```
 
 `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host:
@@ -62,7 +62,7 @@ pnpm dev
 Run the browser smoke against an existing file node:
 
 ```bash
-pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/Wiki/<existing-file>.md
+pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/db/<database-id>/Wiki/<existing-file>.md
 ```
 
 The URL must point to a readable file node. Directory paths and missing files intentionally fail.
@@ -70,13 +70,13 @@ The URL must point to a readable file node. Directory paths and missing files in
 Run error-state smoke:
 
 ```bash
-pnpm smoke:errors -- --canister-id <canister-id>
+pnpm smoke:errors -- --canister-id <canister-id> --database-id <database-id>
 ```
 
 Optional base URL:
 
 ```bash
-pnpm smoke:errors -- --base-url http://127.0.0.1:3000 --canister-id <canister-id>
+pnpm smoke:errors -- --base-url http://127.0.0.1:3000 --canister-id <canister-id> --database-id <database-id>
 ```
 
 ## Candid Surface
@@ -106,7 +106,7 @@ Covered methods:
 Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`.
 The app is public read-only and accepts arbitrary canister IDs.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
-The `/w/<canister-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway.
+The `/w/<canister-id>/db/<database-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway.
 
 ## Troubleshooting
 
@@ -148,7 +148,7 @@ pnpm build
 Post-deploy public smoke:
 
 ```bash
-pnpm smoke:public -- --base-url https://<deployment>.vercel.app --canister-id <mainnet-wiki-canister-id> --path /Wiki/<existing-file>.md
+pnpm smoke:public -- --base-url https://<deployment>.vercel.app --canister-id <mainnet-wiki-canister-id> --database-id <database-id> --path /Wiki/<existing-file>.md
 ```
 
 `--path` must point to an existing file node on the mainnet canister.

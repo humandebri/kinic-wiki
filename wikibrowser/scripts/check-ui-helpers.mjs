@@ -7,16 +7,9 @@ const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
-const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
-const {
-  formatSkillAccessCapabilities,
-  isPublicSkillRegistryPath,
-  isSkillRegistryPath,
-  manifestPathForSkillRegistryFile,
-  parseSkillManifest,
-  skillAccessCapabilities,
-  skillAccessHint
-} = await importTs("../lib/skill-manifest.ts");
+const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
+const { parseSkillManifest } = await importTs("../lib/skill-manifest.ts");
+const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -54,6 +47,8 @@ assert.deepEqual(
   sortedChildren.map((node) => node.path),
   ["/Wiki/alpha", "/Wiki/beta", "/Wiki/1.md", "/Wiki/2.md", "/Wiki/10.md"]
 );
+assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
+assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);
 
 const hit = normalizeSearchHit({
   path: "/Wiki/demo.md",
@@ -97,12 +92,39 @@ assert.deepEqual(
   ["# One", "## Two"]
 );
 assert.equal(splitMarkdownPreviewSections("No headings\nOnly prose").length, 1);
-assert.notEqual(nodeRequestKey("aaaaa-aa", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "/Wiki/index.md"));
+assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "alpha", "/Wiki/index.md"));
 assert.notEqual(
-  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 1),
-  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 2)
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 2)
 );
-assert.equal(graphRequestKey("aaaaa-aa", null, 1), null);
+assert.equal(graphRequestKey("aaaaa-aa", "alpha", null, 1), null);
+assert.equal(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "full", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "beta", "path", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("bbbbb-bb", "alpha", "path", "budget"));
+const skillManifest = parseSkillManifest(`---
+kind: kinic.skill
+schema_version: 1
+id: acme/legal-review
+version: 0.1.0
+publisher: acme
+entry: SKILL.md
+summary: Contract review
+tags:
+  - legal
+use_cases:
+  - Review redlines
+status: reviewed
+related:
+  - /Wiki/legal/contracts.md
+---
+# Skill Manifest
+`);
+assert.equal(skillManifest.summary, "Contract review");
+assert.deepEqual(skillManifest.tags, ["legal"]);
+assert.deepEqual(skillManifest.useCases, ["Review redlines"]);
+assert.equal(skillManifest.status, "reviewed");
+assert.deepEqual(skillManifest.related, ["/Wiki/legal/contracts.md"]);
 assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
 assert.equal(formatCycles(850_000_000_000n), "850.00B");
 assert.equal(formatCycles(123_450_000n), "123.45M");
@@ -111,55 +133,10 @@ assert.equal(cycleTone(5_000_000_000_000n), "blue");
 assert.equal(cycleTone(1_000_000_000_000n), "amber");
 assert.equal(cycleTone(999_999_999_999n), "red");
 assert.equal(cycleTone(null), "gray");
-const skillManifest = parseSkillManifest(`---
-kind: kinic.skill
-schema_version: 1
-id: acme/legal-review
-version: 0.1.0
-publisher: acme
-entry: SKILL.md
-knowledge:
-  - /Wiki/legal/contracts.md
-permissions:
-  file_read: true
-  network: false
-  shell: false
-provenance:
-  source: github.com/acme/legal
-  source_ref: abc123
----
-# Manifest
-`);
-assert.equal(skillManifest.id, "acme/legal-review");
-assert.deepEqual(skillManifest.knowledge, ["/Wiki/legal/contracts.md"]);
-assert.equal(skillManifest.permissions.network, "false");
-assert.equal(skillManifest.provenance.source, "github.com/acme/legal");
-assert.equal(parseSkillManifest("# Missing"), null);
-assert.equal(isSkillRegistryPath("/Wiki/skills/acme/legal-review/manifest.md"), true);
-assert.equal(isSkillRegistryPath("/Wiki/other.md"), false);
-assert.equal(isPublicSkillRegistryPath("/Wiki/public-skills/acme/legal-review/manifest.md"), true);
-assert.equal(
-  manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/SKILL.md"),
-  "/Wiki/skills/acme/legal-review/manifest.md"
-);
-assert.equal(
-  manifestPathForSkillRegistryFile("/Wiki/public-skills/acme/legal-review/SKILL.md"),
-  "/Wiki/public-skills/acme/legal-review/manifest.md"
-);
-assert.equal(
-  manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/provenance.md"),
-  "/Wiki/skills/acme/legal-review/manifest.md"
-);
-assert.equal(manifestPathForSkillRegistryFile("/Wiki/skills/acme/legal-review/manifest.md"), null);
-assert.deepEqual(skillAccessCapabilities(["Reader", "Writer"]), { read: true, publish: true, admin: false });
-assert.equal(formatSkillAccessCapabilities({ read: true, publish: false, admin: false }), "read:yes publish:no admin:no");
-assert.equal(skillAccessHint("restricted", [], false), "restricted namespace: anonymous caller; log in with Internet Identity");
-assert.equal(skillAccessHint("restricted", [], true), "restricted namespace: missing Reader, Writer, or Admin role");
-assert.equal(skillAccessHint("open", [], false), null);
 
 console.log("UI helper checks OK");
 
-function child(path, name, kind) {
+function child(path, name, kind, hasChildren = kind === "directory") {
   return {
     path,
     name,
@@ -167,7 +144,8 @@ function child(path, name, kind) {
     updatedAt: null,
     etag: null,
     sizeBytes: null,
-    isVirtual: false
+    isVirtual: false,
+    hasChildren
   };
 }
 

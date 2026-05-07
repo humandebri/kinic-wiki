@@ -5,6 +5,12 @@ export type SkillManifest = {
   version: string;
   publisher: string;
   entry: string;
+  summary: string | null;
+  tags: string[];
+  useCases: string[];
+  status: string | null;
+  replaces: string[];
+  related: string[];
   knowledge: string[];
   permissions: Record<string, string>;
   provenance: Record<string, string>;
@@ -36,6 +42,12 @@ export function parseSkillManifest(content: string): SkillManifest | null {
     version,
     publisher,
     entry,
+    summary: scalar(values, "summary"),
+    tags: values.tags ?? [],
+    useCases: values.use_cases ?? [],
+    status: scalar(values, "status"),
+    replaces: values.replaces ?? [],
+    related: values.related ?? [],
     knowledge: values.knowledge ?? [],
     permissions: nested(values, "permissions"),
     provenance: nested(values, "provenance")
@@ -82,7 +94,7 @@ export function skillAccessHint(mode: string | null, roles: string[], authentica
   if (mode !== "restricted" || roles.length > 0) return null;
   return authenticated
     ? "restricted namespace: missing Reader, Writer, or Admin role"
-    : "restricted namespace: anonymous caller; log in with Internet Identity";
+    : "database role required";
 }
 
 function extractFrontmatter(content: string): string | null {

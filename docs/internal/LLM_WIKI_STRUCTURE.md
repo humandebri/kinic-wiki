@@ -55,7 +55,7 @@ flowchart LR
 | `vfs_runtime` | service 境界 | `src/lib.rs` |
 | `vfs_store` | SQLite / FTS / sync / migration | `src/fs_store.rs`, `src/fs_search.rs`, `src/schema.rs` |
 | `vfs_types` | 共通型 | `src/fs.rs`, `src/lib.rs` |
-| `wiki_domain` | wiki 固有 path policy | `src/lib.rs` |
+| `wiki_domain` | wiki 固有 path 検証 | `src/lib.rs` |
 
 ## 5. crate 依存と責務分離
 
@@ -67,7 +67,7 @@ flowchart LR
 
 ### 5.2 `wiki_domain`
 
-- `/Wiki/...` と `/Sources/raw/...`, `/Sources/sessions/...` の path policy を集中管理
+- `/Sources/raw/...`, `/Sources/sessions/...` の source path 制約を集中管理
 - source node の canonical path 制約を強制
 - mirror root 既定値など、wiki だけが知る規則を保持
 

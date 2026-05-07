@@ -4,55 +4,40 @@
 use std::cell::RefCell;
 use std::fs::create_dir_all;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+#[cfg(not(test))]
+use std::path::Path;
+use std::path::PathBuf;
 
-use candid::{Principal, export_service};
+use candid::export_service;
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
-use vfs_runtime::VfsService;
+use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
-    AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DeleteNodeRequest,
-    DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
+    AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DatabaseArchiveChunk,
+    DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
+    DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
     ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
     GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
     ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
     MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
-    PathPolicy, PathPolicyEntry, QueryContext, QueryContextRequest, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
-};
-use wiki_domain::validate_source_path_for_kind;
-
-mod path_policy;
-use path_policy::{
-    SKILL_REGISTRY_ROOT, can_read_policy_store_node, enable_policy_for, ensure_admin,
-    ensure_namespace_publish, ensure_namespace_read, ensure_not_policy_store_node,
-    ensure_policy_store_node_read, filter_children, filter_entries, filter_export_snapshot,
-    filter_fetch_updates, filter_glob_hits, filter_links, filter_node_context,
-    filter_query_context, filter_recent_hits, filter_search_hits, filter_source_evidence,
-    grant_role, load_path_policy, namespace_only_prefix, namespace_path, namespace_roles,
-    normalize_policy_role, policy_from_state, revoke_role, roles_for, save_path_policy,
+    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
+    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
+    WriteNodeRequest, WriteNodeResult,
 };
 
-const DB_PATH: &str = "./DB/wiki.sqlite3";
-const FS_MEMORY_RANGE: Range<u8> = 200..210;
-const DB_MEMORY_ID: u8 = 210;
-
-#[derive(Clone, Copy)]
-struct PathPolicyReadAccess {
-    restricted: Principal,
-    policy_store: bool,
-    inherited: bool,
-}
+const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
+const DATABASES_DIR: &str = "./DB/databases";
+// WASI filesystem memory is for tmp files and directory metadata, not DB slots.
+// SQLite DB files are mounted separately with dedicated MemoryId values.
+const WASI_FS_MEMORY_RANGE: Range<u16> = 0..10;
+const INDEX_DB_MEMORY_ID: u16 = 10;
 
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
     static SERVICE: RefCell<Option<VfsService>> = const { RefCell::new(None) };
-    #[cfg(test)]
-    static TEST_CALLER: RefCell<Principal> = const { RefCell::new(Principal::anonymous()) };
 }
 
 #[init]
@@ -66,8 +51,9 @@ fn post_upgrade_hook() {
 }
 
 #[query]
-fn status() -> Status {
-    with_service(|service| service.status()).unwrap_or_else(|error| ic_cdk::trap(&error))
+fn status(database_id: String) -> Status {
+    with_service(|service| service.status(&database_id, &caller_text()))
+        .unwrap_or_else(|error| ic_cdk::trap(&error))
 }
 
 #[query]
@@ -103,448 +89,307 @@ fn memory_manifest() -> MemoryManifest {
 }
 
 #[query]
-fn read_node(path: String) -> Result<Option<Node>, String> {
-    with_service(|service| {
-        ensure_policy_store_node_read(service, current_caller(), &path)?;
-        ensure_namespace_read(service, current_caller(), &path)?;
-        service.read_node(&path)
-    })
+fn read_node(database_id: String, path: String) -> Result<Option<Node>, String> {
+    with_service(|service| service.read_node(&database_id, &caller_text(), &path))
 }
 
 #[query]
 fn list_nodes(request: ListNodesRequest) -> Result<Vec<NodeEntry>, String> {
-    with_service(|service| {
-        if namespace_only_prefix(request.prefix.as_str()) {
-            ensure_namespace_read(service, current_caller(), &request.prefix)?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.list_nodes(request).map(|entries| {
-            filter_entries(
-                entries,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.list_nodes(&caller_text(), request))
 }
 
 #[query]
 fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
+    with_service(|service| service.list_children(&caller_text(), request))
+}
+
+#[update]
+fn create_database(database_id: String) -> Result<(), String> {
+    with_usage(
+        "create_database",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.reserve_database(&database_id, caller, now)?;
+            if let Err(error) = mount_database_file(&meta) {
+                let cleanup_error = service.discard_database_reservation(&database_id).err();
+                return Err(database_create_error(error, cleanup_error));
+            }
+            if let Err(error) = service.run_database_migrations(&database_id) {
+                unmount_database_file(&meta.db_file_name);
+                let cleanup_error = service.discard_database_reservation(&database_id).err();
+                return Err(database_create_error(error, cleanup_error));
+            }
+            Ok(())
+        },
+    )
+}
+
+#[update]
+fn grant_database_access(
+    database_id: String,
+    principal: String,
+    role: DatabaseRole,
+) -> Result<(), String> {
+    with_usage(
+        "grant_database_access",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            service.grant_database_access(&database_id, caller, &principal, role, now)
+        },
+    )
+}
+
+#[update]
+fn revoke_database_access(database_id: String, principal: String) -> Result<(), String> {
+    with_usage(
+        "revoke_database_access",
+        Some(database_id.clone()),
+        |service, caller, _now| service.revoke_database_access(&database_id, caller, &principal),
+    )
+}
+
+#[query]
+fn list_database_members(database_id: String) -> Result<Vec<DatabaseMember>, String> {
+    with_service(|service| service.list_database_members(&database_id, &caller_text()))
+}
+
+#[query]
+fn list_databases() -> Result<Vec<DatabaseInfo>, String> {
+    with_service(|service| service.list_database_infos_for_caller(&caller_text()))
+}
+
+#[update]
+fn delete_database(database_id: String) -> Result<(), String> {
+    with_usage(
+        "delete_database",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.list_databases().and_then(|databases| {
+                databases
+                    .into_iter()
+                    .find(|meta| meta.database_id == database_id)
+                    .ok_or_else(|| format!("database not found: {database_id}"))
+            })?;
+            service.delete_database(&database_id, caller, now)?;
+            unmount_database_file(&meta.db_file_name);
+            Ok(())
+        },
+    )
+}
+
+#[update]
+fn begin_database_archive(database_id: String) -> Result<DatabaseArchiveInfo, String> {
+    with_usage(
+        "begin_database_archive",
+        Some(database_id.clone()),
+        |service, caller, _now| service.begin_database_archive(&database_id, caller),
+    )
+}
+
+#[query]
+fn read_database_archive_chunk(
+    database_id: String,
+    offset: u64,
+    max_bytes: u32,
+) -> Result<DatabaseArchiveChunk, String> {
     with_service(|service| {
-        if namespace_path(request.path.as_str()) {
-            ensure_namespace_read(service, current_caller(), &request.path)?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.list_children(request).map(|children| {
-            filter_children(
-                children,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
+        service
+            .read_database_archive_chunk(&database_id, &caller_text(), offset, max_bytes)
+            .map(|bytes| DatabaseArchiveChunk { bytes })
     })
 }
 
 #[update]
+fn finalize_database_archive(database_id: String, snapshot_hash: Vec<u8>) -> Result<(), String> {
+    with_usage(
+        "finalize_database_archive",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.list_databases().and_then(|databases| {
+                databases
+                    .into_iter()
+                    .find(|meta| meta.database_id == database_id)
+                    .ok_or_else(|| format!("database not found: {database_id}"))
+            })?;
+            service.finalize_database_archive(&database_id, caller, snapshot_hash, now)?;
+            unmount_database_file(&meta.db_file_name);
+            Ok(())
+        },
+    )
+}
+
+#[update]
+fn begin_database_restore(
+    database_id: String,
+    snapshot_hash: Vec<u8>,
+    size_bytes: u64,
+) -> Result<(), String> {
+    with_usage(
+        "begin_database_restore",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.begin_database_restore(
+                &database_id,
+                caller,
+                snapshot_hash,
+                size_bytes,
+                now,
+            )?;
+            mount_database_file(&meta)
+        },
+    )
+}
+
+#[update]
+fn write_database_restore_chunk(request: DatabaseRestoreChunkRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "write_database_restore_chunk",
+        Some(database_id),
+        |service, caller, _now| {
+            service.write_database_restore_chunk(
+                &request.database_id,
+                caller,
+                request.offset,
+                &request.bytes,
+            )
+        },
+    )
+}
+
+#[update]
+fn finalize_database_restore(database_id: String) -> Result<(), String> {
+    with_usage(
+        "finalize_database_restore",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.finalize_database_restore(&database_id, caller, now)?;
+            mount_database_file(&meta)
+        },
+    )
+}
+
+#[update]
 fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    validate_source_path_for_kind(&request.path, &request.kind)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        service.write_node(request, now_millis())
+    let database_id = request.database_id.clone();
+    with_usage("write_node", Some(database_id), |service, caller, now| {
+        service.write_node(caller, request, now)
     })
 }
 
 #[update]
 fn append_node(request: AppendNodeRequest) -> Result<WriteNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        validate_append_source_path(service, &request)?;
-        service.append_node(request, now_millis())
+    let database_id = request.database_id.clone();
+    with_usage("append_node", Some(database_id), |service, caller, now| {
+        service.append_node(caller, request, now)
     })
 }
 
 #[update]
 fn edit_node(request: EditNodeRequest) -> Result<EditNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        service.edit_node(request, now_millis())
+    let database_id = request.database_id.clone();
+    with_usage("edit_node", Some(database_id), |service, caller, now| {
+        service.edit_node(caller, request, now)
     })
 }
 
 #[update]
 fn delete_node(request: DeleteNodeRequest) -> Result<DeleteNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        service.delete_node(request, now_millis())
+    let database_id = request.database_id.clone();
+    with_usage("delete_node", Some(database_id), |service, caller, now| {
+        service.delete_node(caller, request, now)
     })
 }
 
 #[update]
 fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
-    ensure_not_policy_store_node(&request.from_path)?;
-    ensure_not_policy_store_node(&request.to_path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.from_path)?;
-        ensure_namespace_publish(service, current_caller(), &request.to_path)?;
-        validate_move_source_path(service, &request)?;
-        service.move_node(request, now_millis())
+    let database_id = request.database_id.clone();
+    with_usage("move_node", Some(database_id), |service, caller, now| {
+        service.move_node(caller, request, now)
     })
 }
 
-#[query]
+#[update]
 fn mkdir_node(request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        service.mkdir_node(request)
+    let database_id = request.database_id.clone();
+    with_usage("mkdir_node", Some(database_id), |service, caller, _now| {
+        service.mkdir_node(caller, request)
     })
 }
 
 #[query]
 fn glob_nodes(request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>, String> {
-    with_service(|service| {
-        if request.path.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.path.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.glob_nodes(request).map(|hits| {
-            filter_glob_hits(
-                hits,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.glob_nodes(&caller_text(), request))
 }
 
 #[query]
 fn recent_nodes(request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>, String> {
-    with_service(|service| {
-        if request.path.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.path.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.recent_nodes(request).map(|hits| {
-            filter_recent_hits(
-                hits,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.recent_nodes(&caller_text(), request))
 }
 
 #[query]
 fn incoming_links(request: IncomingLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| {
-        ensure_namespace_read(service, current_caller(), &request.path)?;
-        let access = path_policy_read_access(service)?;
-        service.incoming_links(request).map(|links| {
-            filter_links(
-                links,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.incoming_links(&caller_text(), request))
 }
 
 #[query]
 fn outgoing_links(request: OutgoingLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| {
-        ensure_namespace_read(service, current_caller(), &request.path)?;
-        let access = path_policy_read_access(service)?;
-        service.outgoing_links(request).map(|links| {
-            filter_links(
-                links,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.outgoing_links(&caller_text(), request))
 }
 
 #[query]
 fn graph_links(request: GraphLinksRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| {
-        if namespace_only_prefix(request.prefix.as_str()) {
-            ensure_namespace_read(service, current_caller(), &request.prefix)?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.graph_links(request).map(|links| {
-            filter_links(
-                links,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.graph_links(&caller_text(), request))
 }
 
 #[query]
 fn graph_neighborhood(request: GraphNeighborhoodRequest) -> Result<Vec<LinkEdge>, String> {
-    with_service(|service| {
-        ensure_namespace_read(service, current_caller(), &request.center_path)?;
-        let access = path_policy_read_access(service)?;
-        service.graph_neighborhood(request).map(|links| {
-            filter_links(
-                links,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.graph_neighborhood(&caller_text(), request))
 }
 
 #[query]
 fn read_node_context(request: NodeContextRequest) -> Result<Option<NodeContext>, String> {
-    with_service(|service| {
-        ensure_namespace_read(service, current_caller(), &request.path)?;
-        let access = path_policy_read_access(service)?;
-        service.read_node_context(request).map(|context| {
-            context.and_then(|item| {
-                filter_node_context(
-                    item,
-                    access.restricted,
-                    access.policy_store,
-                    access.inherited,
-                    service,
-                )
-            })
-        })
-    })
+    with_service(|service| service.read_node_context(&caller_text(), request))
 }
 
 #[query]
 fn query_context(request: QueryContextRequest) -> Result<QueryContext, String> {
-    with_service(|service| {
-        if request
-            .namespace
-            .as_deref()
-            .is_some_and(namespace_only_prefix)
-        {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.namespace.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.query_context(request).map(|context| {
-            filter_query_context(
-                context,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.query_context(&caller_text(), request))
 }
 
 #[query]
 fn source_evidence(request: SourceEvidenceRequest) -> Result<SourceEvidence, String> {
-    with_service(|service| {
-        ensure_namespace_read(service, current_caller(), &request.node_path)?;
-        let access = path_policy_read_access(service)?;
-        service.source_evidence(request).map(|evidence| {
-            filter_source_evidence(
-                evidence,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.source_evidence(&caller_text(), request))
 }
 
 #[update]
 fn multi_edit_node(request: MultiEditNodeRequest) -> Result<MultiEditNodeResult, String> {
-    ensure_not_policy_store_node(&request.path)?;
-    with_service(|service| {
-        ensure_namespace_publish(service, current_caller(), &request.path)?;
-        service.multi_edit_node(request, now_millis())
-    })
+    let database_id = request.database_id.clone();
+    with_usage(
+        "multi_edit_node",
+        Some(database_id),
+        |service, caller, now| service.multi_edit_node(caller, request, now),
+    )
 }
 
 #[query]
 fn search_nodes(request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>, String> {
-    with_service(|service| {
-        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.prefix.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.search_nodes(request).map(|hits| {
-            filter_search_hits(
-                hits,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.search_nodes(&caller_text(), request))
 }
 
 #[query]
 fn search_node_paths(request: SearchNodePathsRequest) -> Result<Vec<SearchNodeHit>, String> {
-    with_service(|service| {
-        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.prefix.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.search_node_paths(request).map(|hits| {
-            filter_search_hits(
-                hits,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.search_node_paths(&caller_text(), request))
 }
 
-#[update]
+#[query]
 fn export_snapshot(request: ExportSnapshotRequest) -> Result<ExportSnapshotResponse, String> {
-    with_service(|service| {
-        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.prefix.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.export_fs_snapshot(request).map(|snapshot| {
-            filter_export_snapshot(
-                snapshot,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
+    with_service(|service| service.export_fs_snapshot(&caller_text(), request))
 }
 
 #[query]
 fn fetch_updates(request: FetchUpdatesRequest) -> Result<FetchUpdatesResponse, String> {
-    with_service(|service| {
-        if request.prefix.as_deref().is_some_and(namespace_only_prefix) {
-            ensure_namespace_read(
-                service,
-                current_caller(),
-                request.prefix.as_deref().unwrap_or("/Wiki"),
-            )?;
-        }
-        let access = path_policy_read_access(service)?;
-        service.fetch_fs_updates(request).map(|updates| {
-            filter_fetch_updates(
-                updates,
-                access.restricted,
-                access.policy_store,
-                access.inherited,
-                service,
-            )
-        })
-    })
-}
-
-#[update]
-fn enable_path_policy(path: String) -> Result<PathPolicy, String> {
-    with_service(|service| enable_policy_for(service, current_caller(), path, now_millis()))
-}
-
-#[query]
-fn my_path_policy_roles(_path: String) -> Vec<String> {
-    with_service(|service| {
-        let policy = load_path_policy(service, &_path)?;
-        Ok(roles_for(&policy, current_caller()).into_iter().collect())
-    })
-    .unwrap_or_default()
-}
-
-#[query]
-fn path_policy_entries(_path: String) -> Result<Vec<PathPolicyEntry>, String> {
-    with_service(|service| {
-        let policy = load_path_policy(service, &_path)?;
-        ensure_admin(&policy, current_caller())?;
-        Ok(policy.entries)
-    })
-}
-
-#[update]
-fn grant_path_policy_role(path: String, principal: String, role: String) -> Result<(), String> {
-    with_service(|service| {
-        let mut policy = load_path_policy(service, &path)?;
-        ensure_admin(&policy, current_caller())?;
-        let role = normalize_policy_role(&role)?;
-        Principal::from_text(&principal).map_err(|error| format!("invalid principal: {error}"))?;
-        grant_role(&mut policy, principal, role);
-        save_path_policy(service, &policy, now_millis())
-    })
-}
-
-#[update]
-fn revoke_path_policy_role(path: String, principal: String, role: String) -> Result<(), String> {
-    with_service(|service| {
-        let mut policy = load_path_policy(service, &path)?;
-        ensure_admin(&policy, current_caller())?;
-        let role = normalize_policy_role(&role)?;
-        revoke_role(&mut policy, &principal, &role);
-        save_path_policy(service, &policy, now_millis())
-    })
-}
-
-#[query]
-fn path_policy(_path: String) -> PathPolicy {
-    with_service(|service| {
-        let policy = load_path_policy(service, &_path)?;
-        Ok(policy_from_state(&policy))
-    })
-    .unwrap_or_else(|_| PathPolicy {
-        path: SKILL_REGISTRY_ROOT.to_string(),
-        mode: "open".to_string(),
-        roles: namespace_roles(),
-    })
+    with_service(|service| service.fetch_fs_updates(&caller_text(), request))
 }
 
 fn initialize_or_trap() {
@@ -553,8 +398,11 @@ fn initialize_or_trap() {
 
 fn initialize_service() -> Result<(), String> {
     initialize_wasi_storage()?;
-    let service = VfsService::new(PathBuf::from(DB_PATH));
-    service.run_fs_migrations()?;
+    let service = VfsService::new(PathBuf::from(INDEX_DB_PATH), PathBuf::from(DATABASES_DIR));
+    service.run_index_migrations()?;
+    for meta in service.list_databases()? {
+        mount_database_file(&meta)?;
+    }
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
     Ok(())
 }
@@ -566,27 +414,81 @@ fn initialize_wasi_storage() -> Result<(), String> {
             &[0u8; 32],
             &[("SQLITE_TMPDIR", "tmp")],
             &manager,
-            FS_MEMORY_RANGE.clone(),
+            WASI_FS_MEMORY_RANGE.clone(),
         );
 
         create_dir_all("tmp").map_err(|error| error.to_string())?;
-        let db_parent = Path::new(DB_PATH)
-            .parent()
-            .ok_or_else(|| "database path is missing parent directory".to_string())?;
-        create_dir_all(db_parent).map_err(|error| error.to_string())?;
+        create_dir_all(DATABASES_DIR).map_err(|error| error.to_string())?;
 
-        ic_wasi_polyfill::unmount_memory_file(DB_PATH);
-        let memory = manager.get(MemoryId::new(DB_MEMORY_ID));
+        ic_wasi_polyfill::unmount_memory_file(INDEX_DB_PATH);
+        let memory = manager.get(MemoryId::new(INDEX_DB_MEMORY_ID));
         let mount_result = ic_wasi_polyfill::mount_memory_file(
-            DB_PATH,
+            INDEX_DB_PATH,
             Box::new(memory),
             ic_wasi_polyfill::MountedFileSizePolicy::MemoryPages,
         );
         if mount_result > 0 {
-            return Err(format!("failed to mount database file: {mount_result}"));
+            return Err(format!(
+                "failed to mount index database file: {mount_result}"
+            ));
         }
         Ok(())
     })
+}
+
+#[cfg(not(test))]
+fn mount_database_file(meta: &DatabaseMeta) -> Result<(), String> {
+    MEMORY_MANAGER.with(|manager| {
+        let manager = manager.borrow();
+        if let Some(parent) = Path::new(&meta.db_file_name).parent() {
+            create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        ic_wasi_polyfill::unmount_memory_file(&meta.db_file_name);
+        let memory = manager.get(MemoryId::new(meta.mount_id));
+        let mount_result = ic_wasi_polyfill::mount_memory_file(
+            &meta.db_file_name,
+            Box::new(memory),
+            ic_wasi_polyfill::MountedFileSizePolicy::MemoryPages,
+        );
+        if mount_result > 0 {
+            return Err(format!(
+                "failed to mount database file {}: {}",
+                meta.database_id, mount_result
+            ));
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn mount_database_file(_meta: &DatabaseMeta) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn unmount_database_file(db_file_name: &str) {
+    ic_wasi_polyfill::unmount_memory_file(db_file_name);
+}
+
+#[cfg(test)]
+fn unmount_database_file(_db_file_name: &str) {}
+
+fn database_create_error(error: String, cleanup_error: Option<String>) -> String {
+    match cleanup_error {
+        Some(cleanup_error) => format!("{error}; cleanup failed: {cleanup_error}"),
+        None => error,
+    }
+}
+
+fn caller_text() -> String {
+    #[cfg(test)]
+    {
+        "2vxsx-fae".to_string()
+    }
+    #[cfg(not(test))]
+    {
+        ic_cdk::api::msg_caller().to_text()
+    }
 }
 
 fn now_millis() -> i64 {
@@ -600,6 +502,46 @@ fn now_millis() -> i64 {
     }
 }
 
+fn cycle_balance() -> u128 {
+    #[cfg(test)]
+    {
+        1_000_000_000_000
+    }
+    #[cfg(not(test))]
+    {
+        ic_cdk::api::canister_cycle_balance()
+    }
+}
+
+fn with_usage<T, F>(method: &str, database_id: Option<String>, f: F) -> Result<T, String>
+where
+    F: FnOnce(&VfsService, &str, i64) -> Result<T, String>,
+{
+    let caller = caller_text();
+    let now = now_millis();
+    let before_cycles = cycle_balance();
+    SERVICE.with(|slot| {
+        let borrowed = slot.borrow();
+        let service = borrowed
+            .as_ref()
+            .ok_or_else(|| "wiki service is not initialized".to_string())?;
+        let result = f(service, &caller, now);
+        let after_cycles = cycle_balance();
+        let cycles_delta = before_cycles.saturating_sub(after_cycles);
+        let error = result.as_ref().err().map(String::as_str);
+        let _ = service.record_usage_event(UsageEvent {
+            method,
+            database_id: database_id.as_deref(),
+            caller: &caller,
+            success: result.is_ok(),
+            cycles_delta,
+            error,
+            now,
+        });
+        result
+    })
+}
+
 fn with_service<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce(&VfsService) -> Result<T, String>,
@@ -610,31 +552,6 @@ where
             .as_ref()
             .ok_or_else(|| "wiki service is not initialized".to_string())?;
         f(service)
-    })
-}
-
-fn current_caller() -> Principal {
-    #[cfg(test)]
-    {
-        TEST_CALLER.with(|caller| *caller.borrow())
-    }
-    #[cfg(not(test))]
-    {
-        ic_cdk::api::msg_caller()
-    }
-}
-
-#[cfg(test)]
-fn set_test_caller(principal: Principal) {
-    TEST_CALLER.with(|caller| *caller.borrow_mut() = principal);
-}
-
-fn path_policy_read_access(service: &VfsService) -> Result<PathPolicyReadAccess, String> {
-    let caller = current_caller();
-    Ok(PathPolicyReadAccess {
-        restricted: caller,
-        policy_store: can_read_policy_store_node(service, caller)?,
-        inherited: true,
     })
 }
 
@@ -702,31 +619,6 @@ fn canonical_roles() -> Vec<CanonicalRole> {
     .collect()
 }
 
-fn validate_append_source_path(
-    service: &VfsService,
-    request: &AppendNodeRequest,
-) -> Result<(), String> {
-    if let Some(kind) = request.kind.as_ref() {
-        validate_source_path_for_kind(&request.path, kind)?;
-        return Ok(());
-    }
-    let existing = service.read_node(&request.path)?;
-    if let Some(node) = existing {
-        validate_source_path_for_kind(&request.path, &node.kind)?;
-    }
-    Ok(())
-}
-
-fn validate_move_source_path(
-    service: &VfsService,
-    request: &MoveNodeRequest,
-) -> Result<(), String> {
-    let current = service
-        .read_node(&request.from_path)?
-        .ok_or_else(|| format!("node does not exist: {}", request.from_path))?;
-    validate_source_path_for_kind(&request.to_path, &current.kind)
-}
-
 export_service!();
 
 pub fn candid_interface() -> String {
@@ -734,63 +626,50 @@ pub fn candid_interface() -> String {
 }
 
 fn normalize_candid_interface(interface: String) -> String {
-    // Where: canister Candid export path.
-    // What: Restore public nominal request names for path-only queries.
-    // Why: candid::export_service() deduplicates identical record shapes and
-    //      rewrites path-only requests to DeleteNodeResult.
-    let normalized = interface
-        .replace(
-            "list_children : (DeleteNodeResult) -> (Result_7) query;",
-            "list_children : (ListChildrenRequest) -> (Result_7) query;",
-        )
-        .replace(
-            "list_children : (DeleteNodeResult) -> (Result_9) query;",
-            "list_children : (ListChildrenRequest) -> (Result_9) query;",
-        )
-        .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_9) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_9) query;",
-        )
-        .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_10) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_10) query;",
-        )
-        .replace(
-            "mkdir_node : (DeleteNodeResult) -> (Result_11) query;",
-            "mkdir_node : (MkdirNodeRequest) -> (Result_11) query;",
-        )
-        .replace(
-            "outgoing_links : (IncomingLinksRequest) -> (Result_6) query;",
-            "outgoing_links : (OutgoingLinksRequest) -> (Result_6) query;",
-        )
-        .replace(
-            "outgoing_links : (IncomingLinksRequest) -> (Result_8) query;",
-            "outgoing_links : (OutgoingLinksRequest) -> (Result_8) query;",
-        );
-    let normalized = if normalized.contains("type ListChildrenRequest = record { path : text };") {
-        normalized
-    } else {
-        normalized.replace(
-            "type ListNodesRequest = record { recursive : bool; prefix : text };",
-            "type ListChildrenRequest = record { path : text };\ntype ListNodesRequest = record { recursive : bool; prefix : text };",
-        )
-    };
-    if normalized.contains("type MkdirNodeRequest = record { path : text };") {
-        return ensure_outgoing_links_request(normalized);
+    let normalized = normalize_candid_method_input(
+        &interface,
+        "outgoing_links",
+        "IncomingLinksRequest",
+        "OutgoingLinksRequest",
+    );
+    ensure_outgoing_links_request(normalized)
+}
+
+fn normalize_candid_method_input(
+    interface: &str,
+    method: &str,
+    exported_input: &str,
+    public_input: &str,
+) -> String {
+    let mut normalized = interface
+        .lines()
+        .map(|line| {
+            let prefix = format!("  {method} : ({exported_input}) -> (");
+            if line.starts_with(&prefix) && line.ends_with(" query;") {
+                line.replacen(
+                    &format!("{method} : ({exported_input})"),
+                    &format!("{method} : ({public_input})"),
+                    1,
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if interface.ends_with('\n') {
+        normalized.push('\n');
     }
-    ensure_outgoing_links_request(normalized.replace(
-        "type MkdirNodeResult = record { created : bool; path : text };",
-        "type MkdirNodeRequest = record { path : text };\ntype MkdirNodeResult = record { created : bool; path : text };",
-    ))
+    normalized
 }
 
 fn ensure_outgoing_links_request(interface: String) -> String {
-    if interface.contains("type OutgoingLinksRequest = record { path : text; limit : nat32 };") {
+    if interface.contains("type OutgoingLinksRequest = record {") {
         return interface;
     }
     interface.replace(
         "type LinkEdge = record {",
-        "type OutgoingLinksRequest = record { path : text; limit : nat32 };\ntype LinkEdge = record {",
+        "type OutgoingLinksRequest = record { path : text; limit : nat32; database_id : text };\ntype LinkEdge = record {",
     )
 }
 

@@ -23,6 +23,7 @@ export type ChildNode = {
   etag: string | null;
   sizeBytes: string | null;
   isVirtual: boolean;
+  hasChildren: boolean;
 };
 
 export type RecentNode = {
@@ -63,15 +64,4 @@ export type SearchNodeHit = {
   preview: SearchPreview | null;
   score: number;
   matchReasons: string[];
-};
-
-export type PathPolicy = {
-  path: string;
-  mode: string;
-  roles: string[];
-};
-
-export type PathPolicyEntry = {
-  principal: string;
-  roles: string[];
 };

@@ -1,11 +1,10 @@
 // Where: crates/vfs_canister/src/tests.rs
 // What: Entry-point level tests for the FS-first canister surface.
 // Why: Phase 3 replaces the public canister contract, so tests must assert the wrapper behavior directly.
-use candid::Principal;
 use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
+    AppendNodeRequest, DatabaseStatus, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
     FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
@@ -15,30 +14,125 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, append_node, delete_node, edit_node, enable_path_policy, export_snapshot,
-    fetch_updates, glob_nodes, grant_path_policy_role, graph_links, graph_neighborhood,
-    incoming_links, list_children, list_nodes, memory_manifest, mkdir_node, move_node,
-    multi_edit_node, my_path_policy_roles, outgoing_links, path_policy_entries, query_context,
-    read_node, read_node_context, recent_nodes, revoke_path_policy_role, search_node_paths,
-    search_nodes, set_test_caller, source_evidence, status, write_node,
+    SERVICE, append_node, begin_database_archive, create_database, delete_node, edit_node,
+    export_snapshot, fetch_updates, finalize_database_archive, glob_nodes, graph_links,
+    graph_neighborhood, incoming_links, list_children, list_databases, list_nodes, memory_manifest,
+    mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
+    read_database_archive_chunk, read_node, read_node_context, recent_nodes, search_node_paths,
+    search_nodes, source_evidence, status, write_node,
 };
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
-    let db_path = dir.keep().join("wiki.sqlite3");
-    let service = VfsService::new(db_path);
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
     service
-        .run_fs_migrations()
-        .expect("fs migrations should run");
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("default", "2vxsx-fae", 1_700_000_000_000)
+        .expect("default database should create");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
-    set_test_caller(Principal::anonymous());
+}
+
+fn install_empty_test_service() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+}
+
+fn usage_event_count() -> u64 {
+    SERVICE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("service should be installed")
+            .usage_event_count()
+            .expect("usage count should load")
+    })
+}
+
+#[test]
+fn empty_index_does_not_create_default_database() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+
+    let databases = service
+        .list_databases()
+        .expect("empty index should be readable");
+    assert!(databases.is_empty());
+}
+
+#[test]
+fn existing_database_index_is_loaded_without_implicit_default() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("existing database should create");
+
+    let databases = service
+        .list_databases()
+        .expect("existing index should load");
+
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].database_id, "alpha");
+}
+
+#[test]
+fn update_entrypoints_record_usage_events() {
+    install_empty_test_service();
+
+    create_database("default".to_string()).expect("database should create");
+    assert_eq!(usage_event_count(), 1);
+
+    let failed = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Sources/not-raw.md".to_string(),
+        kind: NodeKind::Source,
+        content: "invalid source path".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    });
+    assert!(failed.is_err());
+    assert_eq!(usage_event_count(), 2);
+}
+
+#[test]
+fn query_entrypoints_do_not_record_usage_events() {
+    install_test_service();
+
+    let current = status("default".to_string());
+    assert_eq!(current.file_count, 0);
+    let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
+        prefix: Some("/Wiki".to_string()),
+        limit: 100,
+        cursor: None,
+        snapshot_revision: None,
+        snapshot_session_id: None,
+    })
+    .expect("snapshot query should succeed");
+    assert_eq!(snapshot.snapshot_session_id, None);
+    assert_eq!(usage_event_count(), 0);
 }
 
 #[test]
 fn status_stays_available_after_fs_migrations() {
     install_test_service();
 
-    let current = status();
+    let current = status("default".to_string());
 
     assert_eq!(current.file_count, 0);
     assert_eq!(current.source_count, 0);
@@ -69,6 +163,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
         ("/Sources/raw/a/a.md", "raw source"),
     ] {
         write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
             path: path.to_string(),
             kind: if path.starts_with("/Sources/") {
                 NodeKind::Source
@@ -83,6 +178,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
     }
 
     let context = query_context(QueryContextRequest {
+        database_id: "default".to_string(),
         task: "beam memory".to_string(),
         entities: Vec::new(),
         namespace: Some("/Wiki/scope".to_string()),
@@ -100,6 +196,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
     assert!(!context.evidence.is_empty());
 
     let evidence = source_evidence(SourceEvidenceRequest {
+        database_id: "default".to_string(),
         node_path: "/Wiki/scope/overview.md".to_string(),
     })
     .expect("evidence should load");
@@ -116,6 +213,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         kind: NodeKind::File,
         content: "# Foo\n\nalpha body".to_string(),
@@ -126,6 +224,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(created.created);
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
         kind: NodeKind::File,
         content: "# Bar\n\nbeta body".to_string(),
@@ -134,12 +233,13 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     })
     .expect("nested write should succeed");
 
-    let node = read_node("/Wiki/foo.md".to_string())
+    let node = read_node("default".to_string(), "/Wiki/foo.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(node.kind, NodeKind::File);
 
     let stale_write = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         kind: NodeKind::File,
         content: "# Foo\n\nrewrite".to_string(),
@@ -149,6 +249,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(stale_write.is_err());
 
     let entries = list_nodes(ListNodesRequest {
+        database_id: "default".to_string(),
         prefix: "/Wiki".to_string(),
         recursive: false,
     })
@@ -160,6 +261,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     );
 
     let children = list_children(ListChildrenRequest {
+        database_id: "default".to_string(),
         path: "/Wiki".to_string(),
     })
     .expect("children should list");
@@ -173,6 +275,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     }));
 
     let hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "alpha".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
@@ -183,6 +286,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(hits[0].path, "/Wiki/foo.md");
 
     let path_hits = search_node_paths(SearchNodePathsRequest {
+        database_id: "default".to_string(),
         query_text: "NeStEd".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
@@ -193,6 +297,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(path_hits[0].path, "/Wiki/nested/bar.md");
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
         cursor: None,
@@ -203,6 +308,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(snapshot.nodes.len(), 2);
 
     let empty_delta = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: snapshot.snapshot_revision.clone(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -214,6 +320,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(empty_delta.removed_paths.is_empty());
 
     let invalid_delta = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: "missing".to_string(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -226,16 +333,19 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     );
 
     let deleted = delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         expected_etag: Some(created.node.etag.clone()),
     })
     .expect("delete should succeed");
     assert_eq!(deleted.path, "/Wiki/foo.md");
 
-    let deleted_read = read_node("/Wiki/foo.md".to_string()).expect("read should succeed");
+    let deleted_read =
+        read_node("default".to_string(), "/Wiki/foo.md".to_string()).expect("read should succeed");
     assert!(deleted_read.is_none());
 
     let stale_delete = delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
         expected_etag: Some("stale".to_string()),
     });
@@ -243,692 +353,11 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
 }
 
 #[test]
-fn path_policy_entries_restricts_reads_and_writes_by_role() {
-    install_test_service();
-    let admin = Principal::from_text("aaaaa-aa").expect("principal should parse");
-    let viewer = Principal::from_text("2vxsx-fae").expect("principal should parse");
-    let publisher =
-        Principal::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").expect("principal should parse");
-
-    set_test_caller(admin);
-    enable_path_policy("/Wiki/skills".to_string()).expect("policy should enable");
-    assert_eq!(
-        my_path_policy_roles("/Wiki/skills".to_string()),
-        vec!["Admin".to_string()]
-    );
-    grant_path_policy_role(
-        "/Wiki/skills".to_string(),
-        viewer.to_text(),
-        "Reader".to_string(),
-    )
-    .expect("grant viewer");
-    enable_path_policy("/Wiki/protected".to_string()).expect("protected policy should enable");
-    grant_path_policy_role(
-        "/Wiki/protected".to_string(),
-        viewer.to_text(),
-        "Reader".to_string(),
-    )
-    .expect("grant protected reader");
-    grant_path_policy_role(
-        "/Wiki/skills".to_string(),
-        publisher.to_text(),
-        "Writer".to_string(),
-    )
-    .expect("grant publisher");
-
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Skill".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("admin can publish");
-
-    set_test_caller(viewer);
-    assert!(
-        read_node("/Wiki/skills/acme/legal-review/SKILL.md".to_string())
-            .expect("viewer can read")
-            .is_some()
-    );
-    assert!(
-        write_node(WriteNodeRequest {
-            path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
-            kind: NodeKind::File,
-            content: "# Changed".to_string(),
-            metadata_json: "{}".to_string(),
-            expected_etag: None,
-        })
-        .expect_err("viewer cannot publish")
-        .contains("Writer")
-    );
-
-    set_test_caller(publisher);
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/legal-review/provenance.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Provenance".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("publisher can publish");
-    assert!(
-        path_policy_entries("/Wiki/skills".to_string())
-            .expect_err("publisher cannot manage policy")
-            .contains("Admin")
-    );
-
-    revoke_path_policy_role(
-        "/Wiki/skills".to_string(),
-        viewer.to_text(),
-        "Reader".to_string(),
-    )
-    .expect_err("publisher cannot revoke");
-}
-
-#[test]
-fn public_skill_catalog_write_uses_public_path_policy() {
-    install_test_service();
-    let private_admin = Principal::from_text("aaaaa-aa").expect("principal should parse");
-    let public_admin =
-        Principal::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").expect("principal should parse");
-    let public_writer =
-        Principal::from_text("bd3sg-teaaa-aaaaa-qaaba-cai").expect("principal should parse");
-    let outsider = Principal::from_text("2vxsx-fae").expect("principal should parse");
-
-    set_test_caller(private_admin);
-    enable_path_policy("/Wiki/skills".to_string()).expect("policy should enable");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/private/SKILL.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Private Skill\n\nprivate-alpha".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("private admin can publish private skill");
-
-    set_test_caller(public_admin);
-    enable_path_policy("/Wiki/public-skills".to_string()).expect("public policy should enable");
-    grant_path_policy_role(
-        "/Wiki/public-skills".to_string(),
-        public_writer.to_text(),
-        "Writer".to_string(),
-    )
-    .expect("grant public writer");
-
-    set_test_caller(private_admin);
-    assert!(
-        read_node("/Wiki/public-skills/acme/legal-review/SKILL.md".to_string())
-            .expect_err("private admin cannot read restricted public catalog")
-            .contains("Reader")
-    );
-    assert!(
-        write_node(WriteNodeRequest {
-            path: "/Wiki/public-skills/acme/legal-review/SKILL.md".to_string(),
-            kind: NodeKind::File,
-            content: "# Private Admin Public Write".to_string(),
-            metadata_json: "{}".to_string(),
-            expected_etag: None,
-        })
-        .expect_err("private admin cannot write public catalog")
-        .contains("Writer")
-    );
-
-    set_test_caller(public_writer);
-    write_node(WriteNodeRequest {
-        path: "/Wiki/public-skills/acme/legal-review/SKILL.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Public Skill\n\npublic-alpha".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("public writer can write public catalog");
-    assert!(
-        read_node("/Wiki/public-skills/acme/legal-review/SKILL.md".to_string())
-            .expect("public writer can read public catalog")
-            .is_some()
-    );
-
-    set_test_caller(outsider);
-    assert!(
-        write_node(WriteNodeRequest {
-            path: "/Wiki/public-skills/acme/legal-review/SKILL.md".to_string(),
-            kind: NodeKind::File,
-            content: "# Outsider".to_string(),
-            metadata_json: "{}".to_string(),
-            expected_etag: None,
-        })
-        .expect_err("outsider cannot write restricted public catalog")
-        .contains("Writer")
-    );
-
-    assert!(
-        read_node("/Wiki/public-skills/acme/legal-review/SKILL.md".to_string())
-            .expect_err("outsider cannot read restricted public catalog")
-            .contains("Reader")
-    );
-    assert!(
-        read_node("/Wiki/skills/acme/private/SKILL.md".to_string())
-            .expect_err("private skill stays protected")
-            .contains("Reader")
-    );
-    let hits = search_nodes(SearchNodesRequest {
-        query_text: "public-alpha".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("restricted public catalog search should succeed");
-    assert!(
-        hits.iter()
-            .all(|hit| { hit.path != "/Wiki/public-skills/acme/legal-review/SKILL.md" })
-    );
-}
-
-#[test]
-fn open_skill_registry_mode_keeps_existing_vfs_behavior() {
-    install_test_service();
-
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Open Skill\n\nopen-alpha".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("open mode allows skill writes");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/public.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Public\n\nopen-alpha".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("open mode allows public writes");
-
-    let hits = search_nodes(SearchNodesRequest {
-        query_text: "open-alpha".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("open mode search should succeed");
-    assert!(hits.iter().any(|hit| hit.path.starts_with("/Wiki/skills/")));
-    assert!(hits.iter().any(|hit| hit.path == "/Wiki/public.md"));
-
-    let children = list_children(ListChildrenRequest {
-        path: "/Wiki".to_string(),
-    })
-    .expect("open mode parent list should succeed");
-    assert!(children.iter().any(|child| child.path == "/Wiki/skills"));
-}
-
-#[test]
-fn restricted_skill_registry_does_not_leak_to_unauthorized_callers() {
-    install_test_service();
-    let admin = Principal::from_text("aaaaa-aa").expect("principal should parse");
-    let outsider = Principal::from_text("2vxsx-fae").expect("principal should parse");
-
-    set_test_caller(admin);
-    enable_path_policy("/Wiki/skills".to_string()).expect("policy should enable");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/legal-review/SKILL.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Secret Skill\n\nalpha-private [Public](/Wiki/public.md) [Raw](/Sources/raw/secret/secret.md)".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("admin can publish");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/public.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Public\n\nalpha-public [Secret](/Wiki/skills/acme/legal-review/SKILL.md)"
-            .to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("public write remains open");
-    write_node(WriteNodeRequest {
-        path: "/Sources/raw/secret/secret.md".to_string(),
-        kind: NodeKind::Source,
-        content: "raw secret".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("source write remains open");
-
-    let snapshot = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("admin snapshot should load");
-
-    set_test_caller(outsider);
-    assert!(
-        read_node("/Wiki/skills/acme/legal-review/SKILL.md".to_string())
-            .expect_err("outsider cannot read")
-            .contains("Reader")
-    );
-    assert!(
-        read_node("/System/path-policies.json".to_string())
-            .expect_err("outsider cannot read policy store")
-            .contains("Admin")
-    );
-    let children = list_children(ListChildrenRequest {
-        path: "/Wiki".to_string(),
-    })
-    .expect("parent list should succeed");
-    assert_no_skill_paths(children.iter().map(|child| child.path.as_str()));
-
-    let entries = list_nodes(ListNodesRequest {
-        prefix: "/Wiki".to_string(),
-        recursive: true,
-    })
-    .expect("recursive list should succeed");
-    assert_no_skill_paths(entries.iter().map(|entry| entry.path.as_str()));
-
-    let hits = search_nodes(SearchNodesRequest {
-        query_text: "alpha".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("search should succeed");
-    assert_no_skill_paths(hits.iter().map(|hit| hit.path.as_str()));
-    assert!(hits.iter().any(|hit| hit.path == "/Wiki/public.md"));
-
-    let path_hits = search_node_paths(SearchNodePathsRequest {
-        query_text: "legal-review".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("path search should succeed");
-    assert_no_skill_paths(path_hits.iter().map(|hit| hit.path.as_str()));
-
-    let recent = recent_nodes(RecentNodesRequest {
-        path: Some("/Wiki".to_string()),
-        limit: 10,
-    })
-    .expect("recent should succeed");
-    assert_no_skill_paths(recent.iter().map(|hit| hit.path.as_str()));
-
-    let glob = glob_nodes(GlobNodesRequest {
-        path: Some("/Wiki".to_string()),
-        pattern: "**/*.md".to_string(),
-        node_type: None,
-    })
-    .expect("glob should succeed");
-    assert_no_skill_paths(glob.iter().map(|hit| hit.path.as_str()));
-
-    let links = graph_links(GraphLinksRequest {
-        prefix: "/Wiki".to_string(),
-        limit: 100,
-    })
-    .expect("graph links should succeed");
-    assert_no_skill_paths(
-        links
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-    );
-
-    let neighborhood = graph_neighborhood(GraphNeighborhoodRequest {
-        center_path: "/Wiki/public.md".to_string(),
-        depth: 1,
-        limit: 100,
-    })
-    .expect("graph neighborhood should succeed");
-    assert_no_skill_paths(
-        neighborhood
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-    );
-
-    let node_context = read_node_context(NodeContextRequest {
-        path: "/Wiki/public.md".to_string(),
-        link_limit: 100,
-    })
-    .expect("node context should succeed")
-    .expect("public node should exist");
-    assert_no_skill_paths(
-        node_context
-            .incoming_links
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-    );
-    assert_no_skill_paths(
-        node_context
-            .outgoing_links
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-    );
-
-    let context = query_context(QueryContextRequest {
-        task: "alpha".to_string(),
-        entities: Vec::new(),
-        namespace: Some("/Wiki".to_string()),
-        budget_tokens: 1_000,
-        include_evidence: true,
-        depth: 1,
-    })
-    .expect("query context should succeed");
-    assert_no_skill_paths(context.search_hits.iter().map(|hit| hit.path.as_str()));
-    assert_no_skill_paths(context.nodes.iter().map(|node| node.node.path.as_str()));
-    assert_no_skill_paths(
-        context
-            .graph_links
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-    );
-    assert_no_skill_paths(
-        context
-            .evidence
-            .iter()
-            .map(|evidence| evidence.node_path.as_str()),
-    );
-    assert_no_skill_paths(context.evidence.iter().flat_map(|evidence| {
-        evidence
-            .refs
-            .iter()
-            .flat_map(|item| [item.source_path.as_str(), item.via_path.as_str()])
-    }));
-
-    let evidence = source_evidence(SourceEvidenceRequest {
-        node_path: "/Wiki/public.md".to_string(),
-    })
-    .expect("source evidence should succeed");
-    assert_no_skill_paths(std::iter::once(evidence.node_path.as_str()));
-    assert_no_skill_paths(
-        evidence
-            .refs
-            .iter()
-            .flat_map(|item| [item.source_path.as_str(), item.via_path.as_str()]),
-    );
-
-    let outsider_snapshot = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("snapshot should succeed");
-    assert_no_skill_paths(
-        outsider_snapshot
-            .nodes
-            .iter()
-            .map(|node| node.path.as_str()),
-    );
-
-    let updates = fetch_updates(FetchUpdatesRequest {
-        known_snapshot_revision: snapshot.snapshot_revision,
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        target_snapshot_revision: None,
-    })
-    .expect("fetch updates should succeed");
-    assert_no_skill_paths(updates.changed_nodes.iter().map(|node| node.path.as_str()));
-    assert_no_skill_paths(updates.removed_paths.iter().map(String::as_str));
-    assert!(
-        updates
-            .removed_paths
-            .iter()
-            .all(|path| path != "/System/path-policies.json")
-    );
-}
-
-#[test]
-fn policy_store_admin_does_not_bypass_unrelated_path_policy() {
-    install_test_service();
-    let team_a_admin = Principal::from_text("aaaaa-aa").expect("principal should parse");
-    let team_b_admin =
-        Principal::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").expect("principal should parse");
-
-    set_test_caller(team_a_admin);
-    enable_path_policy("/Wiki/team-a".to_string()).expect("team-a policy should enable");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/team-a/plan.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Team A\n\nalpha-team-a".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("team-a admin can write");
-
-    set_test_caller(team_b_admin);
-    enable_path_policy("/Wiki/team-b".to_string()).expect("team-b policy should enable");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/team-b/plan.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Team B\n\nalpha-team-b".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("team-b admin can write");
-
-    set_test_caller(team_a_admin);
-    assert!(
-        read_node("/System/path-policies.json".to_string())
-            .expect("policy store admin can read policy store")
-            .is_some()
-    );
-    assert!(
-        read_node("/Wiki/team-b/plan.md".to_string())
-            .expect_err("team-a admin cannot read team-b")
-            .contains("Reader")
-    );
-    let hits = search_nodes(SearchNodesRequest {
-        query_text: "alpha".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("search should succeed");
-    assert!(hits.iter().any(|hit| hit.path == "/Wiki/team-a/plan.md"));
-    assert!(!hits.iter().any(|hit| hit.path == "/Wiki/team-b/plan.md"));
-    let snapshot = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("snapshot should succeed");
-    assert!(
-        !snapshot
-            .nodes
-            .iter()
-            .any(|node| node.path == "/Wiki/team-b/plan.md")
-    );
-    let baseline = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("baseline snapshot should succeed");
-    let updates = fetch_updates(FetchUpdatesRequest {
-        known_snapshot_revision: baseline.snapshot_revision,
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        target_snapshot_revision: None,
-    })
-    .expect("updates should succeed");
-    assert!(
-        !updates
-            .changed_nodes
-            .iter()
-            .any(|node| node.path == "/Wiki/team-b/plan.md")
-    );
-}
-
-#[test]
-fn protected_skill_knowledge_does_not_leak_to_unauthorized_callers() {
-    install_test_service();
-    let admin = Principal::from_text("aaaaa-aa").expect("principal should parse");
-    let viewer = Principal::from_text("2vxsx-fae").expect("principal should parse");
-    let outsider =
-        Principal::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").expect("principal should parse");
-
-    set_test_caller(admin);
-    enable_path_policy("/Wiki/skills".to_string()).expect("policy should enable");
-    enable_path_policy("/Wiki/protected".to_string()).expect("knowledge policy should enable");
-    grant_path_policy_role(
-        "/Wiki/skills".to_string(),
-        viewer.to_text(),
-        "Reader".to_string(),
-    )
-    .expect("grant viewer");
-    grant_path_policy_role(
-        "/Wiki/protected".to_string(),
-        viewer.to_text(),
-        "Reader".to_string(),
-    )
-    .expect("grant viewer knowledge read");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/skills/acme/legal-review/manifest.md".to_string(),
-        kind: NodeKind::File,
-        content: "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nknowledge:\n  - /Wiki/protected/contracts.md\npermissions: {}\nprovenance:\n  source: local\n---\n# Manifest\n".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("admin can publish manifest");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/protected/contracts.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Contracts\n\nalpha-protected".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("admin can write protected knowledge");
-    write_node(WriteNodeRequest {
-        path: "/Wiki/public.md".to_string(),
-        kind: NodeKind::File,
-        content: "# Public\n\nalpha-public [Protected](/Wiki/protected/contracts.md)".to_string(),
-        metadata_json: "{}".to_string(),
-        expected_etag: None,
-    })
-    .expect("admin can write public wiki");
-    let snapshot = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("admin snapshot should load");
-
-    set_test_caller(outsider);
-    assert!(
-        read_node("/Wiki/protected/contracts.md".to_string())
-            .expect_err("outsider cannot read protected knowledge")
-            .contains("Reader")
-    );
-    let search = search_nodes(SearchNodesRequest {
-        query_text: "alpha".to_string(),
-        prefix: Some("/Wiki".to_string()),
-        top_k: 10,
-        preview_mode: None,
-    })
-    .expect("search should succeed");
-    assert_no_paths(
-        search.iter().map(|hit| hit.path.as_str()),
-        "/Wiki/protected",
-    );
-    assert!(search.iter().any(|hit| hit.path == "/Wiki/public.md"));
-    let context = query_context(QueryContextRequest {
-        task: "alpha".to_string(),
-        entities: Vec::new(),
-        namespace: Some("/Wiki".to_string()),
-        budget_tokens: 1_000,
-        include_evidence: true,
-        depth: 1,
-    })
-    .expect("context should succeed");
-    assert_no_paths(
-        context.search_hits.iter().map(|hit| hit.path.as_str()),
-        "/Wiki/protected",
-    );
-    assert_no_paths(
-        context.nodes.iter().map(|node| node.node.path.as_str()),
-        "/Wiki/protected",
-    );
-    assert_no_paths(
-        context
-            .graph_links
-            .iter()
-            .flat_map(|edge| [edge.source_path.as_str(), edge.target_path.as_str()]),
-        "/Wiki/protected",
-    );
-    let outsider_snapshot = export_snapshot(ExportSnapshotRequest {
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        snapshot_revision: None,
-        snapshot_session_id: None,
-    })
-    .expect("snapshot should succeed");
-    assert_no_paths(
-        outsider_snapshot
-            .nodes
-            .iter()
-            .map(|node| node.path.as_str()),
-        "/Wiki/protected",
-    );
-    let updates = fetch_updates(FetchUpdatesRequest {
-        known_snapshot_revision: snapshot.snapshot_revision,
-        prefix: Some("/Wiki".to_string()),
-        limit: 100,
-        cursor: None,
-        target_snapshot_revision: None,
-    })
-    .expect("updates should succeed");
-    assert_no_paths(
-        updates.changed_nodes.iter().map(|node| node.path.as_str()),
-        "/Wiki/protected",
-    );
-
-    set_test_caller(viewer);
-    assert!(
-        read_node("/Wiki/protected/contracts.md".to_string())
-            .expect("viewer can read")
-            .is_some()
-    );
-}
-
-fn assert_no_skill_paths<'a>(paths: impl IntoIterator<Item = &'a str>) {
-    for path in paths {
-        assert!(
-            !path.starts_with("/Wiki/skills"),
-            "path policy path leaked: {path}"
-        );
-        assert_ne!(
-            path, "/System/path-policies.json",
-            "policy store path leaked"
-        );
-    }
-}
-
-fn assert_no_paths<'a>(paths: impl IntoIterator<Item = &'a str>, hidden_prefix: &str) {
-    for path in paths {
-        assert!(
-            !path.starts_with(hidden_prefix),
-            "protected path leaked: {path}"
-        );
-    }
-}
-
-#[test]
 fn fs_entrypoints_cover_backlink_queries() {
     install_test_service();
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         kind: NodeKind::File,
         content: "[Target](../target.md) and [[/Wiki/target.md]]".to_string(),
@@ -938,6 +367,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     .expect("source write should succeed");
 
     let incoming = incoming_links(IncomingLinksRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/target.md".to_string(),
         limit: 10,
     })
@@ -950,6 +380,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     );
 
     let outgoing = outgoing_links(OutgoingLinksRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         limit: 10,
     })
@@ -957,6 +388,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(outgoing.len(), 2);
 
     let graph = graph_links(GraphLinksRequest {
+        database_id: "default".to_string(),
         prefix: "/Wiki/topic".to_string(),
         limit: 10,
     })
@@ -964,6 +396,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(graph.len(), 2);
 
     let context = read_node_context(NodeContextRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         link_limit: 10,
     })
@@ -973,6 +406,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(context.outgoing_links.len(), 2);
 
     let neighborhood = graph_neighborhood(GraphNeighborhoodRequest {
+        database_id: "default".to_string(),
         center_path: "/Wiki/target.md".to_string(),
         depth: 1,
         limit: 10,
@@ -986,6 +420,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     install_test_service();
 
     let mkdir = mkdir_node(MkdirNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work".to_string(),
     })
     .expect("mkdir should succeed");
@@ -993,6 +428,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     assert_eq!(mkdir.path, "/Wiki/work");
 
     let appended = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         content: "alpha".to_string(),
         expected_etag: None,
@@ -1004,6 +440,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     assert!(appended.created);
 
     let appended_again = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         content: "beta".to_string(),
         expected_etag: Some(appended.node.etag.clone()),
@@ -1012,12 +449,13 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
         kind: None,
     })
     .expect("append update should succeed");
-    let appended_node = read_node("/Wiki/work/log.md".to_string())
+    let appended_node = read_node("default".to_string(), "/Wiki/work/log.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(appended_node.content, "alpha\nbeta");
 
     let edited = edit_node(EditNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         old_text: "beta".to_string(),
         new_text: "gamma".to_string(),
@@ -1026,7 +464,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     })
     .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    let edited_node = read_node("/Wiki/work/log.md".to_string())
+    let edited_node = read_node("default".to_string(), "/Wiki/work/log.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(edited_node.content, "alpha\ngamma");
@@ -1037,6 +475,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     install_test_service();
 
     let write_error = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/source.md".to_string(),
         kind: NodeKind::Source,
         content: "source".to_string(),
@@ -1047,6 +486,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     assert!(write_error.contains("source path must"));
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/source/source.md".to_string(),
         kind: NodeKind::Source,
         content: "source".to_string(),
@@ -1056,6 +496,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect("canonical source write should succeed");
 
     let append_error = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic.md".to_string(),
         content: "next".to_string(),
         expected_etag: None,
@@ -1067,6 +508,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     assert!(append_error.contains("source path must"));
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/keep/keep.md".to_string(),
         kind: NodeKind::Source,
         content: "keep".to_string(),
@@ -1076,6 +518,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect("canonical source write should succeed");
 
     let move_error = move_node(MoveNodeRequest {
+        database_id: "default".to_string(),
         from_path: "/Sources/raw/keep/keep.md".to_string(),
         to_path: "/Sources/raw/renamed/wrong.md".to_string(),
         expected_etag: Some(created.node.etag),
@@ -1092,6 +535,7 @@ fn fs_entrypoints_search_large_hits_without_trap() {
     let payload = format!("shared-bench-search {}", "x".repeat(1024 * 1024 - 20));
     for index in 0..10 {
         write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
             path: format!("/Wiki/large/node-{index:03}.md"),
             kind: NodeKind::File,
             content: payload.clone(),
@@ -1102,6 +546,7 @@ fn fs_entrypoints_search_large_hits_without_trap() {
     }
 
     let hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "shared-bench-search".to_string(),
         prefix: Some("/Wiki/large".to_string()),
         top_k: 10,
@@ -1125,6 +570,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/item.md".to_string(),
         kind: NodeKind::File,
         content: "alpha beta".to_string(),
@@ -1134,6 +580,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     .expect("write should succeed");
 
     let moved = move_node(MoveNodeRequest {
+        database_id: "default".to_string(),
         from_path: "/Wiki/work/item.md".to_string(),
         to_path: "/Wiki/archive/item.md".to_string(),
         expected_etag: Some(created.node.etag.clone()),
@@ -1144,6 +591,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     assert_eq!(moved.node.path, "/Wiki/archive/item.md");
 
     let globbed = glob_nodes(GlobNodesRequest {
+        database_id: "default".to_string(),
         pattern: "**".to_string(),
         path: Some("/Wiki".to_string()),
         node_type: Some(GlobNodeType::Directory),
@@ -1156,6 +604,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     );
 
     let recent = recent_nodes(RecentNodesRequest {
+        database_id: "default".to_string(),
         limit: 5,
         path: Some("/Wiki".to_string()),
     })
@@ -1163,6 +612,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     assert_eq!(recent[0].path, "/Wiki/archive/item.md");
 
     let edited = multi_edit_node(MultiEditNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/archive/item.md".to_string(),
         edits: vec![
             MultiEdit {
@@ -1178,8 +628,71 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     })
     .expect("multi edit should succeed");
     assert_eq!(edited.replacement_count, 2);
-    let edited_node = read_node("/Wiki/archive/item.md".to_string())
+    let edited_node = read_node("default".to_string(), "/Wiki/archive/item.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(edited_node.content, "one two");
+}
+
+#[test]
+fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
+    install_test_service();
+
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/archive-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "# Archive Smoke\n\nalpha body [raw](/Sources/raw/smoke/smoke.md)".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Sources/raw/smoke/smoke.md".to_string(),
+        kind: NodeKind::Source,
+        content: "raw alpha body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("source write should succeed");
+
+    let outgoing = outgoing_links(OutgoingLinksRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/archive-smoke.md".to_string(),
+        limit: 10,
+    })
+    .expect("outgoing should load");
+    assert_eq!(outgoing[0].target_path, "/Sources/raw/smoke/smoke.md");
+
+    let archive = begin_database_archive("default".to_string()).expect("archive should begin");
+    assert!(archive.size_bytes > 0);
+    let mut offset = 0_u64;
+    let mut bytes = Vec::new();
+    while offset < archive.size_bytes {
+        let chunk = read_database_archive_chunk("default".to_string(), offset, 17)
+            .expect("archive chunk should read")
+            .bytes;
+        assert!(!chunk.is_empty());
+        offset += chunk.len() as u64;
+        bytes.extend(chunk);
+    }
+    assert_eq!(bytes.len() as u64, archive.size_bytes);
+
+    finalize_database_archive("default".to_string(), vec![1, 2, 3])
+        .expect("archive should finalize");
+    assert!(
+        read_node("default".to_string(), "/Wiki/archive-smoke.md".to_string())
+            .expect_err("archived DB should reject normal reads")
+            .contains("database not found")
+    );
+
+    let info = list_databases()
+        .expect("database infos should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(info.status, DatabaseStatus::Archived);
+    assert_eq!(info.snapshot_hash, Some(vec![1, 2, 3]));
+    assert!(info.mount_id.is_none());
 }

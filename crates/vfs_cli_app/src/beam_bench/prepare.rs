@@ -18,6 +18,7 @@ use super::navigation::{namespace_index_path, sync_beam_indexes};
 pub struct BeamPrepareArgs {
     pub dataset_path: PathBuf,
     pub split: String,
+    pub database_id: String,
     pub limit: usize,
     pub namespace: String,
 }
@@ -37,11 +38,19 @@ pub async fn run_beam_prepare(
 ) -> Result<PrepareSummary> {
     let dataset = load_dataset(&args.dataset_path, &args.split, args.limit)?;
     let client = CanisterVfsClient::new(&connection.replica_host, &connection.canister_id).await?;
-    prepare_dataset(&client, &args.namespace, &args.split, &dataset).await
+    prepare_dataset(
+        &client,
+        &args.database_id,
+        &args.namespace,
+        &args.split,
+        &dataset,
+    )
+    .await
 }
 
 async fn prepare_dataset(
     client: &impl VfsApi,
+    database_id: &str,
     namespace: &str,
     split: &str,
     dataset: &[BeamConversation],
@@ -51,16 +60,17 @@ async fn prepare_dataset(
     let mut imported = Vec::<ImportedConversation>::with_capacity(dataset.len());
 
     for conversation in dataset {
-        let imported_conversation = import_conversation(client, namespace, conversation).await?;
+        let imported_conversation =
+            import_conversation(client, database_id, namespace, conversation).await?;
         prepared_conversations += 1;
         written_notes += imported_conversation.notes.len();
         imported.push(imported_conversation);
     }
     if !dataset.is_empty() {
-        sync_beam_indexes(client, namespace).await?;
+        sync_beam_indexes(client, database_id, namespace).await?;
     }
     let manifest = build_prepare_manifest(namespace, split, dataset, &imported);
-    write_prepare_manifest(client, &manifest).await?;
+    write_prepare_manifest(client, database_id, &manifest).await?;
 
     Ok(PrepareSummary {
         namespace: namespace.to_string(),
@@ -73,13 +83,18 @@ async fn prepare_dataset(
 
 async fn write_prepare_manifest(
     client: &impl VfsApi,
+    database_id: &str,
     manifest: &super::manifest::PrepareManifest,
 ) -> Result<()> {
     let path = manifest_path_for_namespace(&manifest.namespace);
     let content = serde_json::to_string_pretty(manifest)?;
-    let expected_etag = client.read_node(&path).await?.map(|node| node.etag);
+    let expected_etag = client
+        .read_node(database_id, &path)
+        .await?
+        .map(|node| node.etag);
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path,
             kind: NodeKind::File,
             content,
@@ -116,10 +131,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             Ok(self
                 .nodes
                 .lock()
@@ -238,9 +253,15 @@ mod tests {
     #[tokio::test]
     async fn prepare_dataset_writes_notes_and_indexes() {
         let client = MockClient::default();
-        let summary = prepare_dataset(&client, "Run A", "100K", &[sample_conversation()])
-            .await
-            .expect("prepare should succeed");
+        let summary = prepare_dataset(
+            &client,
+            "default",
+            "Run A",
+            "100K",
+            &[sample_conversation()],
+        )
+        .await
+        .expect("prepare should succeed");
 
         assert_eq!(summary.prepared_conversations, 1);
         assert!(summary.written_notes >= 6);

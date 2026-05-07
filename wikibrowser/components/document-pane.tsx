@@ -20,11 +20,15 @@ const MarkdownPreview = dynamic(() => import("@/components/markdown-preview").th
 });
 
 export function DocumentHeader({
+  canisterId,
+  databaseId,
   path,
   view,
   onViewChange,
   isDirectory
 }: {
+  canisterId: string;
+  databaseId: string;
   path: string;
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
@@ -45,6 +49,7 @@ export function DocumentHeader({
 }
 
 export function DocumentPane({
+  databaseId,
   node,
   childrenState,
   view,
@@ -54,18 +59,19 @@ export function DocumentPane({
   childrenState: PathLoadState<ChildNode[]>;
   view: ViewMode;
   canisterId: string;
+  databaseId: string;
 }) {
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
-  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} /></PaneBody>;
+  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
   if (childrenState.data) {
     return (
       <PaneBody>
-        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} />
+        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} />
       </PaneBody>
     );
   }
   if (isVfsNotFound(node.error, childrenState.error)) {
-    return <PaneBody><NotFoundState path={node.path} canisterId={canisterId} /></PaneBody>;
+    return <PaneBody><NotFoundState path={node.path} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
   }
   return (
     <PaneBody className="p-6">
@@ -83,10 +89,12 @@ function PaneBody({ children, className = "" }: { children: ReactNode; className
 
 function NotFoundState({
   path,
-  canisterId
+  canisterId,
+  databaseId
 }: {
   path: string;
   canisterId: string;
+  databaseId: string;
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -97,17 +105,17 @@ function NotFoundState({
         <div className="mt-5 flex flex-wrap gap-2 text-sm">
           <Link
             className="rounded-lg bg-accent px-3 py-2 text-white no-underline"
-            href={hrefForPath(canisterId, "/Wiki")}
+            href={hrefForPath(canisterId, databaseId, "/Wiki")}
           >
             Open /Wiki
           </Link>
           <Link
             className="rounded-lg border border-line bg-white px-3 py-2 no-underline"
-            href={hrefForPath(canisterId, "/Sources")}
+            href={hrefForPath(canisterId, databaseId, "/Sources")}
           >
             Open /Sources
           </Link>
-          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForSearch(canisterId, path.split("/").filter(Boolean).at(-1) ?? path, "path")}>
+          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForSearch(canisterId, databaseId, path.split("/").filter(Boolean).at(-1) ?? path, "path")}>
             Search this path
           </Link>
         </div>
@@ -116,7 +124,7 @@ function NotFoundState({
   );
 }
 
-function NodeDocument({ node, view, canisterId }: { node: WikiNode; view: ViewMode; canisterId: string }) {
+function NodeDocument({ node, view, canisterId, databaseId }: { node: WikiNode; view: ViewMode; canisterId: string; databaseId: string }) {
   const contentBytes = new TextEncoder().encode(node.content).length;
   const isLargeContent = contentBytes > LARGE_CONTENT_BYTES;
   return (
@@ -124,10 +132,10 @@ function NodeDocument({ node, view, canisterId }: { node: WikiNode; view: ViewMo
       {view === "raw" ? (
         <RawContent key={`${node.path}-${node.etag}`} content={node.content} isLargeContent={isLargeContent} contentBytes={contentBytes} />
       ) : isLargeContent ? (
-        <LargeMarkdownPreview key={`${node.path}-${node.etag}`} content={node.content} contentBytes={contentBytes} canisterId={canisterId} nodePath={node.path} />
+        <LargeMarkdownPreview key={`${node.path}:${node.etag}`} content={node.content} contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={node.path} />
       ) : (
         <div className="markdown-body mx-auto max-w-3xl">
-          <MarkdownPreview canisterId={canisterId} nodePath={node.path} content={node.content} />
+          <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={node.path} content={node.content} />
         </div>
       )}
     </article>
@@ -138,17 +146,19 @@ function LargeMarkdownPreview({
   content,
   contentBytes,
   canisterId,
+  databaseId,
   nodePath
 }: {
   content: string;
   contentBytes: number;
   canisterId: string;
+  databaseId: string;
   nodePath: string;
 }) {
   const sections = splitMarkdownPreviewSections(content);
   const [visibleSections, setVisibleSections] = useState(1);
   if (sections.length < 2) {
-    return <LargeContentState contentBytes={contentBytes} canisterId={canisterId} nodePath={nodePath} reason="No section headings found." />;
+    return <LargeContentState contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} reason="No section headings found." />;
   }
   const cappedVisibleSections = Math.min(visibleSections, sections.length);
   const showingFullPreview = cappedVisibleSections >= sections.length;
@@ -162,7 +172,7 @@ function LargeMarkdownPreview({
         {showingFullPreview ? <p className="mt-2 font-medium">Showing full preview.</p> : null}
       </div>
       <div className="markdown-body mx-auto max-w-3xl">
-        <MarkdownPreview canisterId={canisterId} nodePath={nodePath} content={previewContent} />
+        <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} content={previewContent} />
       </div>
       {!showingFullPreview ? (
         <button
@@ -219,11 +229,13 @@ function RawContent({
 function LargeContentState({
   contentBytes,
   canisterId,
+  databaseId,
   nodePath,
   reason
 }: {
   contentBytes: number;
   canisterId: string;
+  databaseId: string;
   nodePath: string;
   reason?: string;
 }) {
@@ -237,7 +249,7 @@ function LargeContentState({
       {reason ? <p className="mt-3 text-muted">{reason}</p> : null}
       <Link
         className="mt-5 inline-flex rounded-lg bg-accent px-3 py-2 text-white no-underline"
-        href={hrefForPath(canisterId, nodePath, "raw")}
+        href={hrefForPath(canisterId, databaseId, nodePath, "raw")}
       >
         Open raw view
       </Link>
@@ -247,10 +259,12 @@ function LargeContentState({
 
 function DirectoryDocument({
   childrenState,
-  canisterId
+  canisterId,
+  databaseId
 }: {
   childrenState: LoadState<ChildNode[]>;
   canisterId: string;
+  databaseId: string;
 }) {
   return (
     <div className="h-full overflow-auto p-6">
@@ -261,7 +275,7 @@ function DirectoryDocument({
           {childrenState.data?.map((child) => (
             <Link
               key={child.path}
-              href={hrefForPath(canisterId, child.path)}
+              href={hrefForPath(canisterId, databaseId, child.path)}
               className="flex items-center justify-between rounded-xl border border-line bg-white px-4 py-3 text-sm no-underline hover:border-accent"
             >
               <span className="flex min-w-0 items-center gap-2">

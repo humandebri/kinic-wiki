@@ -12,7 +12,8 @@ use vfs_types::{
     NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
     SearchPreviewMode, WriteNodeRequest,
 };
-use wiki_domain::WIKI_ROOT_PATH;
+
+use crate::cli::DEFAULT_VFS_ROOT_PATH;
 
 pub struct ToolResult {
     pub text: String,
@@ -87,13 +88,15 @@ async fn dispatch_tool_call_impl(
     input: Value,
 ) -> Result<ToolResult> {
     let result = match name {
-        "read" => tool_ok(
-            json!({ "node": client.read_node(&serde_json::from_value::<ReadArgs>(input)?.path).await? }),
-        ),
+        "read" => {
+            let args: ReadArgs = serde_json::from_value(input)?;
+            let database_id = database_id(args.database_id)?;
+            tool_ok(json!({ "node": client.read_node(&database_id, &args.path).await? }))
+        }
         "read_context" => {
             let args: ReadContextArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "context": client.read_node_context(NodeContextRequest { path: args.path, link_limit: args.link_limit.unwrap_or(20) }).await? }),
+                json!({ "context": client.read_node_context(NodeContextRequest { database_id: database_id(args.database_id)?, path: args.path, link_limit: args.link_limit.unwrap_or(20) }).await? }),
             )
         }
         "write" => {
@@ -101,6 +104,7 @@ async fn dispatch_tool_call_impl(
             tool_ok(json!(
                 client
                     .write_node(WriteNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         path: args.path,
                         kind: args.kind.unwrap_or(NodeKind::File),
                         content: args.content,
@@ -115,6 +119,7 @@ async fn dispatch_tool_call_impl(
             tool_ok(json!(
                 client
                     .append_node(AppendNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         path: args.path,
                         content: args.content,
                         expected_etag: args.expected_etag,
@@ -130,6 +135,7 @@ async fn dispatch_tool_call_impl(
             tool_ok(json!(
                 client
                     .edit_node(EditNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         path: args.path,
                         old_text: args.old_text,
                         new_text: args.new_text,
@@ -142,21 +148,26 @@ async fn dispatch_tool_call_impl(
         "ls" => {
             let args: ListArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "entries": client.list_nodes(ListNodesRequest { prefix: args.prefix.unwrap_or_else(|| WIKI_ROOT_PATH.to_string()), recursive: args.recursive.unwrap_or(false) }).await? }),
+                json!({ "entries": client.list_nodes(ListNodesRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string()), recursive: args.recursive.unwrap_or(false) }).await? }),
             )
         }
-        "mkdir" => tool_ok(json!(
-            client
-                .mkdir_node(MkdirNodeRequest {
-                    path: serde_json::from_value::<MkdirArgs>(input)?.path
-                })
-                .await?
-        )),
+        "mkdir" => {
+            let args: MkdirArgs = serde_json::from_value(input)?;
+            tool_ok(json!(
+                client
+                    .mkdir_node(MkdirNodeRequest {
+                        database_id: database_id(args.database_id)?,
+                        path: args.path
+                    })
+                    .await?
+            ))
+        }
         "mv" => {
             let args: MoveArgs = serde_json::from_value(input)?;
             tool_ok(json!(
                 client
                     .move_node(MoveNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         from_path: args.from_path,
                         to_path: args.to_path,
                         expected_etag: args.expected_etag,
@@ -168,37 +179,37 @@ async fn dispatch_tool_call_impl(
         "glob" => {
             let args: GlobArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.glob_nodes(GlobNodesRequest { pattern: args.pattern, path: args.path, node_type: args.node_type }).await? }),
+                json!({ "hits": client.glob_nodes(GlobNodesRequest { database_id: database_id(args.database_id)?, pattern: args.pattern, path: Some(args.path.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), node_type: args.node_type }).await? }),
             )
         }
         "recent" => {
             let args: RecentArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.recent_nodes(RecentNodesRequest { limit: args.limit.unwrap_or(10), path: args.path }).await? }),
+                json!({ "hits": client.recent_nodes(RecentNodesRequest { database_id: database_id(args.database_id)?, limit: args.limit.unwrap_or(10), path: Some(args.path.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())) }).await? }),
             )
         }
         "graph_neighborhood" => {
             let args: GraphNeighborhoodArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "links": client.graph_neighborhood(GraphNeighborhoodRequest { center_path: args.center_path, depth: args.depth.unwrap_or(1), limit: args.limit.unwrap_or(100) }).await? }),
+                json!({ "links": client.graph_neighborhood(GraphNeighborhoodRequest { database_id: database_id(args.database_id)?, center_path: args.center_path, depth: args.depth.unwrap_or(1), limit: args.limit.unwrap_or(100) }).await? }),
             )
         }
         "graph_links" => {
             let args: GraphLinksArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "links": client.graph_links(GraphLinksRequest { prefix: args.prefix.unwrap_or_else(|| WIKI_ROOT_PATH.to_string()), limit: args.limit.unwrap_or(100) }).await? }),
+                json!({ "links": client.graph_links(GraphLinksRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string()), limit: args.limit.unwrap_or(100) }).await? }),
             )
         }
         "incoming_links" => {
             let args: LinkArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "links": client.incoming_links(IncomingLinksRequest { path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
+                json!({ "links": client.incoming_links(IncomingLinksRequest { database_id: database_id(args.database_id)?, path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
             )
         }
         "outgoing_links" => {
             let args: LinkArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "links": client.outgoing_links(OutgoingLinksRequest { path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
+                json!({ "links": client.outgoing_links(OutgoingLinksRequest { database_id: database_id(args.database_id)?, path: args.path, limit: args.limit.unwrap_or(20) }).await? }),
             )
         }
         "multi_edit" => {
@@ -206,6 +217,7 @@ async fn dispatch_tool_call_impl(
             tool_ok(json!(
                 client
                     .multi_edit_node(MultiEditNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         path: args.path,
                         edits: args.edits,
                         expected_etag: args.expected_etag
@@ -218,6 +230,7 @@ async fn dispatch_tool_call_impl(
             tool_ok(json!(
                 client
                     .delete_node(DeleteNodeRequest {
+                        database_id: database_id(args.database_id)?,
                         path: args.path,
                         expected_etag: args.expected_etag
                     })
@@ -227,13 +240,13 @@ async fn dispatch_tool_call_impl(
         "search" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_nodes(SearchNodesRequest { query_text: args.query_text, prefix: args.prefix, top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
+                json!({ "hits": client.search_nodes(SearchNodesRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         "search_paths" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { query_text: args.query_text, prefix: args.prefix, top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
+                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),
@@ -341,65 +354,74 @@ fn tool_specs() -> Vec<ToolSpec> {
 }
 
 fn read_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"}},"required":["database_id","path"],"additionalProperties":false})
 }
 fn read_context_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"link_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"link_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["database_id","path"],"additionalProperties":false})
 }
 fn write_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string","enum":["file","source"]},"metadata_json":{"type":"string"},"expected_etag":{"type":"string"}},"required":["path","content"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"kind":{"type":"string","enum":["file","source"]},"metadata_json":{"type":"string"},"expected_etag":{"type":"string"}},"required":["database_id","path","content"],"additionalProperties":false})
 }
 fn append_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"expected_etag":{"type":"string"},"separator":{"type":"string"},"metadata_json":{"type":"string"},"kind":{"type":"string","enum":["file","source"]}},"required":["path","content"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"expected_etag":{"type":"string"},"separator":{"type":"string"},"metadata_json":{"type":"string"},"kind":{"type":"string","enum":["file","source"]}},"required":["database_id","path","content"],"additionalProperties":false})
 }
 fn edit_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_etag":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_text","new_text"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_etag":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["database_id","path","old_text","new_text"],"additionalProperties":false})
 }
 fn list_schema() -> Value {
-    json!({"type":"object","properties":{"prefix":{"type":"string"},"recursive":{"type":"boolean"}},"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"prefix":{"type":"string"},"recursive":{"type":"boolean"}},"required":["database_id"],"additionalProperties":false})
 }
 fn mkdir_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"}},"required":["database_id","path"],"additionalProperties":false})
 }
 fn move_schema() -> Value {
-    json!({"type":"object","properties":{"from_path":{"type":"string"},"to_path":{"type":"string"},"expected_etag":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["from_path","to_path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"from_path":{"type":"string"},"to_path":{"type":"string"},"expected_etag":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["database_id","from_path","to_path"],"additionalProperties":false})
 }
 fn glob_schema() -> Value {
-    json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"node_type":{"type":"string","enum":["file","directory","any"]}},"required":["pattern"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"pattern":{"type":"string"},"path":{"type":"string"},"node_type":{"type":"string","enum":["file","directory","any"]}},"required":["database_id","pattern"],"additionalProperties":false})
 }
 fn recent_schema() -> Value {
-    json!({"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100},"path":{"type":"string"}},"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100},"path":{"type":"string"}},"required":["database_id"],"additionalProperties":false})
 }
 fn graph_neighborhood_schema() -> Value {
-    json!({"type":"object","properties":{"center_path":{"type":"string"},"depth":{"type":"integer","minimum":1,"maximum":2},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["center_path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"center_path":{"type":"string"},"depth":{"type":"integer","minimum":1,"maximum":2},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["database_id","center_path"],"additionalProperties":false})
 }
 fn graph_links_schema() -> Value {
-    json!({"type":"object","properties":{"prefix":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"prefix":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["database_id"],"additionalProperties":false})
 }
 fn link_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["database_id","path"],"additionalProperties":false})
 }
 fn multi_edit_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"expected_etag":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"],"additionalProperties":false}}},"required":["path","edits"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"expected_etag":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"],"additionalProperties":false}}},"required":["database_id","path","edits"],"additionalProperties":false})
 }
 fn delete_schema() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string"},"expected_etag":{"type":"string"}},"required":["path"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"path":{"type":"string"},"expected_etag":{"type":"string"}},"required":["database_id","path"],"additionalProperties":false})
 }
 fn search_schema() -> Value {
-    json!({"type":"object","properties":{"query_text":{"type":"string"},"prefix":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":100},"preview_mode":{"type":"string","enum":["none","light","content_start"]}},"required":["query_text"],"additionalProperties":false})
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"query_text":{"type":"string"},"prefix":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":100},"preview_mode":{"type":"string","enum":["none","light","content_start"]}},"required":["database_id","query_text"],"additionalProperties":false})
+}
+
+fn database_id(value: Option<String>) -> Result<String> {
+    value
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("database_id is required"))
 }
 
 #[derive(Deserialize)]
 struct ReadArgs {
+    database_id: Option<String>,
     path: String,
 }
 #[derive(Deserialize)]
 struct ReadContextArgs {
+    database_id: Option<String>,
     path: String,
     link_limit: Option<u32>,
 }
 #[derive(Deserialize)]
 struct WriteArgs {
+    database_id: Option<String>,
     path: String,
     content: String,
     expected_etag: Option<String>,
@@ -408,6 +430,7 @@ struct WriteArgs {
 }
 #[derive(Deserialize)]
 struct AppendArgs {
+    database_id: Option<String>,
     path: String,
     content: String,
     expected_etag: Option<String>,
@@ -417,6 +440,7 @@ struct AppendArgs {
 }
 #[derive(Deserialize)]
 struct EditArgs {
+    database_id: Option<String>,
     path: String,
     old_text: String,
     new_text: String,
@@ -425,15 +449,18 @@ struct EditArgs {
 }
 #[derive(Deserialize)]
 struct ListArgs {
+    database_id: Option<String>,
     prefix: Option<String>,
     recursive: Option<bool>,
 }
 #[derive(Deserialize)]
 struct MkdirArgs {
+    database_id: Option<String>,
     path: String,
 }
 #[derive(Deserialize)]
 struct MoveArgs {
+    database_id: Option<String>,
     from_path: String,
     to_path: String,
     expected_etag: Option<String>,
@@ -441,44 +468,52 @@ struct MoveArgs {
 }
 #[derive(Deserialize)]
 struct GlobArgs {
+    database_id: Option<String>,
     pattern: String,
     path: Option<String>,
     node_type: Option<GlobNodeType>,
 }
 #[derive(Deserialize)]
 struct RecentArgs {
+    database_id: Option<String>,
     limit: Option<u32>,
     path: Option<String>,
 }
 #[derive(Deserialize)]
 struct GraphNeighborhoodArgs {
+    database_id: Option<String>,
     center_path: String,
     depth: Option<u32>,
     limit: Option<u32>,
 }
 #[derive(Deserialize)]
 struct GraphLinksArgs {
+    database_id: Option<String>,
     prefix: Option<String>,
     limit: Option<u32>,
 }
 #[derive(Deserialize)]
 struct LinkArgs {
+    database_id: Option<String>,
     path: String,
     limit: Option<u32>,
 }
 #[derive(Deserialize)]
 struct MultiEditArgs {
+    database_id: Option<String>,
     path: String,
     edits: Vec<MultiEdit>,
     expected_etag: Option<String>,
 }
 #[derive(Deserialize)]
 struct DeleteArgs {
+    database_id: Option<String>,
     path: String,
     expected_etag: Option<String>,
 }
 #[derive(Deserialize)]
 struct SearchArgs {
+    database_id: Option<String>,
     query_text: String,
     prefix: Option<String>,
     top_k: Option<u32>,

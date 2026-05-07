@@ -3,14 +3,15 @@ import { readFileSync } from "node:fs";
 
 const baseUrl = readBaseUrl();
 const canisterId = readCanisterId();
+const databaseId = readDatabaseId();
 const smokeWaitMs = 30_000;
 const pollMs = 500;
 
-run("open", [`${baseUrl}/w/${encodeURIComponent(canisterId)}/Wiki/does-not-exist.md`]);
+run("open", [`${baseUrl}/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/Wiki/does-not-exist.md`]);
 assertSnapshotIncludes("No wiki node at this path");
 assertSnapshotIncludes("Search this path");
 
-console.log(`Wiki browser error smoke OK: ${canisterId}`);
+console.log(`Wiki browser error smoke OK: ${canisterId} ${databaseId}`);
 
 function readBaseUrl() {
   const argIndex = process.argv.indexOf("--base-url");
@@ -23,6 +24,15 @@ function readCanisterId() {
   const value = argIndex >= 0 ? process.argv[argIndex + 1] : process.env.WIKI_BROWSER_CANISTER_ID;
   if (!value) {
     throw new Error("missing --canister-id or WIKI_BROWSER_CANISTER_ID");
+  }
+  return value;
+}
+
+function readDatabaseId() {
+  const argIndex = process.argv.indexOf("--database-id");
+  const value = argIndex >= 0 ? process.argv[argIndex + 1] : process.env.WIKI_BROWSER_DATABASE_ID;
+  if (!value) {
+    throw new Error("missing --database-id or WIKI_BROWSER_DATABASE_ID");
   }
   return value;
 }

@@ -47,6 +47,7 @@ pub use report::{BenchmarkSummary, FailureReason, QuestionResult, summarize, wri
 pub struct BeamBenchArgs {
     pub dataset_path: PathBuf,
     pub split: String,
+    pub database_id: String,
     pub model: String,
     pub output_dir: PathBuf,
     pub eval_mode: BeamBenchEvalMode,
@@ -83,7 +84,14 @@ pub async fn run_beam_bench(connection: ResolvedConnection, args: BeamBenchArgs)
     init_streaming_artifacts(&config.output_dir, config.resume)?;
     let validation_client =
         CanisterVfsClient::new(&connection.replica_host, &connection.canister_id).await?;
-    validate_prepared_namespace(&validation_client, &namespace, &config.split, &dataset).await?;
+    validate_prepared_namespace(
+        &validation_client,
+        &config.database_id,
+        &namespace,
+        &config.split,
+        &dataset,
+    )
+    .await?;
     let gate = Arc::new(Semaphore::new(config.parallelism.max(1)));
     let mut tasks = JoinSet::new();
 
@@ -174,12 +182,15 @@ async fn run_conversation_benchmark(
             BeamBenchEvalMode::RetrievalOnly => {
                 deterministic::run_question(
                     &client,
-                    &imported.conversation_id,
-                    &imported,
-                    question,
-                    config.top_k,
-                    true,
-                    false,
+                    deterministic::RunQuestionRequest {
+                        database_id: &config.database_id,
+                        conversation_id: &imported.conversation_id,
+                        imported: &imported,
+                        question,
+                        top_k: config.top_k,
+                        include_in_primary_metrics: true,
+                        answer_enabled: false,
+                    },
                 )
                 .await?
             }
@@ -231,6 +242,7 @@ fn completed_question_keys(results: &[QuestionResult]) -> Result<HashSet<String>
 
 async fn validate_prepared_namespace(
     client: &impl VfsApi,
+    database_id: &str,
     namespace: &str,
     split: &str,
     dataset: &[BeamConversation],
@@ -239,18 +251,26 @@ async fn validate_prepared_namespace(
         return Ok(());
     }
     let namespace_index = namespace_index_path(namespace);
-    if client.read_node(&namespace_index).await?.is_none() {
+    if client
+        .read_node(database_id, &namespace_index)
+        .await?
+        .is_none()
+    {
         return Err(anyhow!("missing prepare: {}", namespace_index));
     }
-    let manifest = read_prepare_manifest(client, namespace).await?;
+    let manifest = read_prepare_manifest(client, database_id, namespace).await?;
     validate_manifest_identity(&manifest, namespace, split, dataset)?;
-    validate_prepared_notes(client, namespace, dataset, &manifest).await
+    validate_prepared_notes(client, database_id, namespace, dataset, &manifest).await
 }
 
-async fn read_prepare_manifest(client: &impl VfsApi, namespace: &str) -> Result<PrepareManifest> {
+async fn read_prepare_manifest(
+    client: &impl VfsApi,
+    database_id: &str,
+    namespace: &str,
+) -> Result<PrepareManifest> {
     let path = manifest_path_for_namespace(namespace);
     let content = client
-        .read_node(&path)
+        .read_node(database_id, &path)
         .await?
         .ok_or_else(|| anyhow!("missing prepare: {}", path))?
         .content;
@@ -259,6 +279,7 @@ async fn read_prepare_manifest(client: &impl VfsApi, namespace: &str) -> Result<
 
 async fn validate_prepared_notes(
     client: &impl VfsApi,
+    database_id: &str,
     namespace: &str,
     dataset: &[BeamConversation],
     manifest: &PrepareManifest,
@@ -283,11 +304,15 @@ async fn validate_prepared_notes(
             ));
         }
         let conversation_index = conversation_index_path(namespace, &conversation.conversation_id);
-        if client.read_node(&conversation_index).await?.is_none() {
+        if client
+            .read_node(database_id, &conversation_index)
+            .await?
+            .is_none()
+        {
             return Err(anyhow!("missing prepare: {}", conversation_index));
         }
         for note in &expected.notes {
-            if client.read_node(&note.path).await?.is_none() {
+            if client.read_node(database_id, &note.path).await?.is_none() {
                 return Err(anyhow!("missing prepare: {}", note.path));
             }
         }
@@ -433,10 +458,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             Ok(self.nodes.get(path).map(|content| Node {
                 path: path.to_string(),
                 kind: vfs_types::NodeKind::File,
@@ -525,6 +550,7 @@ mod tests {
     #[test]
     fn defaults_factoid_class_when_unspecified() {
         let args = with_defaults(BeamBenchArgs {
+            database_id: "default".to_string(),
             dataset_path: PathBuf::from("beam.json"),
             split: "100K".to_string(),
             model: String::new(),
@@ -552,6 +578,7 @@ mod tests {
     #[test]
     fn explicit_question_type_keeps_question_class_open() {
         let args = with_defaults(BeamBenchArgs {
+            database_id: "default".to_string(),
             dataset_path: PathBuf::from("beam.json"),
             split: "100K".to_string(),
             model: String::new(),
@@ -655,9 +682,15 @@ mod tests {
     #[tokio::test]
     async fn prepared_namespace_validation_fails_when_namespace_index_missing() {
         let client = MockClient::default();
-        let error = validate_prepared_namespace(&client, "run-a", "100K", &[sample_conversation()])
-            .await
-            .expect_err("missing namespace should fail");
+        let error = validate_prepared_namespace(
+            &client,
+            "default",
+            "run-a",
+            "100K",
+            &[sample_conversation()],
+        )
+        .await
+        .expect_err("missing namespace should fail");
 
         assert!(error.to_string().contains("missing prepare"));
     }
@@ -686,7 +719,7 @@ mod tests {
         }
         let client = MockClient { nodes };
 
-        validate_prepared_namespace(&client, "run-a", "100K", &[conversation])
+        validate_prepared_namespace(&client, "default", "run-a", "100K", &[conversation])
             .await
             .expect("prepared namespace should validate");
     }
@@ -718,9 +751,10 @@ mod tests {
         }
         let client = MockClient { nodes };
 
-        let error = validate_prepared_namespace(&client, "run-a", "100K", &[conversation])
-            .await
-            .expect_err("missing note should fail");
+        let error =
+            validate_prepared_namespace(&client, "default", "run-a", "100K", &[conversation])
+                .await
+                .expect_err("missing note should fail");
         assert!(error.to_string().contains("missing prepare"));
     }
 
@@ -753,7 +787,7 @@ mod tests {
         }
         let client = MockClient { nodes };
 
-        validate_prepared_namespace(&client, "run-a", "100K", &[conversation])
+        validate_prepared_namespace(&client, "default", "run-a", "100K", &[conversation])
             .await
             .expect("manual edits should still allow eval");
     }
@@ -782,9 +816,10 @@ mod tests {
         }
         let client = MockClient { nodes };
 
-        let error = validate_prepared_namespace(&client, "run-a", "10K", &[conversation])
-            .await
-            .expect_err("split mismatch should fail");
+        let error =
+            validate_prepared_namespace(&client, "default", "run-a", "10K", &[conversation])
+                .await
+                .expect_err("split mismatch should fail");
         assert!(error.to_string().contains("dataset mismatch"));
     }
 
@@ -821,7 +856,7 @@ mod tests {
         }
         let client = MockClient { nodes };
 
-        let error = validate_prepared_namespace(&client, "run-a", "100K", &[first])
+        let error = validate_prepared_namespace(&client, "default", "run-a", "100K", &[first])
             .await
             .expect_err("dataset mismatch should fail");
         assert!(error.to_string().contains("dataset mismatch"));

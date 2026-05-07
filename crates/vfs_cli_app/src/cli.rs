@@ -1,13 +1,13 @@
 // Where: crates/vfs_cli_app/src/cli.rs
 // What: clap definitions for the FS-first CLI surface.
 // Why: Agents need direct node operations and path-based mirror sync commands.
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
-pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg};
-use wiki_domain::{
-    DEFAULT_MIRROR_ROOT, PUBLIC_SKILL_REGISTRY_ROOT, SKILL_REGISTRY_ROOT, WIKI_ROOT_PATH,
+pub use vfs_cli::cli::{
+    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
 };
+use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -22,6 +22,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -270,224 +274,67 @@ pub enum Command {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SkillCommand {
-    Policy {
-        #[command(subcommand)]
-        command: SkillPolicyCommand,
-    },
-    Index {
-        #[command(subcommand)]
-        command: SkillIndexCommand,
-    },
-    Local {
-        #[command(subcommand)]
-        command: SkillLocalCommand,
-    },
-    Public {
-        #[command(subcommand)]
-        command: SkillPublicCommand,
-    },
-    Versions {
-        #[command(subcommand)]
-        command: SkillVersionsCommand,
-    },
-    Import {
-        #[arg(
-            long,
-            conflicts_with = "github",
-            help = "Local skill directory containing SKILL.md"
-        )]
-        source: Option<String>,
-        #[arg(
-            long,
-            conflicts_with = "source",
-            help = "GitHub source in owner/repo or owner/repo:path form"
-        )]
-        github: Option<String>,
-        #[arg(long, help = "Repository-relative skill path for --github")]
-        path: Option<String>,
-        #[arg(
-            long = "ref",
-            default_value = "HEAD",
-            help = "GitHub commit, tag, or branch ref"
-        )]
-        ref_name: String,
+    Upsert {
+        #[arg(long)]
+        source_dir: PathBuf,
         #[arg(long)]
         id: String,
+        #[arg(long)]
+        public: bool,
         #[arg(long)]
         json: bool,
     },
-    Update {
-        id: String,
-        #[arg(
-            long = "ref",
-            default_value = "HEAD",
-            help = "GitHub commit, tag, or branch ref"
-        )]
-        ref_name: String,
+    Find {
+        query: String,
+        #[arg(long)]
+        include_deprecated: bool,
+        #[arg(long, default_value_t = 10)]
+        top_k: u32,
         #[arg(long)]
         json: bool,
     },
     Inspect {
         id: String,
         #[arg(long)]
-        json: bool,
-    },
-    List {
-        #[arg(long, default_value = SKILL_REGISTRY_ROOT)]
-        prefix: String,
+        public: bool,
         #[arg(long)]
         json: bool,
     },
-    Audit {
+    RecordRun {
+        id: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long, value_enum)]
+        outcome: SkillRunOutcomeArg,
+        #[arg(long)]
+        notes_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    SetStatus {
         id: String,
         #[arg(long, value_enum)]
-        fail_on: Option<AuditFailOnArg>,
+        status: SkillStatusArg,
         #[arg(long)]
-        json: bool,
-    },
-    Install {
-        id: String,
-        #[arg(long, help = "Exact output directory for the installed skill files")]
-        output: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Skills root; writes to <skills-dir>/<publisher>/<name>. Use either --output or --skills-dir."
-        )]
-        skills_dir: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Write install lock metadata to the installed skill directory"
-        )]
-        lockfile: bool,
+        public: bool,
         #[arg(long)]
         json: bool,
     },
 }
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum SkillIndexCommand {
-    List {
-        #[arg(long, default_value = "./skills.index.toml")]
-        index: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Inspect {
-        id: String,
-        #[arg(long, default_value = "./skills.index.toml")]
-        index: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Install {
-        id: String,
-        #[arg(long, default_value = "./skills.index.toml")]
-        index: PathBuf,
-        #[arg(long, help = "Exact output directory for the installed skill files")]
-        output: PathBuf,
-        #[arg(
-            long,
-            help = "Write install lock metadata to the installed skill directory"
-        )]
-        lockfile: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    InstallEnabled {
-        #[arg(long, default_value = "./skills.index.toml")]
-        index: PathBuf,
-        #[arg(long, help = "Skills root; writes to <skills-dir>/<publisher>/<name>.")]
-        skills_dir: PathBuf,
-        #[arg(
-            long,
-            help = "Write install lock metadata to each installed skill directory"
-        )]
-        lockfile: bool,
-        #[arg(long)]
-        json: bool,
-    },
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillStatusArg {
+    Draft,
+    Reviewed,
+    Promoted,
+    Deprecated,
 }
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum SkillLocalCommand {
-    Audit {
-        dir: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Diff {
-        dir: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    Install {
-        dir: PathBuf,
-        #[arg(long, help = "Skills root; writes to <skills-dir>/<publisher>/<name>.")]
-        skills_dir: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum SkillPublicCommand {
-    Promote {
-        id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    List {
-        #[arg(long, default_value = PUBLIC_SKILL_REGISTRY_ROOT)]
-        prefix: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Inspect {
-        id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Install {
-        id: String,
-        #[arg(long, help = "Exact output directory for the installed skill files")]
-        output: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Skills root; writes to <skills-dir>/<publisher>/<name>. Use either --output or --skills-dir."
-        )]
-        skills_dir: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Write install lock metadata to the installed skill directory"
-        )]
-        lockfile: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    Revoke {
-        id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Versions {
-        #[command(subcommand)]
-        command: SkillVersionsCommand,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum SkillVersionsCommand {
-    List {
-        id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Inspect {
-        id: String,
-        version: String,
-        #[arg(long)]
-        json: bool,
-    },
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillRunOutcomeArg {
+    Success,
+    Partial,
+    Fail,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -512,52 +359,12 @@ pub enum GitHubIngestCommand {
     },
 }
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum SkillPolicyCommand {
-    Enable {
-        #[arg(long)]
-        json: bool,
-    },
-    Whoami {
-        #[arg(long)]
-        json: bool,
-    },
-    Policy {
-        #[arg(long)]
-        json: bool,
-    },
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    Explain {
-        principal: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Grant {
-        principal: String,
-        role: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Revoke {
-        principal: String,
-        role: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditFailOnArg {
-    Error,
-    Warning,
-}
-
 impl Command {
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
+            Self::Database { command } => Some(VfsCommand::Database {
+                command: command.clone(),
+            }),
             Self::ReadNode { path, json } => Some(VfsCommand::ReadNode {
                 path: path.clone(),
                 json: *json,
@@ -750,187 +557,8 @@ impl Command {
 }
 
 #[cfg(test)]
-mod github_cli_tests {
-    use super::{Cli, Command, SkillCommand, SkillLocalCommand, SkillVersionsCommand};
-    use clap::Parser;
-
-    #[test]
-    fn skill_import_accepts_github_source() {
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "import",
-            "--github",
-            "owner/repo",
-            "--path",
-            "skills/foo",
-            "--ref",
-            "main",
-            "--id",
-            "acme/foo",
-        ])
-        .expect("CLI should parse");
-        let Command::Skill {
-            command:
-                SkillCommand::Import {
-                    source,
-                    github,
-                    path,
-                    ref_name,
-                    id,
-                    ..
-                },
-        } = cli.command
-        else {
-            panic!("expected skill import command");
-        };
-        assert_eq!(source, None);
-        assert_eq!(github.as_deref(), Some("owner/repo"));
-        assert_eq!(path.as_deref(), Some("skills/foo"));
-        assert_eq!(ref_name, "main");
-        assert_eq!(id, "acme/foo");
-    }
-
-    #[test]
-    fn skill_import_rejects_source_and_github_together() {
-        let error = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "import",
-            "--source",
-            "./skills/foo",
-            "--github",
-            "owner/repo",
-            "--id",
-            "acme/foo",
-        ])
-        .expect_err("source and github should conflict");
-        assert!(error.to_string().contains("cannot be used with"));
-    }
-
-    #[test]
-    fn skill_local_commands_parse() {
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "local",
-            "audit",
-            "./foo",
-            "--json",
-        ])
-        .expect("CLI should parse");
-        let Command::Skill {
-            command:
-                SkillCommand::Local {
-                    command: SkillLocalCommand::Audit { dir, json },
-                },
-        } = cli.command
-        else {
-            panic!("expected skill local audit command");
-        };
-        assert_eq!(dir, std::path::PathBuf::from("./foo"));
-        assert!(json);
-
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "local",
-            "diff",
-            "./foo",
-            "--json",
-        ])
-        .expect("CLI should parse");
-        assert!(matches!(
-            cli.command,
-            Command::Skill {
-                command: SkillCommand::Local {
-                    command: SkillLocalCommand::Diff { .. }
-                }
-            }
-        ));
-
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "local",
-            "install",
-            "./foo",
-            "--skills-dir",
-            "./skills",
-            "--json",
-        ])
-        .expect("CLI should parse");
-        assert!(matches!(
-            cli.command,
-            Command::Skill {
-                command: SkillCommand::Local {
-                    command: SkillLocalCommand::Install { .. }
-                }
-            }
-        ));
-    }
-
-    #[test]
-    fn skill_versions_commands_parse() {
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "versions",
-            "list",
-            "acme/foo",
-            "--json",
-        ])
-        .expect("CLI should parse");
-        assert!(matches!(
-            cli.command,
-            Command::Skill {
-                command: SkillCommand::Versions {
-                    command: SkillVersionsCommand::List { .. }
-                }
-            }
-        ));
-
-        let cli = Cli::try_parse_from([
-            "vfs-cli",
-            "--canister-id",
-            "aaaaa-aa",
-            "skill",
-            "public",
-            "versions",
-            "inspect",
-            "acme/foo",
-            "20260505T010203Z-etag",
-            "--json",
-        ])
-        .expect("CLI should parse");
-        assert!(matches!(
-            cli.command,
-            Command::Skill {
-                command: SkillCommand::Public {
-                    command: super::SkillPublicCommand::Versions {
-                        command: SkillVersionsCommand::Inspect { .. }
-                    }
-                }
-            }
-        ));
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, SkillCommand, SkillStatusArg};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -939,65 +567,6 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(!help.contains("beam-bench"));
-    }
-
-    #[test]
-    fn skill_install_help_explains_output_choices() {
-        let mut command = Cli::command();
-        let skill = command
-            .find_subcommand_mut("skill")
-            .expect("skill subcommand should exist");
-        let install = skill
-            .find_subcommand_mut("install")
-            .expect("install subcommand should exist");
-        let help = install.render_long_help().to_string();
-
-        assert!(help.contains("Exact output directory"));
-        assert!(help.contains("Use either --output or --skills-dir"));
-    }
-
-    #[test]
-    fn skill_policy_help_lists_policy_commands() {
-        let mut command = Cli::command();
-        let skill = command
-            .find_subcommand_mut("skill")
-            .expect("skill subcommand should exist");
-        let policy = skill
-            .find_subcommand_mut("policy")
-            .expect("policy subcommand should exist");
-        let help = policy.render_long_help().to_string();
-
-        assert!(help.contains("enable"));
-        assert!(help.contains("policy"));
-        assert!(help.contains("grant"));
-        assert!(help.contains("revoke"));
-    }
-
-    #[test]
-    fn main_cli_help_mentions_identity_pem_env() {
-        let mut command = Cli::command();
-        let help = command.render_long_help().to_string();
-
-        assert!(help.contains("VFS_IDENTITY_PEM"));
-        assert!(help.contains("--identity-pem"));
-    }
-
-    #[test]
-    fn main_cli_parses_identity_pem() {
-        let cli = Cli::parse_from([
-            "vfs-cli",
-            "--identity-pem",
-            "./identity.pem",
-            "skill",
-            "policy",
-            "whoami",
-            "--json",
-        ]);
-
-        assert_eq!(
-            cli.connection.identity_pem.as_deref(),
-            Some(std::path::Path::new("./identity.pem"))
-        );
     }
 
     #[test]
@@ -1049,18 +618,45 @@ mod tests {
     }
 
     #[test]
-    fn main_cli_parses_conversation_wiki_command() {
+    fn main_cli_parses_skill_commands() {
         let cli = Cli::parse_from([
             "vfs-cli",
-            "generate-conversation-wiki",
-            "--source-path",
-            "/Sources/raw/chatgpt-abc/chatgpt-abc.md",
+            "skill",
+            "find",
+            "contract review",
+            "--include-deprecated",
             "--json",
         ]);
-        let Command::GenerateConversationWiki { source_path, json } = cli.command else {
-            panic!("expected generate-conversation-wiki command");
+        let Command::Skill {
+            command:
+                SkillCommand::Find {
+                    query,
+                    include_deprecated,
+                    json,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected skill find command");
         };
-        assert_eq!(source_path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
+        assert_eq!(query, "contract review");
+        assert!(include_deprecated);
         assert!(json);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "set-status",
+            "acme/legal-review",
+            "--status",
+            "deprecated",
+        ]);
+        let Command::Skill {
+            command: SkillCommand::SetStatus { status, .. },
+        } = cli.command
+        else {
+            panic!("expected skill set-status command");
+        };
+        assert_eq!(status, SkillStatusArg::Deprecated);
     }
 }

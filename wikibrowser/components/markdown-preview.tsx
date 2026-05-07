@@ -7,10 +7,12 @@ import { hrefForMarkdownLink } from "@/lib/paths";
 
 export function MarkdownPreview({
   canisterId,
+  databaseId,
   nodePath,
   content
 }: {
   canisterId: string;
+  databaseId: string;
   nodePath: string;
   content: string;
 }) {
@@ -19,7 +21,7 @@ export function MarkdownPreview({
       remarkPlugins={[remarkGfm]}
       components={{
         a({ href, children, ...props }) {
-          const wikiHref = hrefForMarkdownLink(canisterId, nodePath, href);
+          const wikiHref = hrefForMarkdownLink(canisterId, databaseId, nodePath, href);
           if (!wikiHref) {
             return <a href={href} {...props}>{children}</a>;
           }

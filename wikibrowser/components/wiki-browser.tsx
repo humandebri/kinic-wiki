@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GitBranch, LogIn, LogOut, Network, PanelRight, Search } from "lucide-react";
+import { GitBranch, Network, PanelRight, Search } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -28,7 +28,7 @@ import {
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "lint"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "search", "recent", "lint"];
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
   ssr: false,
   loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
@@ -48,8 +48,9 @@ export function WikiBrowser() {
   const searchParams = useSearchParams();
   const routeState = useMemo(() => parseWikiRoute(pathname), [pathname]);
   const canisterId = routeState.canisterId ?? "";
-  const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, pathname), [canisterId, pathname]);
-  const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, pathname), [canisterId, pathname]);
+  const databaseId = routeState.databaseId ?? "";
+  const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
+  const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
   const graphCenter = isGraphPage ? searchParams.get("center") : null;
   const graphDepth = parseGraphDepth(searchParams.get("depth"));
   const selectedPath = useMemo(
@@ -60,10 +61,10 @@ export function WikiBrowser() {
   const tab = parseTab(searchParams.get("tab"));
   const query = isSearchPage ? searchParams.get("q") ?? "" : "";
   const searchKind = parseSearchKind(searchParams.get("kind"));
-  const currentRequestKey = nodeRequestKey(canisterId, selectedPath);
-  const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, selectedPath));
-  const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, selectedPath));
-  const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, selectedPath));
+  const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath);
+  const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, selectedPath));
+  const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
+  const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
@@ -74,9 +75,9 @@ export function WikiBrowser() {
     if (isGraphPage && !graphCenter) {
       return;
     }
-    const requestKey = nodeRequestKey(canisterId, selectedPath);
+    const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath);
     import("@/lib/vfs-client")
-      .then(({ readNodeContext }) => readNodeContext(canisterId, selectedPath, 20))
+      .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20))
       .then((data) => {
         if (!cancelled) {
           if (!data) {
@@ -97,7 +98,7 @@ export function WikiBrowser() {
           return;
         }
         import("@/lib/vfs-client")
-          .then(({ listChildren }) => listChildren(canisterId, selectedPath))
+          .then(({ listChildren }) => listChildren(canisterId, databaseId, selectedPath))
           .then((data) => {
             if (!cancelled) {
               if (data.length === 0 && looksLikeFilePath(selectedPath)) {
@@ -122,17 +123,18 @@ export function WikiBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [canisterId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
+  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
 
-  const currentNode = currentNodeState(invalidCanister, canisterId, selectedPath, currentRequestKey, node);
-  const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, selectedPath, currentRequestKey, nodeContext);
-  const currentChildren = currentChildrenState(invalidCanister, canisterId, selectedPath, currentRequestKey, childNodes);
+  const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
+  const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
+  const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
   const noteRole = inferNoteRole(selectedPath);
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <TopBar
         canisterId={canisterId}
+        databaseId={databaseId}
         query={query}
         searchKind={searchKind}
         isGraphPage={isGraphPage}
@@ -142,10 +144,11 @@ export function WikiBrowser() {
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
           <PanelHeader icon={<GitBranch size={15} />} title={tabTitle(tab)} />
-          <ModeTabs canisterId={canisterId} selectedPath={selectedPath} tab={tab} />
+          <ModeTabs canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} tab={tab} />
           <LeftPane
             tab={tab}
             canisterId={canisterId}
+            databaseId={databaseId}
             selectedPath={selectedPath}
             node={currentNode.data}
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
@@ -153,16 +156,18 @@ export function WikiBrowser() {
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
           {isGraphPage ? (
-            <GraphPanel canisterId={canisterId} centerPath={graphCenter} depth={graphDepth} />
+            <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} />
           ) : isSearchPage ? (
-            <SearchPanel canisterId={canisterId} query={query} initialKind={searchKind} />
+            <SearchPanel canisterId={canisterId} databaseId={databaseId} query={query} initialKind={searchKind} />
           ) : (
             <>
               <DocumentHeader
+                canisterId={canisterId}
+                databaseId={databaseId}
                 path={selectedPath}
                 view={view}
                 onViewChange={(nextView) => {
-                  router.replace(hrefForPath(canisterId, selectedPath, nextView, tab));
+                  router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab));
                 }}
                 isDirectory={!currentNode.data && Boolean(currentChildren.data)}
               />
@@ -171,6 +176,7 @@ export function WikiBrowser() {
                 childrenState={currentChildren}
                 view={view}
                 canisterId={canisterId}
+                databaseId={databaseId}
               />
             </>
           )}
@@ -180,6 +186,7 @@ export function WikiBrowser() {
             <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
             <Inspector
               canisterId={canisterId}
+              databaseId={databaseId}
               path={selectedPath}
               node={currentNode.data}
               childNodes={currentChildren.data ?? []}
@@ -198,23 +205,27 @@ export function WikiBrowser() {
 function LeftPane({
   tab,
   canisterId,
+  databaseId,
   selectedPath,
   node,
   autoExpandExplorer
 }: {
   tab: ModeTab;
   canisterId: string;
+  databaseId: string;
   selectedPath: string;
   node: WikiNode | null;
   autoExpandExplorer: boolean;
 }) {
-  if (tab === "recent") return <RecentPanel canisterId={canisterId} />;
-  if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} />;
-  return <ExplorerTree canisterId={canisterId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} />;
+  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" />;
+  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} />;
+  if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} databaseId={databaseId} />;
+  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} />;
 }
 
 function TopBar({
   canisterId,
+  databaseId,
   query,
   searchKind,
   isGraphPage,
@@ -222,6 +233,7 @@ function TopBar({
   selectedPath
 }: {
   canisterId: string;
+  databaseId: string;
   query: string;
   searchKind: "path" | "full";
   isGraphPage: boolean;
@@ -238,62 +250,26 @@ function TopBar({
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
         <Link
           className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
-          href={hrefForGraph(canisterId, graphLinkCenter)}
+          href={hrefForGraph(canisterId, databaseId, graphLinkCenter)}
         >
           <Network size={15} />
           Graph
         </Link>
         <CycleBattery canisterId={canisterId} />
-        <IdentityControl />
-        <HeaderSearch canisterId={canisterId} query={query} searchKind={searchKind} />
+        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} />
       </div>
     </header>
   );
 }
 
-function IdentityControl() {
-  const [state, setState] = useState({ principal: "2vxsx-fae", authenticated: false });
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cleanup = () => {};
-    import("@/lib/ii-auth")
-      .then(({ subscribeAuth }) => {
-        cleanup = subscribeAuth(setState);
-      })
-      .catch(() => {});
-    return () => cleanup();
-  }, []);
-
-  function toggleAuth() {
-    setBusy(true);
-    import("@/lib/ii-auth")
-      .then(({ loginWithInternetIdentity, logoutInternetIdentity }) =>
-        state.authenticated ? logoutInternetIdentity() : loginWithInternetIdentity()
-      )
-      .finally(() => setBusy(false));
-  }
-
-  return (
-    <button
-      type="button"
-      className="hidden max-w-[220px] items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink md:flex"
-      onClick={toggleAuth}
-      disabled={busy}
-      title={state.principal}
-    >
-      {state.authenticated ? <LogOut size={15} /> : <LogIn size={15} />}
-      <span className="truncate font-mono">{state.authenticated ? shortPrincipal(state.principal) : "anonymous"}</span>
-    </button>
-  );
-}
-
 function HeaderSearch({
   canisterId,
+  databaseId,
   query,
   searchKind
 }: {
   canisterId: string;
+  databaseId: string;
   query: string;
   searchKind: "path" | "full";
 }) {
@@ -305,7 +281,7 @@ function HeaderSearch({
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    router.replace(hrefForSearch(canisterId, text.trim(), kind));
+    router.replace(hrefForSearch(canisterId, databaseId, text.trim(), kind));
   }
 
   return (
@@ -343,20 +319,22 @@ function SearchKindButton({ active, label, onClick }: { active: boolean; label: 
 
 function ModeTabs({
   canisterId,
+  databaseId,
   selectedPath,
   tab
 }: {
   canisterId: string;
+  databaseId: string;
   selectedPath: string;
   tab: ModeTab;
 }) {
   return (
     <nav className="border-b border-line px-3 py-2" aria-label="Left sidebar mode">
-      <div className="grid grid-cols-3 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
+      <div className="grid grid-cols-4 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
         {SIDEBAR_TABS.map((value) => (
           <Link
             key={value}
-            href={hrefForPath(canisterId, selectedPath, undefined, value)}
+            href={hrefForPath(canisterId, databaseId, selectedPath, undefined, value)}
             className={`rounded-lg px-1.5 py-1.5 no-underline ${tab === value ? "bg-accent text-white" : "text-muted hover:bg-paper"}`}
           >
             {value}
@@ -368,13 +346,14 @@ function ModeTabs({
 }
 
 function tabTitle(tab: ModeTab): string {
+  if (tab === "search") return "Search";
   if (tab === "recent") return "Recent";
   if (tab === "lint") return "Lint Hints";
   return "Explorer";
 }
 
 function parseTab(value: string | null): ModeTab {
-  if (value === "recent" || value === "lint" || value === "explorer") {
+  if (value === "recent" || value === "lint" || value === "search" || value === "explorer") {
     return value;
   }
   return "explorer";
@@ -395,6 +374,7 @@ function parseGraphDepth(value: string | null): 1 | 2 {
 function currentNodeState(
   invalidCanister: string | null,
   canisterId: string,
+  databaseId: string,
   selectedPath: string,
   requestKey: string,
   node: BrowserLoadState<WikiNode>
@@ -402,12 +382,13 @@ function currentNodeState(
   if (typeof invalidCanister === "string") {
     return { path: selectedPath, data: null, error: "Invalid canister ID", hint: invalidCanister, loading: false };
   }
-  return node.requestKey === requestKey ? node : browserLoadingState<WikiNode>(canisterId, selectedPath);
+  return node.requestKey === requestKey ? node : browserLoadingState<WikiNode>(canisterId, databaseId, selectedPath);
 }
 
 function currentNodeContextState(
   invalidCanister: string | null,
   canisterId: string,
+  databaseId: string,
   selectedPath: string,
   requestKey: string,
   nodeContext: BrowserLoadState<NodeContext>
@@ -415,12 +396,13 @@ function currentNodeContextState(
   if (typeof invalidCanister === "string") {
     return { path: selectedPath, data: null, error: "Invalid canister ID", hint: invalidCanister, loading: false };
   }
-  return nodeContext.requestKey === requestKey ? nodeContext : browserLoadingState<NodeContext>(canisterId, selectedPath);
+  return nodeContext.requestKey === requestKey ? nodeContext : browserLoadingState<NodeContext>(canisterId, databaseId, selectedPath);
 }
 
 function currentChildrenState(
   invalidCanister: string | null,
   canisterId: string,
+  databaseId: string,
   selectedPath: string,
   requestKey: string,
   childNodes: BrowserLoadState<ChildNode[]>
@@ -428,11 +410,11 @@ function currentChildrenState(
   if (typeof invalidCanister === "string") {
     return { path: selectedPath, data: null, error: null, loading: false };
   }
-  return childNodes.requestKey === requestKey ? childNodes : browserLoadingState<ChildNode[]>(canisterId, selectedPath);
+  return childNodes.requestKey === requestKey ? childNodes : browserLoadingState<ChildNode[]>(canisterId, databaseId, selectedPath);
 }
 
-function browserLoadingState<T>(canisterId: string, path: string): BrowserLoadState<T> {
-  return { ...loadingState<T>(path), requestKey: nodeRequestKey(canisterId, path) };
+function browserLoadingState<T>(canisterId: string, databaseId: string, path: string): BrowserLoadState<T> {
+  return { ...loadingState<T>(path), requestKey: nodeRequestKey(canisterId, databaseId, path) };
 }
 
 function looksLikeFilePath(path: string): boolean {
@@ -450,33 +432,29 @@ function validateCanisterText(canisterId: string): string | null {
   return null;
 }
 
-function shortPrincipal(principal: string): string {
-  if (principal.length <= 16) return principal;
-  return `${principal.slice(0, 8)}...${principal.slice(-5)}`;
-}
-
-function parseWikiRoute(pathname: string): { canisterId: string | null; nodePath: string } {
+function parseWikiRoute(pathname: string): { canisterId: string | null; databaseId: string | null; nodePath: string } {
   const segments = pathname.split("/").filter(Boolean);
-  if (segments[0] !== "w" || !segments[1]) {
-    return { canisterId: null, nodePath: "/Wiki" };
+  if (segments[0] !== "w" || !segments[1] || segments[2] !== "db" || !segments[3]) {
+    return { canisterId: null, databaseId: null, nodePath: "/Wiki" };
   }
   const path = segments
-    .slice(2)
+    .slice(4)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
   return {
     canisterId: decodePathSegment(segments[1]),
+    databaseId: decodePathSegment(segments[3]),
     nodePath: path ? `/${path}` : "/Wiki"
   };
 }
 
-function isBrowserSearchPathname(canisterId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/search`;
+function isBrowserSearchPathname(canisterId: string, databaseId: string, pathname: string): boolean {
+  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/search`;
 }
 
-function isBrowserGraphPathname(canisterId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/graph`;
+function isBrowserGraphPathname(canisterId: string, databaseId: string, pathname: string): boolean {
+  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/graph`;
 }
 
 function decodePathSegment(segment: string): string {

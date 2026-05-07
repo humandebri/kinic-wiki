@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { hrefForPath } from "@/lib/paths";
+import { searchRequestKey } from "@/lib/request-keys";
 import type { SearchNodeHit } from "@/lib/types";
 import { searchNodePaths, searchNodes } from "@/lib/vfs-client";
 import { errorHint, errorMessage } from "@/lib/wiki-helpers";
@@ -20,17 +21,19 @@ type SearchState = {
 
 export function SearchPanel({
   canisterId,
+  databaseId,
   query,
   initialKind
 }: {
   canisterId: string;
+  databaseId: string;
   query: string;
   initialKind: SearchKind;
 }) {
   const latestRequest = useRef(0);
   const lastRequestedKey = useRef<string | null>(null);
   const urlQuery = query.trim();
-  const urlSearchKey = searchKey(canisterId, urlQuery, initialKind);
+  const urlSearchKey = searchRequestKey(canisterId, databaseId, initialKind, urlQuery);
   const [searchState, setSearchState] = useState<SearchState>({
     key: null,
     results: [],
@@ -53,7 +56,7 @@ export function SearchPanel({
     if (syncState) {
       setSearchState({ key: requestKey, results: [], error: null, hint: null, loading: true, hasSearched: true });
     }
-    request(canisterId, searchText, 20, "/Wiki")
+    request(canisterId, databaseId, searchText, 20, "/Wiki")
       .then((data) => {
         if (latestRequest.current === requestId) {
           setSearchState({ key: requestKey, results: data, error: null, hint: null, loading: false, hasSearched: true });
@@ -71,7 +74,7 @@ export function SearchPanel({
           });
         }
       });
-  }, [canisterId]);
+  }, [canisterId, databaseId]);
 
   useEffect(() => {
     if (!urlQuery) {
@@ -102,7 +105,7 @@ export function SearchPanel({
             return (
               <Link
                 key={`${hit.path}-${hit.score}`}
-                href={hrefForPath(canisterId, hit.path)}
+                href={hrefForPath(canisterId, databaseId, hit.path)}
                 className="block rounded-xl border border-line bg-white p-3 text-sm no-underline hover:border-accent"
               >
                 <div className="truncate font-mono text-xs text-accent">{hit.path}</div>
@@ -114,10 +117,6 @@ export function SearchPanel({
       </div>
     </div>
   );
-}
-
-function searchKey(canisterId: string, searchText: string, searchKind: SearchKind): string {
-  return `${canisterId}\n${searchKind}\n${searchText}`;
 }
 
 function resultExcerpt(hit: SearchNodeHit): string | null {

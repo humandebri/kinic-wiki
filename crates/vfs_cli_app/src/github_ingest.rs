@@ -50,7 +50,11 @@ struct PullView {
     head_ref_name: String,
 }
 
-pub async fn run_github_command(client: &impl VfsApi, command: GitHubCommand) -> Result<()> {
+pub async fn run_github_command(
+    client: &impl VfsApi,
+    database_id: &str,
+    command: GitHubCommand,
+) -> Result<()> {
     ensure_gh_ready().await?;
     match command {
         GitHubCommand::Ingest { command } => match command {
@@ -58,14 +62,14 @@ pub async fn run_github_command(client: &impl VfsApi, command: GitHubCommand) ->
                 let target = parse_github_target(&target)?;
                 let content = fetch_issue_markdown(&target).await?;
                 let path = github_evidence_path(&target, "issues");
-                write_source_node(client, &path, content).await?;
+                write_source_node(client, database_id, &path, content).await?;
                 print_result(json, &path)?;
             }
             GitHubIngestCommand::Pr { target, json } => {
                 let target = parse_github_target(&target)?;
                 let content = fetch_pull_markdown(&target).await?;
                 let path = github_evidence_path(&target, "pulls");
-                write_source_node(client, &path, content).await?;
+                write_source_node(client, database_id, &path, content).await?;
                 print_result(json, &path)?;
             }
         },
@@ -150,9 +154,15 @@ async fn gh_view(kind: &str, target: &GitHubTarget, fields: &str) -> Result<Vec<
     ))
 }
 
-async fn write_source_node(client: &impl VfsApi, path: &str, content: String) -> Result<()> {
+async fn write_source_node(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: &str,
+    content: String,
+) -> Result<()> {
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.to_string(),
             kind: NodeKind::Source,
             content,

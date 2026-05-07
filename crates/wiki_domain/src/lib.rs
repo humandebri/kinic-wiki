@@ -1,5 +1,5 @@
 // Where: crates/wiki_domain/src/lib.rs
-// What: Wiki-specific path policy and mirror defaults layered on top of the reusable VFS.
+// What: Wiki-specific path validation and mirror defaults layered on top of the reusable VFS.
 // Why: `/Wiki` and `/Sources/...` semantics must stay centralized outside the generic VFS crates.
 use vfs_types::NodeKind;
 

@@ -36,10 +36,11 @@ pub struct ConversationWikiResult {
 
 pub async fn generate_conversation_wiki(
     client: &impl VfsApi,
+    database_id: &str,
     source_path: &str,
 ) -> Result<ConversationWikiResult> {
     let source = client
-        .read_node(source_path)
+        .read_node(database_id, source_path)
         .await?
         .ok_or_else(|| anyhow!("source node not found: {source_path}"))?;
     if source.kind != NodeKind::Source {
@@ -48,11 +49,11 @@ pub async fn generate_conversation_wiki(
     let raw = parse_raw_conversation(&source.path, &source.content)?;
     let base_path = format!("{CONVERSATION_WIKI_PREFIX}/{}", raw.source_id);
     let mut documents = build_wiki_documents(&raw, &base_path);
-    documents.push(log_document(client, &base_path, &raw).await?);
+    documents.push(log_document(client, database_id, &base_path, &raw).await?);
 
     let mut written_paths = Vec::with_capacity(documents.len());
     for document in documents {
-        upsert_file(client, &document.path, &document.content).await?;
+        upsert_file(client, database_id, &document.path, &document.content).await?;
         written_paths.push(document.path);
     }
 
@@ -187,12 +188,13 @@ fn provenance_markdown(raw: &RawConversation, base_path: &str) -> String {
 
 async fn log_document(
     client: &impl VfsApi,
+    database_id: &str,
     base_path: &str,
     raw: &RawConversation,
 ) -> Result<WikiDocument> {
     let path = format!("{base_path}/log.md");
     let current = client
-        .read_node(&path)
+        .read_node(database_id, &path)
         .await?
         .map(|node| node.content)
         .unwrap_or_else(|| "# Log\n\n".to_string());
@@ -207,10 +209,19 @@ async fn log_document(
     })
 }
 
-async fn upsert_file(client: &impl VfsApi, path: &str, content: &str) -> Result<()> {
-    let expected_etag = client.read_node(path).await?.map(|node| node.etag);
+async fn upsert_file(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: &str,
+    content: &str,
+) -> Result<()> {
+    let expected_etag = client
+        .read_node(database_id, path)
+        .await?
+        .map(|node| node.etag);
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.to_string(),
             kind: NodeKind::File,
             content: content.to_string(),

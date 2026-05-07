@@ -12,8 +12,6 @@ mod commands_fs_tests;
 mod commands_maintenance_tests;
 #[cfg(test)]
 mod commands_sync_tests;
-#[cfg(test)]
-mod commands_vfs_tests;
 pub mod conversation_wiki;
 mod facts_policy;
 pub mod github_ingest;
@@ -24,3 +22,5 @@ pub mod mirror;
 #[cfg(test)]
 mod mirror_fs_tests;
 pub mod skill_registry;
+#[cfg(test)]
+mod skill_registry_tests;
