@@ -10,6 +10,7 @@ Inspect local and remote wiki health, report concrete findings, and propose the 
 2. For local structure checks, use `vfs-cli lint-local`.
 3. For remote checks, read `index.md` first with `read-node-context`, then inspect the canonical role-matched notes before broad search.
 4. Use `search-remote`, `search-path-remote`, `list-nodes`, `glob-nodes`, `recent-nodes`, and link commands only to confirm or expand findings after direct note inspection.
+   - For wiki-only inspection, pass `--prefix /Wiki` or `path: "/Wiki"` unless raw source material is explicitly in scope.
 5. Group findings into:
    - duplication
    - isolation
