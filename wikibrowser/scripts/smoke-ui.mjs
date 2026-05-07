@@ -14,10 +14,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 async function main() {
   const url = readUrl();
   const target = parseSmokeTargetUrl(url);
-  const searchUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/search`;
-  const graphUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/graph?center=${encodeURIComponent(target.nodePath)}&depth=1`;
-  const emptyGraphUrl = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/graph`;
-  const targetContext = await readTargetContext(target.canisterId, target.nodePath);
+  const searchUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/search`;
+  const graphUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/graph?center=${encodeURIComponent(target.nodePath)}&depth=1`;
+  const emptyGraphUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/graph`;
+  const targetContext = await readTargetContext(target.databaseId, target.nodePath);
   const targetNode = targetContext.node;
   const contentProbe = contentProbeFor(targetNode.content);
   const pathQuery = pathQueryFor(target.nodePath);
@@ -45,21 +45,21 @@ async function main() {
   assertSnapshotIncludes("Open Graph from a wiki page to inspect its local neighborhood.");
   assertNoSnapshotText("Cannot reach IC host");
 
-  console.log(`Wiki browser smoke OK: ${target.canisterId} ${target.nodePath}`);
+  console.log(`Wiki browser smoke OK: ${target.databaseId} ${target.nodePath}`);
 }
 
 export function parseSmokeTargetUrl(url) {
   const targetUrl = new URL(url);
   const segments = targetUrl.pathname.split("/").filter(Boolean);
-  const canisterId = decodePathSegment(segments[1] ?? "");
+  const databaseId = decodePathSegment(segments[0] ?? "");
   const path = segments
-    .slice(2)
+    .slice(1)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
   return {
     origin: targetUrl.origin,
-    canisterId,
+    databaseId,
     nodePath: path ? `/${path}` : "/Wiki"
   };
 }
@@ -86,8 +86,9 @@ function assertSnapshotIncludes(text) {
   throw new Error(`snapshot missing ${text}\n${lastOutput}`);
 }
 
-async function readTargetContext(canisterId, nodePath) {
+async function readTargetContext(databaseId, nodePath) {
   const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
+  const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
   const agent = HttpAgent.createSync({ host });
   if (isLocalHost(host)) {
     await agent.fetchRootKey();
@@ -96,7 +97,7 @@ async function readTargetContext(canisterId, nodePath) {
     agent,
     canisterId: Principal.fromText(canisterId)
   });
-  const result = await actor.read_node_context({ path: nodePath, link_limit: 20 });
+  const result = await actor.read_node_context({ database_id: databaseId, path: nodePath, link_limit: 20 });
   if ("Err" in result) {
     throw new Error(`smoke target node context is not readable: ${result.Err}`);
   }
@@ -224,7 +225,7 @@ function idlFactory({ IDL: idl }) {
     node: Node,
     outgoing_links: idl.Vec(LinkEdge)
   });
-  const NodeContextRequest = idl.Record({ path: idl.Text, link_limit: idl.Nat32 });
+  const NodeContextRequest = idl.Record({ database_id: idl.Text, path: idl.Text, link_limit: idl.Nat32 });
   const ResultNodeContext = idl.Variant({ Ok: idl.Opt(NodeContext), Err: idl.Text });
   return idl.Service({
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"])

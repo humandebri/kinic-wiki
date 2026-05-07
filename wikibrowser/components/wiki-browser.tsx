@@ -47,7 +47,7 @@ export function WikiBrowser() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const routeState = useMemo(() => parseWikiRoute(pathname), [pathname]);
-  const canisterId = routeState.canisterId ?? "";
+  const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
   const databaseId = routeState.databaseId ?? "";
   const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
   const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
@@ -68,15 +68,7 @@ export function WikiBrowser() {
   const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
-    if (!routeState.legacyPath || !routeState.canisterId) return;
-    router.replace(hrefForPath(routeState.canisterId, "default", routeState.nodePath));
-  }, [routeState.canisterId, routeState.legacyPath, routeState.nodePath, router]);
-
-  useEffect(() => {
     let cancelled = false;
-    if (routeState.legacyPath) {
-      return;
-    }
     if (typeof invalidCanister === "string") {
       return;
     }
@@ -131,15 +123,7 @@ export function WikiBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, routeState.legacyPath, selectedPath]);
-
-  if (routeState.legacyPath) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-paper px-6 text-sm text-muted">
-        Redirecting...
-      </main>
-    );
-  }
+  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
 
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
@@ -443,51 +427,38 @@ function looksLikeFilePath(path: string): boolean {
 
 function validateCanisterText(canisterId: string): string | null {
   if (!canisterId) {
-    return "missing canister id";
+    return "KINIC_WIKI_CANISTER_ID is not configured";
   }
   if (!/^[a-z0-9-]+$/i.test(canisterId)) {
-    return "canister id contains unsupported characters";
+    return "KINIC_WIKI_CANISTER_ID contains unsupported characters";
   }
   return null;
 }
 
-function parseWikiRoute(pathname: string): { canisterId: string | null; databaseId: string | null; nodePath: string; legacyPath: boolean } {
+function parseWikiRoute(pathname: string): { databaseId: string | null; nodePath: string } {
   const segments = pathname.split("/").filter(Boolean);
-  if (segments[0] !== "w" || !segments[1] || segments[2] !== "db" || !segments[3]) {
-    if (segments[0] === "w" && segments[1]) {
-      const path = segments
-        .slice(2)
-        .filter(Boolean)
-        .map(decodePathSegment)
-        .join("/");
-      return {
-        canisterId: decodePathSegment(segments[1]),
-        databaseId: "default",
-        nodePath: path ? `/${path}` : "/Wiki",
-        legacyPath: true
-      };
-    }
-    return { canisterId: null, databaseId: null, nodePath: "/Wiki", legacyPath: false };
+  if (!segments[0]) {
+    return { databaseId: null, nodePath: "/Wiki" };
   }
   const path = segments
-    .slice(4)
+    .slice(1)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
   return {
-    canisterId: decodePathSegment(segments[1]),
-    databaseId: decodePathSegment(segments[3]),
+    databaseId: decodePathSegment(segments[0]),
     nodePath: path ? `/${path}` : "/Wiki",
-    legacyPath: false
   };
 }
 
 function isBrowserSearchPathname(canisterId: string, databaseId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/search`;
+  void canisterId;
+  return pathname === `/${encodeURIComponent(databaseId)}/search`;
 }
 
 function isBrowserGraphPathname(canisterId: string, databaseId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/graph`;
+  void canisterId;
+  return pathname === `/${encodeURIComponent(databaseId)}/graph`;
 }
 
 function decodePathSegment(segment: string): string {

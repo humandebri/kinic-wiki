@@ -35,11 +35,13 @@ Without `--canister-id`, the CLI reads configuration from:
 Create a database before reading or writing:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database create <database-id>
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
 cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
 cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/file.md --input file.md
 cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
+
+`database create` prints the generated database ID.
 
 For public browser reads, grant anonymous reader access explicitly:
 

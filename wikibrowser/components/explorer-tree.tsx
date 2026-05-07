@@ -66,7 +66,7 @@ function TreeNode({
       cancelled = true;
       if (requestedPath.current === node.path) requestedPath.current = null;
     };
-  }, [canisterId, canExpand, children.data, children.error, expanded, node.path]);
+  }, [canisterId, databaseId, canExpand, children.data, children.error, expanded, node.path]);
 
   return (
     <div>

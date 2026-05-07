@@ -165,14 +165,14 @@ export const expectedTypes = {
 };
 
 export const didTypeAliases = {
-  ResultChildren: "Result_9",
-  ResultLinks: "Result_8",
-  ResultNode: "Result_17",
-  ResultNodeContext: "Result_18",
-  ResultQueryContext: "Result_15",
-  ResultRecent: "Result_19",
-  ResultSearch: "Result_20",
-  ResultSourceEvidence: "Result_21"
+  ResultChildren: "Result_10",
+  ResultLinks: "Result_9",
+  ResultNode: "Result_18",
+  ResultNodeContext: "Result_19",
+  ResultQueryContext: "Result_16",
+  ResultRecent: "Result_20",
+  ResultSearch: "Result_21",
+  ResultSourceEvidence: "Result_22"
 };
 
 export const expectedMethods = {

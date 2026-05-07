@@ -27,7 +27,7 @@ pub trait VfsApi: Sync {
     async fn memory_manifest(&self) -> Result<MemoryManifest> {
         Err(anyhow!("memory_manifest is not implemented by this client"))
     }
-    async fn create_database(&self, _database_id: &str) -> Result<()> {
+    async fn create_database(&self) -> Result<String> {
         Err(anyhow!("create_database is not implemented by this client"))
     }
     async fn grant_database_access(
@@ -302,10 +302,8 @@ impl VfsApi for CanisterVfsClient {
         self.query("memory_manifest", &()).await
     }
 
-    async fn create_database(&self, database_id: &str) -> Result<()> {
-        let result: Result<(), String> = self
-            .update("create_database", &database_id.to_string())
-            .await?;
+    async fn create_database(&self) -> Result<String> {
+        let result: Result<String, String> = self.update("create_database", &()).await?;
         result.map_err(|error| anyhow!(error))
     }
 

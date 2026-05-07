@@ -7,7 +7,7 @@ export default function HomePage() {
           Open a wiki canister
         </h1>
         <p className="mt-4 text-sm leading-6 text-muted">
-          Use <code>/w/&lt;canister-id&gt;/db/&lt;database-id&gt;/Wiki</code> to browse a read-only VFS tree.
+          Use <code>/&lt;database-id&gt;/Wiki</code> to browse a read-only VFS tree.
         </p>
       </section>
     </main>

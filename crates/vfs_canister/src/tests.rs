@@ -100,11 +100,11 @@ fn existing_database_index_is_loaded_without_implicit_default() {
 fn update_entrypoints_record_usage_events() {
     install_empty_test_service();
 
-    create_database("default".to_string()).expect("database should create");
+    let database_id = create_database().expect("database should create");
     assert_eq!(usage_event_count(), 1);
 
     let failed = write_node(WriteNodeRequest {
-        database_id: "default".to_string(),
+        database_id,
         path: "/Sources/not-raw.md".to_string(),
         kind: NodeKind::Source,
         content: "invalid source path".to_string(),
@@ -113,6 +113,25 @@ fn update_entrypoints_record_usage_events() {
     });
     assert!(failed.is_err());
     assert_eq!(usage_event_count(), 2);
+}
+
+#[test]
+fn canister_create_database_returns_generated_id_for_followup_reads() {
+    install_empty_test_service();
+
+    let database_id = create_database().expect("database should create");
+    assert!(database_id.starts_with("db_"));
+    assert_eq!(database_id.len(), 15);
+
+    let status = status(database_id.clone());
+    assert_eq!(status.file_count, 0);
+    assert_eq!(status.source_count, 0);
+    let children = list_children(ListChildrenRequest {
+        database_id,
+        path: "/Wiki".to_string(),
+    })
+    .expect("generated database should list");
+    assert!(children.is_empty());
 }
 
 #[test]

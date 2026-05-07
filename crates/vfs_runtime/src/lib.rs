@@ -36,6 +36,8 @@ pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
 const SHA256_DIGEST_BYTES: usize = 32;
+const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
+const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatabaseMeta {
@@ -141,6 +143,66 @@ impl VfsService {
         let meta = self.reserve_database(database_id, caller, now)?;
         self.run_database_migrations(database_id)?;
         Ok(meta)
+    }
+
+    pub fn create_generated_database(
+        &self,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        let meta = self.reserve_generated_database(caller, now)?;
+        self.run_database_migrations(&meta.database_id)?;
+        Ok(meta)
+    }
+
+    pub fn reserve_generated_database(
+        &self,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        let mut conn = self.open_index()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let mount_id = allocate_mount_id(&tx)?;
+        let mut selected_database_id = None;
+        for attempt in 0_u32..100 {
+            let database_id = generated_database_id(caller, now, mount_id, attempt);
+            if !database_exists(&tx, &database_id)? {
+                selected_database_id = Some(database_id);
+                break;
+            }
+        }
+        let database_id = selected_database_id
+            .ok_or_else(|| "failed to generate unique database id".to_string())?;
+        let db_file_name = database_file_name(&self.databases_dir, &database_id)?;
+        tx.execute(
+            "INSERT INTO databases
+             (database_id, db_file_name, mount_id, active_mount_id, status, schema_version,
+              logical_size_bytes, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?3, 'hot', ?4, 0, ?5, ?5)",
+            params![
+                database_id,
+                db_file_name,
+                i64::from(mount_id),
+                DATABASE_SCHEMA_VERSION,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO database_members
+             (database_id, principal, role, created_at_ms)
+             VALUES (?1, ?2, 'owner', ?3)",
+            params![database_id, caller, now],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(DatabaseMeta {
+            database_id,
+            db_file_name,
+            mount_id,
+            schema_version: DATABASE_SCHEMA_VERSION.to_string(),
+            logical_size_bytes: 0,
+        })
     }
 
     pub fn reserve_database(
@@ -1202,6 +1264,41 @@ fn validate_database_id(database_id: &str) -> Result<(), String> {
         return Err("database_id may only contain ASCII letters, digits, '-' and '_'".to_string());
     }
     Ok(())
+}
+
+fn generated_database_id(caller: &str, now: i64, mount_id: u16, attempt: u32) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(caller.as_bytes());
+    hasher.update(now.to_be_bytes());
+    hasher.update(mount_id.to_be_bytes());
+    hasher.update(attempt.to_be_bytes());
+    format!(
+        "{GENERATED_DATABASE_ID_PREFIX}{}",
+        base32_lower(&hasher.finalize())[..GENERATED_DATABASE_ID_HASH_CHARS].to_string()
+    )
+}
+
+fn base32_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut output = String::new();
+    let mut buffer = 0_u16;
+    let mut bit_count = 0_u8;
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bit_count += 8;
+        while bit_count >= 5 {
+            let shift = bit_count - 5;
+            let index = ((buffer >> shift) & 0b11111) as usize;
+            output.push(ALPHABET[index] as char);
+            bit_count -= 5;
+            buffer &= (1_u16 << bit_count) - 1;
+        }
+    }
+    if bit_count > 0 {
+        let index = ((buffer << (5 - bit_count)) & 0b11111) as usize;
+        output.push(ALPHABET[index] as char);
+    }
+    output
 }
 
 fn database_file_name(databases_dir: &Path, database_id: &str) -> Result<String, String> {
