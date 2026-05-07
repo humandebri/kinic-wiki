@@ -1,6 +1,6 @@
 // Where: wikibrowser/lib/aeo/pages.ts
-// What: Allowlisted answer page targets for AI-readable public memory pages.
-// Why: Indexed pages must never expose arbitrary canister IDs or VFS paths.
+// What: Kinic's allowlisted answer page targets for AI-readable public memory pages.
+// Why: The reusable AEO boundary is the page config, not arbitrary canister IDs or VFS paths.
 
 export type AeoPageConfig = {
   slug: string;

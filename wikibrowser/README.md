@@ -111,6 +111,8 @@ The `/w/<canister-id>/db/<database-id>/...` URLs are served by a `/w` shell thro
 ## AEO Publish MVP
 
 `/answers/<slug>` serves allowlisted AI-readable public memory pages. These pages run on the Next server with ISR and read Markdown from the configured Kinic Wiki canister.
+AEO Publish is not dynamic answer generation and does not call an LLM for each search request. The published answer page is rendered from canonical Markdown so crawlers can read stable answer HTML.
+This MVP is Kinic's first AEO publish layer: question demand informs which allowlisted answer pages are added next, and the answer asset set expands without exposing the arbitrary `/w/*` browser.
 
 Environment:
 
@@ -125,6 +127,7 @@ Rules:
 - `/w/*` remains the arbitrary canister browser and is marked `noindex`.
 - `sitemap.xml` only lists `/answers/*`.
 - `robots.txt` allows `OAI-SearchBot` and blocks `/w/*`.
+- The service boundary is the AEO page allowlist, `sitemap.xml`, `llms.txt`, `robots.txt`, and JSON-LD generated from `AeoPageConfig`.
 
 AEO Markdown must include limited frontmatter:
 
