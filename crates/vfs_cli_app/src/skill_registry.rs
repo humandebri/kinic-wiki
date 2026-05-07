@@ -262,6 +262,7 @@ async fn write_file_node(
     path: &str,
     content: String,
 ) -> Result<()> {
+    let current = client.read_node(database_id, path).await?;
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.to_string(),
@@ -269,7 +270,7 @@ async fn write_file_node(
             kind: NodeKind::File,
             content,
             metadata_json: "{}".to_string(),
-            expected_etag: None,
+            expected_etag: current.map(|node| node.etag),
         })
         .await?;
     Ok(())

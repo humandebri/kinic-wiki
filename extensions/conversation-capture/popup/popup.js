@@ -2,6 +2,7 @@
 // What: Popup settings for the injected ChatGPT capture button.
 // Why: Page capture now happens in the content UI; popup only stores destination config.
 const canisterInput = document.querySelector("#canister-id");
+const databaseInput = document.querySelector("#database-id");
 const hostInput = document.querySelector("#host");
 const saveButton = document.querySelector("#save-settings");
 const statusText = document.querySelector("#status");
@@ -21,6 +22,7 @@ async function load() {
   try {
     const response = await send({ type: "load-config" });
     canisterInput.value = response.config.canisterId;
+    databaseInput.value = response.config.databaseId;
     hostInput.value = response.config.host;
   } catch (error) {
     statusText.textContent = error instanceof Error ? error.message : String(error);
@@ -38,6 +40,7 @@ async function send(message) {
 function currentConfig() {
   return {
     canisterId: canisterInput.value.trim(),
+    databaseId: databaseInput.value.trim(),
     host: hostInput.value.trim() || "https://icp0.io"
   };
 }

@@ -17,7 +17,7 @@ import {
 test("createExportState initializes direct-api state", () => {
   const state = createExportState({
     limit: 10,
-    config: { canisterId: "abc", host: "http://127.0.0.1:8001" },
+    config: { canisterId: "abc", databaseId: "team-db", host: "http://127.0.0.1:8001" },
     originalUrl: "https://chatgpt.com/",
     startedAt: "2026-05-01T00:00:00.000Z"
   });
@@ -104,7 +104,7 @@ test("exportTarget saves immediately after fetching a valid conversation", async
   const target = { id: "abc", title: "Project", url: "https://chatgpt.com/c/abc" };
   const event = await exportTarget(
     target,
-    { canisterId: "canister", host: "http://127.0.0.1:8001" },
+    { canisterId: "canister", databaseId: "team-db", host: "http://127.0.0.1:8001" },
     async (message) => {
       calls.push(["save", message.capture.conversationTitle]);
       return { result: { path: "/Sources/raw/chatgpt-abc/chatgpt-abc.md", created: true } };

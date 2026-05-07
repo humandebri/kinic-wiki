@@ -26,6 +26,7 @@ function idlFactory({ IDL: idl }) {
     metadata_json: idl.Text
   });
   const WriteNodeRequest = idl.Record({
+    database_id: idl.Text,
     path: idl.Text,
     kind: NodeKind,
     content: idl.Text,
@@ -40,7 +41,7 @@ function idlFactory({ IDL: idl }) {
   });
   const WriteNodeResult = idl.Record({ node: NodeMutationAck, created: idl.Bool });
   return idl.Service({
-    read_node: idl.Func([idl.Text], [idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text })], ["query"]),
+    read_node: idl.Func([idl.Text, idl.Text], [idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text })], ["query"]),
     write_node: idl.Func([WriteNodeRequest], [idl.Variant({ Ok: WriteNodeResult, Err: idl.Text })], [])
   });
 }

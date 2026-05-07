@@ -7,7 +7,7 @@ import { cancelCurrentTabExport, resumeCurrentTabExport, startCurrentTabExport }
 import { DEFAULT_EXPORT_LIMIT, normalizeExportLimit } from "./history-links.js";
 
 const ROOT_ID = "kinic-conversation-capture-root";
-const config = signal({ canisterId: "", host: "https://icp0.io" });
+const config = signal({ canisterId: "", databaseId: "", host: "https://icp0.io" });
 const countText = signal(String(DEFAULT_EXPORT_LIMIT));
 const status = signal("idle");
 const error = signal("");
@@ -15,7 +15,7 @@ const panelOpen = signal(false);
 const logs = signal([]);
 const phase = signal("idle");
 const progress = signal({ total: 0, done: 0, ok: 0, failed: 0 });
-const canExport = computed(() => Boolean(config.value.canisterId && status.value !== "exporting"));
+const canExport = computed(() => Boolean(config.value.canisterId && config.value.databaseId && status.value !== "exporting"));
 let resumeStarted = false;
 
 ensureMounted();
@@ -60,6 +60,10 @@ function Modal() {
         <label class="row">
           <span>Canister ID</span>
           <input value={config.value.canisterId} onInput={(event) => updateConfig({ canisterId: event.currentTarget.value })} />
+        </label>
+        <label class="row">
+          <span>Database ID</span>
+          <input value={config.value.databaseId} onInput={(event) => updateConfig({ databaseId: event.currentTarget.value })} />
         </label>
         <label class="row">
           <span>IC host</span>
@@ -156,7 +160,11 @@ function updateConfig(patch) {
 }
 
 function normalizedConfig() {
-  return { canisterId: config.value.canisterId.trim(), host: config.value.host.trim() || "https://icp0.io" };
+  return {
+    canisterId: config.value.canisterId.trim(),
+    databaseId: config.value.databaseId.trim(),
+    host: config.value.host.trim() || "https://icp0.io"
+  };
 }
 
 async function send(message) {

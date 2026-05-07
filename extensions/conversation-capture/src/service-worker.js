@@ -2,21 +2,23 @@
 // What: MV3 background workflow for canister persistence.
 // Why: Content scripts fetch ChatGPT data while the worker owns canister writes.
 import { buildRawSource } from "./raw-source.js";
-import { createVfsActor } from "./vfs-actor.js";
 
 const DEFAULT_CONFIG = {
   canisterId: "",
+  databaseId: "",
   host: "https://icp0.io"
 };
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message, sender).then(sendResponse, (error) => {
-    sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+if (globalThis.chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handleMessage(message, sender).then(sendResponse, (error) => {
+      sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    });
+    return true;
   });
-  return true;
-});
+}
 
-async function handleMessage(message, sender) {
+export async function handleMessage(message, sender) {
   if (message?.type === "save-source") {
     return { ok: true, result: await saveSource(message.capture, message.config) };
   }
@@ -30,19 +32,24 @@ async function handleMessage(message, sender) {
   return { ok: false, error: "unknown message type" };
 }
 
-async function saveSource(capture, overrideConfig) {
-  const config = { ...(await loadConfig()), ...(overrideConfig || {}) };
+export async function saveSource(capture, overrideConfig, deps = {}) {
+  const actorFactory = deps.createVfsActor || defaultCreateVfsActor;
+  const config = { ...(await loadConfig(deps.storage)), ...(overrideConfig || {}) };
   if (!config.canisterId) {
     throw new Error("canister id is required");
   }
+  if (!config.databaseId) {
+    throw new Error("database id is required");
+  }
   const raw = buildRawSource(capture);
-  const actor = await createVfsActor(config);
-  const existing = await actor.read_node(raw.path);
+  const actor = await actorFactory(config);
+  const existing = await actor.read_node(config.databaseId, raw.path);
   if ("Err" in existing) {
     throw new Error(existing.Err);
   }
   const expected = existing.Ok[0]?.etag ? [existing.Ok[0].etag] : [];
   const result = await actor.write_node({
+    database_id: config.databaseId,
     path: raw.path,
     kind: { Source: null },
     content: raw.content,
@@ -52,7 +59,7 @@ async function saveSource(capture, overrideConfig) {
   if ("Err" in result) {
     throw new Error(result.Err);
   }
-  await saveConfig(config);
+  await saveConfig(config, deps.storage);
   return {
     path: raw.path,
     sourceId: raw.sourceId,
@@ -61,17 +68,24 @@ async function saveSource(capture, overrideConfig) {
   };
 }
 
-async function loadConfig() {
-  const stored = await chrome.storage.sync.get(DEFAULT_CONFIG);
+async function defaultCreateVfsActor(config) {
+  const { createVfsActor } = await import("./vfs-actor.js");
+  return createVfsActor(config);
+}
+
+export async function loadConfig(storage = chrome.storage.sync) {
+  const stored = await storage.get(DEFAULT_CONFIG);
   return {
     canisterId: String(stored.canisterId || ""),
+    databaseId: String(stored.databaseId || ""),
     host: String(stored.host || DEFAULT_CONFIG.host)
   };
 }
 
-async function saveConfig(config) {
-  await chrome.storage.sync.set({
+export async function saveConfig(config, storage = chrome.storage.sync) {
+  await storage.set({
     canisterId: String(config?.canisterId || ""),
+    databaseId: String(config?.databaseId || ""),
     host: String(config?.host || DEFAULT_CONFIG.host)
   });
 }

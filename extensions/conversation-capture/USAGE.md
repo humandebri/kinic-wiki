@@ -43,6 +43,7 @@ Use these extension settings:
 
 - `IC host`: `http://127.0.0.1:8001`
 - `Canister ID`: the `wiki` canister ID from `local-wiki`
+- `Database ID`: the target database id
 
 ## Export
 
@@ -75,7 +76,7 @@ icp canister call wiki status '()' -e local-wiki
 The extension only writes raw evidence. Generate wiki pages from the CLI:
 
 ```bash
-cargo run -p vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
+cargo run -p vfs-cli -- --database-id <database_id> generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
 ```
 
 ## Known Limits

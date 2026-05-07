@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use vfs_client::VfsApi;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
@@ -22,6 +23,7 @@ use vfs_types::{
 struct SkillMockClient {
     nodes: Mutex<BTreeMap<String, Node>>,
     searches: Mutex<Vec<SearchNodesRequest>>,
+    writes: AtomicUsize,
 }
 
 #[async_trait]
@@ -46,22 +48,38 @@ impl VfsApi for SkillMockClient {
     }
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
+        let mut nodes = self.nodes.lock().expect("nodes lock");
+        let created = !nodes.contains_key(&request.path);
+        if let Some(current) = nodes.get(&request.path) {
+            if request.expected_etag.as_deref() != Some(current.etag.as_str()) {
+                anyhow::bail!(
+                    "expected_etag does not match current etag: {}",
+                    request.path
+                );
+            }
+        } else if request.expected_etag.is_some() {
+            anyhow::bail!("expected_etag must be None for new node: {}", request.path);
+        }
+        let write_id = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
+        let etag = format!("etag-write-{write_id}");
         let node = Node {
             path: request.path.clone(),
-            kind: request.kind,
+            kind: request.kind.clone(),
             content: request.content,
             created_at: 1,
             updated_at: 2,
-            etag: "etag-write".to_string(),
+            etag: etag.clone(),
             metadata_json: request.metadata_json,
         };
-        self.nodes
-            .lock()
-            .expect("nodes lock")
-            .insert(request.path.clone(), node);
+        nodes.insert(request.path.clone(), node);
         Ok(WriteNodeResult {
-            created: true,
-            node: ack(&request.path),
+            created,
+            node: vfs_types::NodeMutationAck {
+                path: request.path,
+                kind: request.kind.clone(),
+                updated_at: 2,
+                etag,
+            },
         })
     }
 
@@ -188,6 +206,21 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
             .unwrap()
             .is_some()
     );
+    write(
+        temp.path(),
+        "SKILL.md",
+        "# Legal Review\n\nReview redlines and contract risks.",
+    );
+    upsert_skill(&client, "default", temp.path(), "acme/legal-review", false)
+        .await
+        .expect("second upsert updates existing skill");
+    let updated_skill = client
+        .read_node("default", "/Wiki/skills/acme/legal-review/SKILL.md")
+        .await
+        .expect("read updated skill")
+        .expect("skill exists")
+        .content;
+    assert!(updated_skill.contains("contract risks"));
 
     let found = find_skills(&client, "default", "redlines", false, 10)
         .await
@@ -357,13 +390,4 @@ fn manifest(status: &str) -> String {
     format!(
         "---\nkind: kinic.skill\nschema_version: 1\nid: acme/legal-review\nversion: 0.1.0\npublisher: acme\nentry: SKILL.md\nsummary: Contract review\ntags:\n  - legal\nuse_cases:\n  - Review redlines\nstatus: {status}\n---\n# Skill Manifest\n"
     )
-}
-
-fn ack(path: &str) -> vfs_types::NodeMutationAck {
-    vfs_types::NodeMutationAck {
-        path: path.to_string(),
-        kind: NodeKind::File,
-        updated_at: 2,
-        etag: "etag".to_string(),
-    }
 }
