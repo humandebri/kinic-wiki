@@ -558,7 +558,7 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, SkillCommand, SkillStatusArg};
+    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillStatusArg};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -615,6 +615,27 @@ mod tests {
         assert_eq!(depth, 2);
         assert_eq!(limit, 9);
         assert!(!json);
+    }
+
+    #[test]
+    fn main_cli_parses_database_link_commands() {
+        let cli = Cli::parse_from(["vfs-cli", "database", "link", "team-db"]);
+        let Command::Database {
+            command: DatabaseCommand::Link { database_id },
+        } = cli.command
+        else {
+            panic!("expected database link command");
+        };
+        assert_eq!(database_id, "team-db");
+
+        let cli = Cli::parse_from(["vfs-cli", "database", "current", "--json"]);
+        let Command::Database {
+            command: DatabaseCommand::Current { json },
+        } = cli.command
+        else {
+            panic!("expected database current command");
+        };
+        assert!(json);
     }
 
     #[test]

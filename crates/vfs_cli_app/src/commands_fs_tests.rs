@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::tempdir;
+use vfs_cli::connection::ResolvedConnection;
 use vfs_client::VfsApi;
 use vfs_types::{
     AppendNodeRequest, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
@@ -37,6 +38,17 @@ pub(crate) struct MockClient {
     pub(crate) multi_edits: std::sync::Mutex<Vec<MultiEditNodeRequest>>,
     pub(crate) searches: std::sync::Mutex<Vec<SearchNodesRequest>>,
     pub(crate) path_searches: std::sync::Mutex<Vec<SearchNodePathsRequest>>,
+}
+
+fn test_connection() -> ResolvedConnection {
+    ResolvedConnection {
+        replica_host: "http://127.0.0.1:8000".to_string(),
+        canister_id: "aaaaa-aa".to_string(),
+        database_id: Some("default".to_string()),
+        replica_host_source: "test".to_string(),
+        canister_id_source: "test".to_string(),
+        database_id_source: Some("test".to_string()),
+    }
 }
 
 struct SnapshotRestartClient {
@@ -553,6 +565,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
                     json: false,
                 },
             },
+            &test_connection(),
         )
         .await
         .expect("canonical source path should pass");
@@ -593,6 +606,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
                     json: false,
                 },
             },
+            &test_connection(),
         )
         .await
         .expect_err("non-canonical source path should fail");

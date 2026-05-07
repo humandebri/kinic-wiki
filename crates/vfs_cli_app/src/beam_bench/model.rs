@@ -558,6 +558,17 @@ mod tests {
         }
     }
 
+    fn test_connection() -> ResolvedConnection {
+        ResolvedConnection {
+            replica_host: "http://127.0.0.1:8000".to_string(),
+            canister_id: "aaaaa-aa".to_string(),
+            database_id: Some("default".to_string()),
+            replica_host_source: "test".to_string(),
+            canister_id_source: "test".to_string(),
+            database_id_source: Some("test".to_string()),
+        }
+    }
+
     #[test]
     fn codex_schema_paths_are_unique() {
         let paths = (0..16)
@@ -569,13 +580,7 @@ mod tests {
 
     #[test]
     fn codex_prompt_includes_benchmark_routing_guidance() {
-        let prompt = codex_prompt(
-            &test_context(),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
-        );
+        let prompt = codex_prompt(&test_context(), &test_connection());
         assert!(!prompt.contains("structured notes are preferred"));
         assert!(!prompt.contains("Stay within the wiki prefix"));
         assert!(!prompt.contains("Start from `/Wiki/index.md`"));
@@ -599,13 +604,7 @@ mod tests {
 
     #[test]
     fn codex_prompt_embeds_scope_and_abstention_rules_from_skill() {
-        let prompt = codex_prompt(
-            &test_context(),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
-        );
+        let prompt = codex_prompt(&test_context(), &test_connection());
         assert!(prompt.contains("Prefer scope-first exploration."));
         assert!(prompt.contains("Preserve exact value formatting"));
         assert!(prompt.contains("Do not answer from an index, list, or search result alone."));
@@ -642,13 +641,8 @@ mod tests {
         ));
         assert!(!prompt.contains("Benchmark-specific extraction exemplars:"));
 
-        let abstention_prompt = codex_prompt(
-            &test_context_with_type("abstention"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
-        );
+        let abstention_prompt =
+            codex_prompt(&test_context_with_type("abstention"), &test_connection());
         assert!(abstention_prompt.contains(
             "For abstention questions, only an explicit statement in a note counts as evidence."
         ));
@@ -664,10 +658,7 @@ mod tests {
 
         let update_prompt = codex_prompt(
             &test_context_with_type("knowledge_update"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
+            &test_connection(),
         );
         assert!(update_prompt.contains(
             "If the notes describe an update event but do not state the resulting current value, answer exactly `insufficient evidence`."
@@ -684,10 +675,7 @@ mod tests {
     fn codex_prompt_includes_question_type_specific_answer_shapes() {
         let contradiction_prompt = codex_prompt(
             &test_context_with_type("contradiction_resolution"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
+            &test_connection(),
         );
         assert!(contradiction_prompt.contains(
             "Explicitly say there is contradictory information and ask which statement is correct."
@@ -696,10 +684,7 @@ mod tests {
 
         let temporal_prompt = codex_prompt(
             &test_context_with_type("temporal_reasoning"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
+            &test_connection(),
         );
         assert!(temporal_prompt.contains(
             "Extract the relevant dates, times, or sequence anchors from the notes before answering."
@@ -708,10 +693,7 @@ mod tests {
 
         let summary_prompt = codex_prompt(
             &test_context_with_type("multi_session_reasoning"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
+            &test_connection(),
         );
         assert!(summary_prompt.contains(
             "Use `summary.md` as the base note and add only the minimum supporting notes needed to complete the answer."
@@ -720,10 +702,7 @@ mod tests {
 
         let extraction_prompt = codex_prompt(
             &test_context_with_type("information_extraction"),
-            &ResolvedConnection {
-                replica_host: "http://127.0.0.1:8000".to_string(),
-                canister_id: "aaaaa-aa".to_string(),
-            },
+            &test_connection(),
         );
         assert!(extraction_prompt.contains(
             "For explanatory extraction questions such as `how did`, `what approach`, `what steps`, or `how did X influence Y`, answer with one short grounded sentence or two short clauses"

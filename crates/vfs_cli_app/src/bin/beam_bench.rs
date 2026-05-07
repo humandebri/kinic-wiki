@@ -72,16 +72,21 @@ enum QuestionClassArg {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let connection = resolve_connection(cli.connection.local, cli.connection.canister_id.clone())?;
+    let connection = resolve_connection(
+        cli.connection.local,
+        cli.connection.canister_id.clone(),
+        cli.connection.database_id.clone(),
+    )?;
+    let database_id = connection
+        .database_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?;
     run_beam_bench(
         connection,
         BeamBenchArgs {
             dataset_path: cli.dataset_path,
             split: cli.split,
-            database_id: cli
-                .connection
-                .database_id
-                .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?,
+            database_id,
             model: cli.model,
             output_dir: cli.output_dir,
             eval_mode: match cli.eval_mode {

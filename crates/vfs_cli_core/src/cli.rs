@@ -230,6 +230,18 @@ pub enum DatabaseCommand {
     Create {
         database_id: String,
     },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Link {
+        database_id: String,
+    },
+    Current {
+        #[arg(long)]
+        json: bool,
+    },
+    Unlink,
     Grant {
         database_id: String,
         principal: String,

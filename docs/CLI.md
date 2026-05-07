@@ -8,7 +8,7 @@ Use the CLI commands below for shell workflows and local mirror operations.
 
 ## Connection
 
-Use `--canister-id` to select a canister explicitly. DB-backed VFS commands also require `--database-id`; no production `default` database is created implicitly.
+Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require an explicit database selection from `--database-id`, `VFS_DATABASE_ID`, `.kinic/config.toml`, or user config. No production `default` database is created implicitly.
 
 ```bash
 cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
@@ -23,16 +23,28 @@ cargo run -p vfs-cli -- --local --database-id <database-id> status
 Without `--canister-id`, the CLI reads configuration from:
 
 - `VFS_CANISTER_ID`
+- `.kinic/config.toml`
 - `~/.config/vfs-cli/config.toml`
 - `~/.vfs-cli.toml`
+
+Link a workspace once to avoid repeating `--database-id`:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database link <database-id>
+cargo run -p vfs-cli -- database current
+cargo run -p vfs-cli -- skill find "contract review"
+```
+
+Resolution priority is CLI flag, env, `.kinic/config.toml`, user config, then host default. Use `database unlink` to remove the workspace DB link.
 
 Create a database before reading or writing:
 
 ```bash
 cargo run -p vfs-cli -- --canister-id <canister-id> database create <database-id>
 cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
-cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/file.md --input file.md
-cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> search-remote "budget" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli -- --canister-id <canister-id> database link <database-id>
+cargo run -p vfs-cli -- write-node --path /Wiki/file.md --input file.md
+cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
 Archive and restore are low-level canister APIs for snapshot bytes. The CLI does not yet persist archive bytes for you. See [`DB_LIFECYCLE.md`](DB_LIFECYCLE.md) for status, slot reuse, and restore validation details.

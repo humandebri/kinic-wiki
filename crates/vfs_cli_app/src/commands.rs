@@ -21,17 +21,22 @@ use vfs_cli::commands::{
     collect_paged_snapshot, collect_paged_updates, resync_required_error, run_vfs_command,
     snapshot_restart_required_error,
 };
+use vfs_cli::connection::ResolvedConnection;
 use vfs_client::VfsApi;
 use vfs_types::{DeleteNodeRequest, WriteNodeRequest};
 
-pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
+pub async fn run_command(
+    client: &impl VfsApi,
+    cli: Cli,
+    connection: &ResolvedConnection,
+) -> Result<()> {
     let Cli {
         command,
-        connection,
+        connection: _,
     } = cli;
     let database_id = connection.database_id.as_deref();
     if let Some(vfs_command) = command.as_vfs_command() {
-        return run_vfs_command(client, database_id, vfs_command).await;
+        return run_vfs_command(client, connection, vfs_command).await;
     }
     match command {
         Command::Skill { command } => {
@@ -333,7 +338,7 @@ fn read_local_status(mirror_root: &Path) -> Result<(MirrorState, usize)> {
 fn require_database_id(database_id: Option<&str>) -> Result<&str> {
     database_id
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("--database-id is required for DB-backed VFS operations"))
+        .ok_or_else(|| anyhow!("database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"))
 }
 
 fn mirror_state_exists(mirror_root: &Path) -> bool {

@@ -96,23 +96,24 @@ Optional fields:
 
 ## CLI Usage
 
-Use `skill` commands with an explicit database ID.
+Use `database link` once, then run `skill` commands without repeating `--database-id`.
 They are thin wrappers over normal VFS nodes and do not add canister schema or path-level ACL.
 
 ```bash
 cargo run -p vfs-cli --bin vfs-cli -- database create team-skills
-cargo run -p vfs-cli --bin vfs-cli -- --database-id <database-id> skill upsert --source-dir ./skills/legal-review --id acme/legal-review
-cargo run -p vfs-cli --bin vfs-cli -- --database-id <database-id> skill find "review contract redlines"
-cargo run -p vfs-cli --bin vfs-cli -- --database-id <database-id> skill inspect acme/legal-review --json
-cargo run -p vfs-cli --bin vfs-cli -- --database-id <database-id> skill record-run acme/legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
-cargo run -p vfs-cli --bin vfs-cli -- --database-id <database-id> skill set-status acme/legal-review --status promoted
+cargo run -p vfs-cli --bin vfs-cli -- database link team-skills
+cargo run -p vfs-cli --bin vfs-cli -- skill upsert --source-dir ./skills/legal-review --id acme/legal-review
+cargo run -p vfs-cli --bin vfs-cli -- skill find "review contract redlines"
+cargo run -p vfs-cli --bin vfs-cli -- skill inspect acme/legal-review --json
+cargo run -p vfs-cli --bin vfs-cli -- skill record-run acme/legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
+cargo run -p vfs-cli --bin vfs-cli -- skill set-status acme/legal-review --status promoted
 ```
 
 Share access with database member commands:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- database grant --database-id <database-id> --principal <principal> --role Reader
-cargo run -p vfs-cli --bin vfs-cli -- database grant --database-id <database-id> --principal <principal> --role Writer
+cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> reader
+cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> writer
 ```
 
 ## Browser

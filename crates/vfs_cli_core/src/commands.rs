@@ -16,6 +16,10 @@ use vfs_types::{
 use wiki_domain::{WIKI_ROOT_PATH, validate_source_path_for_kind};
 
 use crate::cli::{DatabaseCommand, VfsCommand};
+use crate::connection::{
+    ResolvedConnection, ResolvedConnectionPreview, link_workspace_database,
+    unlink_workspace_database, workspace_config_path,
+};
 
 pub const SYNC_PAGE_LIMIT: u32 = 100;
 pub const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
@@ -24,13 +28,14 @@ pub const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no long
 
 pub async fn run_vfs_command(
     client: &impl VfsApi,
-    database_id: Option<&str>,
+    connection: &ResolvedConnection,
     command: VfsCommand,
 ) -> Result<()> {
     if let VfsCommand::Database { command } = command {
-        run_database_command(client, command).await?;
+        run_database_command(client, connection, command).await?;
         return Ok(());
     }
+    let database_id = connection.database_id.as_deref();
     let database_id = require_database_id(database_id)?;
     match command {
         VfsCommand::Database { .. } => {
@@ -442,11 +447,41 @@ fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) -> Result<()> {
+async fn run_database_command(
+    client: &impl VfsApi,
+    connection: &ResolvedConnection,
+    command: DatabaseCommand,
+) -> Result<()> {
     match command {
         DatabaseCommand::Create { database_id } => {
             client.create_database(&database_id).await?;
             println!("{database_id}");
+        }
+        DatabaseCommand::List { json } => {
+            let databases = client.list_databases().await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&databases)?);
+            } else {
+                for database in databases {
+                    println!(
+                        "{}\t{:?}\t{}\t{}",
+                        database.database_id,
+                        database.status,
+                        database.schema_version,
+                        database.logical_size_bytes
+                    );
+                }
+            }
+        }
+        DatabaseCommand::Link { database_id } => {
+            let path = link_workspace_database(connection, &database_id)?;
+            println!("{}", path.display());
+        }
+        DatabaseCommand::Current { json } => {
+            print_database_current(&ResolvedConnectionPreview::from(connection), json)?
+        }
+        DatabaseCommand::Unlink => {
+            run_database_unlink()?;
         }
         DatabaseCommand::Grant {
             database_id,
@@ -484,10 +519,50 @@ async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) ->
     Ok(())
 }
 
+pub fn print_database_current(connection: &ResolvedConnectionPreview, json: bool) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "canister_id": connection.canister_id,
+                "canister_id_source": connection.canister_id_source,
+                "database_id": connection.database_id,
+                "database_id_source": connection.database_id_source,
+                "replica_host": connection.replica_host,
+                "replica_host_source": connection.replica_host_source
+            }))?
+        );
+    } else {
+        println!(
+            "canister_id: {}",
+            connection.canister_id.as_deref().unwrap_or("")
+        );
+        println!(
+            "database_id: {}",
+            connection.database_id.as_deref().unwrap_or("")
+        );
+        println!("replica_host: {}", connection.replica_host);
+        println!(
+            "source: {}",
+            connection
+                .database_id_source
+                .as_deref()
+                .unwrap_or("unresolved")
+        );
+    }
+    Ok(())
+}
+
+pub fn run_database_unlink() -> Result<()> {
+    let path = unlink_workspace_database()?.unwrap_or(workspace_config_path()?);
+    println!("{}", path.display());
+    Ok(())
+}
+
 fn require_database_id(database_id: Option<&str>) -> Result<&str> {
     database_id
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("--database-id is required for DB-backed VFS operations"))
+        .ok_or_else(|| anyhow!("database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"))
 }
 
 fn print_link_summary(label: &str, links: &[LinkEdge]) {
@@ -628,6 +703,7 @@ fn read_multi_edit_file(path: &std::path::Path) -> Result<Vec<MultiEdit>> {
 mod tests {
     use super::run_vfs_command;
     use crate::cli::{NodeKindArg, VfsCommand};
+    use crate::connection::ResolvedConnection;
     use anyhow::Result;
     use async_trait::async_trait;
     use std::path::PathBuf;
@@ -642,6 +718,17 @@ mod tests {
         child_lists: Mutex<Vec<ListChildrenRequest>>,
         contexts: Mutex<Vec<NodeContextRequest>>,
         neighborhoods: Mutex<Vec<GraphNeighborhoodRequest>>,
+    }
+
+    fn test_connection() -> ResolvedConnection {
+        ResolvedConnection {
+            replica_host: "http://127.0.0.1:8000".to_string(),
+            canister_id: "aaaaa-aa".to_string(),
+            database_id: Some("alpha".to_string()),
+            replica_host_source: "test".to_string(),
+            canister_id_source: "test".to_string(),
+            database_id_source: Some("test".to_string()),
+        }
     }
 
     #[async_trait]
@@ -764,7 +851,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::WriteNode {
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKindArg::Source,
@@ -784,7 +871,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::ListChildren {
                 path: "/Wiki".to_string(),
                 json: true,
@@ -800,7 +887,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::ReadNodeContext {
                 path: "/Wiki/a.md".to_string(),
                 link_limit: 7,
@@ -819,7 +906,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::GraphNeighborhood {
                 center_path: "/Wiki/a.md".to_string(),
                 depth: 2,
