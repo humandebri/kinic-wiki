@@ -97,7 +97,8 @@ fn fs_migrations_create_tables() {
         ]
     );
 
-    for table in ["fs_links"] {
+    {
+        let table = "fs_links";
         let exists = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
@@ -230,6 +231,7 @@ fn assert_prefix_scope_with_wildcards(
 
     let list_paths = store
         .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
             prefix: prefix.to_string(),
             recursive: true,
         })
@@ -242,6 +244,7 @@ fn assert_prefix_scope_with_wildcards(
 
     let recent_paths = store
         .recent_nodes(RecentNodesRequest {
+            database_id: "default".to_string(),
             path: Some(prefix.to_string()),
             limit: 100,
         })
@@ -254,6 +257,7 @@ fn assert_prefix_scope_with_wildcards(
 
     let search_paths = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "wildcard-token".to_string(),
             prefix: Some(prefix.to_string()),
             top_k: 100,
@@ -268,6 +272,7 @@ fn assert_prefix_scope_with_wildcards(
 
     let path_search_paths = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "page".to_string(),
             prefix: Some(prefix.to_string()),
             top_k: 100,
@@ -282,6 +287,7 @@ fn assert_prefix_scope_with_wildcards(
 
     let snapshot = store
         .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
             prefix: Some(prefix.to_string()),
             limit: 100,
             cursor: None,
@@ -301,6 +307,7 @@ fn assert_prefix_scope_with_wildcards(
     update_searchable_file(&store, lookalike_path, &lookalike_etag, now_base + 11);
     let updates = store
         .fetch_updates(FetchUpdatesRequest {
+            database_id: "default".to_string(),
             known_snapshot_revision: snapshot.snapshot_revision,
             prefix: Some(prefix.to_string()),
             limit: 100,
@@ -321,6 +328,7 @@ fn write_searchable_file(store: &FsStore, path: &str, now: i64) -> String {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: "wildcard-token body".to_string(),
@@ -338,6 +346,7 @@ fn update_searchable_file(store: &FsStore, path: &str, etag: &str, now: i64) {
     store
         .write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: format!("wildcard-token updated {now}"),
@@ -1213,6 +1222,7 @@ fn list_children_returns_direct_children_with_virtual_directories() {
 
     let tree_children = store
         .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
             path: "/Wiki/tree".to_string(),
         })
         .expect("concrete node with descendants should list children");
@@ -1350,6 +1360,7 @@ fn root_prefix_searches_all_nodes() {
 
     let search_hits = store
         .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
             query_text: "root-search".to_string(),
             prefix: Some("/".to_string()),
             top_k: 10,
@@ -1365,6 +1376,7 @@ fn root_prefix_searches_all_nodes() {
 
     let path_hits = store
         .search_node_paths(SearchNodePathsRequest {
+            database_id: "default".to_string(),
             query_text: "root-search".to_string(),
             prefix: Some("/".to_string()),
             top_k: 10,

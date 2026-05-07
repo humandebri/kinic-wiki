@@ -19,6 +19,7 @@ use vfs_types::{
     SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest,
     WriteNodeResult,
 };
+use wiki_domain::validate_source_path_for_kind;
 
 const INDEX_SCHEMA_VERSION_INITIAL: &str = "database_index:000_initial";
 const INDEX_SCHEMA_VERSION_LIFECYCLE: &str = "database_index:001_lifecycle";
@@ -43,6 +44,16 @@ pub enum RequiredRole {
     Reader,
     Writer,
     Owner,
+}
+
+pub struct UsageEvent<'a> {
+    pub method: &'a str,
+    pub database_id: Option<&'a str>,
+    pub caller: &'a str,
+    pub success: bool,
+    pub cycles_delta: u128,
+    pub error: Option<&'a str>,
+    pub now: i64,
 }
 
 pub struct VfsService {
@@ -81,29 +92,20 @@ impl VfsService {
         load_database_infos_for_caller(&conn, caller)
     }
 
-    pub fn record_usage_event(
-        &self,
-        method: &str,
-        database_id: Option<&str>,
-        caller: &str,
-        success: bool,
-        cycles_delta: u128,
-        error: Option<&str>,
-        now: i64,
-    ) -> Result<(), String> {
+    pub fn record_usage_event(&self, event: UsageEvent<'_>) -> Result<(), String> {
         let conn = self.open_index()?;
         conn.execute(
             "INSERT INTO usage_events
              (method, database_id, caller, success, cycles_delta, error, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                method,
-                database_id,
-                caller,
-                if success { 1_i64 } else { 0_i64 },
-                i64::try_from(cycles_delta).unwrap_or(i64::MAX),
-                error,
-                now
+                event.method,
+                event.database_id,
+                event.caller,
+                if event.success { 1_i64 } else { 0_i64 },
+                i64::try_from(event.cycles_delta).unwrap_or(i64::MAX),
+                event.error,
+                event.now
             ],
         )
         .map_err(|error| error.to_string())?;

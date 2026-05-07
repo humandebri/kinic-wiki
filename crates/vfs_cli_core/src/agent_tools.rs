@@ -12,7 +12,8 @@ use vfs_types::{
     NodeKind, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
     SearchPreviewMode, WriteNodeRequest,
 };
-use wiki_domain::WIKI_ROOT_PATH;
+
+use crate::cli::DEFAULT_VFS_ROOT_PATH;
 
 pub struct ToolResult {
     pub text: String,
@@ -147,7 +148,7 @@ async fn dispatch_tool_call_impl(
         "ls" => {
             let args: ListArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "entries": client.list_nodes(ListNodesRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| WIKI_ROOT_PATH.to_string()), recursive: args.recursive.unwrap_or(false) }).await? }),
+                json!({ "entries": client.list_nodes(ListNodesRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string()), recursive: args.recursive.unwrap_or(false) }).await? }),
             )
         }
         "mkdir" => {
@@ -178,13 +179,13 @@ async fn dispatch_tool_call_impl(
         "glob" => {
             let args: GlobArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.glob_nodes(GlobNodesRequest { database_id: database_id(args.database_id)?, pattern: args.pattern, path: args.path, node_type: args.node_type }).await? }),
+                json!({ "hits": client.glob_nodes(GlobNodesRequest { database_id: database_id(args.database_id)?, pattern: args.pattern, path: Some(args.path.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), node_type: args.node_type }).await? }),
             )
         }
         "recent" => {
             let args: RecentArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.recent_nodes(RecentNodesRequest { database_id: database_id(args.database_id)?, limit: args.limit.unwrap_or(10), path: args.path }).await? }),
+                json!({ "hits": client.recent_nodes(RecentNodesRequest { database_id: database_id(args.database_id)?, limit: args.limit.unwrap_or(10), path: Some(args.path.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())) }).await? }),
             )
         }
         "graph_neighborhood" => {
@@ -196,7 +197,7 @@ async fn dispatch_tool_call_impl(
         "graph_links" => {
             let args: GraphLinksArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "links": client.graph_links(GraphLinksRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| WIKI_ROOT_PATH.to_string()), limit: args.limit.unwrap_or(100) }).await? }),
+                json!({ "links": client.graph_links(GraphLinksRequest { database_id: database_id(args.database_id)?, prefix: args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string()), limit: args.limit.unwrap_or(100) }).await? }),
             )
         }
         "incoming_links" => {
@@ -239,13 +240,13 @@ async fn dispatch_tool_call_impl(
         "search" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_nodes(SearchNodesRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: args.prefix, top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
+                json!({ "hits": client.search_nodes(SearchNodesRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         "search_paths" => {
             let args: SearchArgs = serde_json::from_value(input)?;
             tool_ok(
-                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: args.prefix, top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
+                json!({ "hits": client.search_node_paths(SearchNodePathsRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),

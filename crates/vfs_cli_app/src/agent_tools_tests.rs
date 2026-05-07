@@ -276,13 +276,22 @@ impl VfsApi for ToolMockClient {
 async fn agent_tools_default_read_scopes_to_vfs_root() {
     let client = ToolMockClient::default();
     for (name, input) in [
-        ("ls", serde_json::json!({})),
-        ("glob", serde_json::json!({ "pattern": "**/*.md" })),
-        ("recent", serde_json::json!({ "limit": 5 })),
-        ("search", serde_json::json!({ "query_text": "nested" })),
+        ("ls", serde_json::json!({ "database_id": "default" })),
+        (
+            "glob",
+            serde_json::json!({ "database_id": "default", "pattern": "**/*.md" }),
+        ),
+        (
+            "recent",
+            serde_json::json!({ "database_id": "default", "limit": 5 }),
+        ),
+        (
+            "search",
+            serde_json::json!({ "database_id": "default", "query_text": "nested" }),
+        ),
         (
             "search_paths",
-            serde_json::json!({ "query_text": "nested" }),
+            serde_json::json!({ "database_id": "default", "query_text": "nested" }),
         ),
     ] {
         let result = handle_anthropic_tool_call(&client, name, input)

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
 use tempfile::tempdir;
-use vfs_runtime::VfsService;
+use vfs_runtime::{UsageEvent, VfsService};
 use vfs_types::{
     DatabaseRole, DatabaseStatus, NodeKind, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
@@ -80,9 +80,7 @@ fn schema_migration_count(root: &std::path::Path, version: &str) -> i64 {
     .expect("migration count should load")
 }
 
-fn usage_event_rows(
-    root: &std::path::Path,
-) -> Vec<(
+type UsageEventTuple = (
     String,
     Option<String>,
     String,
@@ -90,7 +88,9 @@ fn usage_event_rows(
     i64,
     Option<String>,
     i64,
-)> {
+);
+
+fn usage_event_rows(root: &std::path::Path) -> Vec<UsageEventTuple> {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.prepare(
         "SELECT method, database_id, caller, success, cycles_delta, error, created_at_ms
@@ -180,18 +180,26 @@ fn records_minimal_usage_events() {
     let (service, root) = service_with_root();
 
     service
-        .record_usage_event("write_node", Some("alpha"), "owner", true, 12, None, 10)
+        .record_usage_event(UsageEvent {
+            method: "write_node",
+            database_id: Some("alpha"),
+            caller: "owner",
+            success: true,
+            cycles_delta: 12,
+            error: None,
+            now: 10,
+        })
         .expect("success event should record");
     service
-        .record_usage_event(
-            "create_database",
-            None,
-            "owner",
-            false,
-            34,
-            Some("database already exists"),
-            11,
-        )
+        .record_usage_event(UsageEvent {
+            method: "create_database",
+            database_id: None,
+            caller: "owner",
+            success: false,
+            cycles_delta: 34,
+            error: Some("database already exists"),
+            now: 11,
+        })
         .expect("failure event should record");
 
     let rows = usage_event_rows(&root);

@@ -12,7 +12,7 @@ use candid::export_service;
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
-use vfs_runtime::{DatabaseMeta, VfsService};
+use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DatabaseArchiveChunk,
     DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
@@ -529,15 +529,15 @@ where
         let after_cycles = cycle_balance();
         let cycles_delta = before_cycles.saturating_sub(after_cycles);
         let error = result.as_ref().err().map(String::as_str);
-        let _ = service.record_usage_event(
+        let _ = service.record_usage_event(UsageEvent {
             method,
-            database_id.as_deref(),
-            &caller,
-            result.is_ok(),
+            database_id: database_id.as_deref(),
+            caller: &caller,
+            success: result.is_ok(),
             cycles_delta,
             error,
             now,
-        );
+        });
         result
     })
 }

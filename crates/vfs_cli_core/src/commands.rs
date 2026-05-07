@@ -684,6 +684,7 @@ mod tests {
                 etag: Some("etag".to_string()),
                 size_bytes: Some(5),
                 is_virtual: false,
+                has_children: false,
             }])
         }
         async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
