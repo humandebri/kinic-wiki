@@ -11,8 +11,19 @@ import {
   fetchRecentConversationTargets,
   isValidState,
   mapWithConcurrency,
-  readExportState
+  readExportState,
+  writeExportState
 } from "../src/current-tab-export.js";
+import { handleMessage, validateSaveSource } from "../src/service-worker.js";
+
+const VALID_CAPTURE = {
+  provider: "chatgpt",
+  conversationTitle: "Project",
+  url: "https://chatgpt.com/c/abc",
+  capturedAt: "2026-05-01T00:00:00.000Z",
+  messages: [{ role: "user", content: "Hello" }]
+};
+const VALID_SENDER = { tab: { url: "https://chatgpt.com/c/abc" } };
 
 test("createExportState initializes direct-api state", () => {
   const state = createExportState({
@@ -164,15 +175,58 @@ test("advanceState records direct-api success and errors in order", () => {
   assert.match(state.logs[1].message, /via direct api/);
 });
 
-test("readExportState removes stale and invalid state", () => {
+test("advanceState gives same-title same-timestamp logs unique ids", () => {
+  const originalCrypto = globalThis.crypto;
+  const originalDateNow = Date.now;
+  let uuid = 0;
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: { randomUUID: () => `uuid-${(uuid += 1)}` }
+  });
+  Date.now = () => 1;
+  try {
+    let state = createExportState({
+      limit: 2,
+      config: {},
+      originalUrl: "https://chatgpt.com/",
+      startedAt: "2026-05-01T00:00:00.000Z"
+    });
+    state = advanceState(state, { ok: true, title: "One", provider: "ChatGPT", captureMethod: "direct api", created: true });
+    state = advanceState(state, { ok: true, title: "One", provider: "ChatGPT", captureMethod: "direct api", created: false });
+
+    assert.notEqual(state.logs[0].id, state.logs[1].id);
+  } finally {
+    Date.now = originalDateNow;
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
+});
+
+test("readExportState removes stale and invalid state", async () => {
   const storage = memoryStorage();
   storage.setItem("kinic-current-tab-export-v1", JSON.stringify({ version: 1, expiresAt: "2026-05-01T00:00:00.000Z" }));
 
-  assert.equal(readExportState(storage), null);
+  assert.equal(await readExportState(storage), null);
   assert.equal(storage.getItem("kinic-current-tab-export-v1"), null);
 
   storage.setItem("kinic-current-tab-export-v1", JSON.stringify({ links: [] }));
-  assert.equal(readExportState(storage), null);
+  assert.equal(await readExportState(storage), null);
+});
+
+test("readExportState uses runtime-backed export state adapter by default", async () => {
+  const restore = installRuntimeStorage(memoryStorage());
+  try {
+    const state = createExportState({
+      limit: 1,
+      config: {},
+      originalUrl: "https://chatgpt.com/",
+      startedAt: new Date().toISOString()
+    });
+    await writeExportState(state);
+
+    assert.equal((await readExportState()).status, "exporting");
+  } finally {
+    restore();
+  }
 });
 
 test("isValidState accepts non-expired schema v1 state", () => {
@@ -200,6 +254,83 @@ test("mapWithConcurrency does not exceed the configured limit", async () => {
 
   assert.equal(maxActive, 2);
   assert.deepEqual(results, [2, 4, 6, 8, 10]);
+});
+
+test("validateSaveSource accepts ChatGPT captures from ChatGPT tabs", () => {
+  assert.doesNotThrow(() => validateSaveSource(VALID_CAPTURE, VALID_SENDER));
+  assert.doesNotThrow(() =>
+    validateSaveSource(
+      { ...VALID_CAPTURE, url: "https://chat.openai.com/c/abc" },
+      { tab: { url: "https://chat.openai.com/c/abc" } }
+    )
+  );
+});
+
+test("validateSaveSource rejects non-ChatGPT senders and capture urls", () => {
+  assert.throws(
+    () => validateSaveSource(VALID_CAPTURE, { tab: { url: "https://evil.test/c/abc" } }),
+    /sender must be a ChatGPT tab/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, url: "https://evil.test/c/abc" }, VALID_SENDER),
+    /capture url must be a ChatGPT conversation/
+  );
+});
+
+test("validateSaveSource rejects wrong provider and malformed messages", () => {
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, provider: "other" }, VALID_SENDER),
+    /provider must be chatgpt/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [] }, VALID_SENDER),
+    /non-empty array/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [{ role: "user", content: 1 }] }, VALID_SENDER),
+    /string role and content/
+  );
+});
+
+test("handleMessage stores export state in chrome.storage.session", async () => {
+  const restore = installChromeStorageSession(memoryStorage());
+  try {
+    await handleMessage({ type: "export-state-set", key: "kinic-current-tab-export-v1", value: "state" }, {});
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: "state" }
+    );
+    await handleMessage({ type: "export-state-remove", key: "kinic-current-tab-export-v1" }, {});
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: null }
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("handleMessage does not overwrite cancelled export state with stale progress", async () => {
+  const restore = installChromeStorageSession(memoryStorage());
+  try {
+    await handleMessage({
+      type: "export-state-set",
+      key: "kinic-current-tab-export-v1",
+      value: JSON.stringify({ status: "cancelled" })
+    }, {});
+    await handleMessage({
+      type: "export-state-set",
+      key: "kinic-current-tab-export-v1",
+      value: JSON.stringify({ status: "exporting", progress: { done: 1 } })
+    }, {});
+
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: JSON.stringify({ status: "cancelled" }) }
+    );
+  } finally {
+    restore();
+  }
 });
 
 function jsonResponse(payload, ok = true, status = 200) {
@@ -249,5 +380,62 @@ function memoryStorage() {
     removeItem(key) {
       values.delete(key);
     }
+  };
+}
+
+function installRuntimeStorage(storage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      runtime: {
+        async sendMessage(message) {
+          if (message.type === "export-state-get") {
+            return { ok: true, value: storage.getItem(message.key) };
+          }
+          if (message.type === "export-state-set") {
+            storage.setItem(message.key, message.value);
+            return { ok: true };
+          }
+          if (message.type === "export-state-remove") {
+            storage.removeItem(message.key);
+            return { ok: true };
+          }
+          return { ok: false, error: "unknown message type" };
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+}
+
+function installChromeStorageSession(storage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      storage: {
+        session: {
+          async get(key) {
+            return { [key]: storage.getItem(key) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              storage.setItem(key, value);
+            }
+          },
+          async remove(key) {
+            storage.removeItem(key);
+          }
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
   };
 }

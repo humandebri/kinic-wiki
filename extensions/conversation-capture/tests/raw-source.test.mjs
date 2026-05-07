@@ -26,6 +26,7 @@ test("buildRawSource emits canonical source path and metadata", () => {
   assert.match(raw.content, /### Turn 0001/);
   assert.equal(JSON.parse(raw.metadataJson).provider, "chatgpt");
   assert.equal(JSON.parse(raw.metadataJson).conversation_id, "abc");
+  assert.equal(JSON.parse(raw.metadataJson).message_count, 2);
 });
 
 test("buildRawSource keeps the same path for the same ChatGPT conversation", () => {
@@ -59,4 +60,20 @@ test("buildRawSource rejects empty captures", () => {
       }),
     /no conversation messages/
   );
+});
+
+test("buildRawSource escapes one-line markdown metadata values", () => {
+  const raw = buildRawSource({
+    provider: "chatgpt",
+    conversationTitle: "Title\n- message_count: 999 [link](https://evil.test)",
+    url: "https://chatgpt.com/c/abc?x=[link](https://evil.test)",
+    capturedAt: "2026-05-01T00:00:00.000Z",
+    messages: [{ role: "user", content: "Hello" }]
+  });
+
+  const metadata = JSON.parse(raw.metadataJson);
+  assert.equal(metadata.conversation_title, "Title\n- message_count: 999 [link](https://evil.test)");
+  assert.equal(metadata.message_count, 1);
+  assert.match(raw.content, /- conversation_title: "Title\\n- message_count: 999/);
+  assert.doesNotMatch(raw.content, /\n- conversation_title: Title\n- message_count: 999/);
 });
