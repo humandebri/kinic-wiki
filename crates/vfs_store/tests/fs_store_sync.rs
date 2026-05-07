@@ -661,6 +661,53 @@ fn export_snapshot_pages_nodes_by_path() {
 }
 
 #[test]
+fn export_snapshot_allows_prefix_external_change_between_pages() {
+    let (_dir, store) = new_store();
+    for index in 0..101 {
+        write_node(
+            &store,
+            &format!("/Wiki/{index:03}.md"),
+            "content",
+            None,
+            index,
+        );
+    }
+
+    let first = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect("first page should succeed");
+    write_node(
+        &store,
+        "/Sources/raw/source/outside.md",
+        "outside",
+        None,
+        500,
+    );
+
+    let second = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: first.next_cursor,
+            snapshot_revision: Some(first.snapshot_revision.clone()),
+            snapshot_session_id: None,
+        })
+        .expect("outside-prefix change should not invalidate snapshot page");
+
+    assert_eq!(second.snapshot_revision, first.snapshot_revision);
+    assert_eq!(second.nodes.len(), 1);
+    assert_eq!(second.nodes[0].path, "/Wiki/100.md");
+}
+
+#[test]
 fn export_snapshot_rejects_path_created_after_snapshot_revision() {
     let (_dir, store) = new_store();
     for index in 0..101 {
@@ -699,7 +746,7 @@ fn export_snapshot_rejects_path_created_after_snapshot_revision() {
 }
 
 #[test]
-fn export_snapshot_skips_deleted_path_after_snapshot_revision() {
+fn export_snapshot_rejects_deleted_path_after_snapshot_revision() {
     let (_dir, store) = new_store();
     for index in 0..101 {
         write_node(
@@ -746,9 +793,8 @@ fn export_snapshot_skips_deleted_path_after_snapshot_revision() {
             snapshot_revision: Some(first.snapshot_revision),
             snapshot_session_id: None,
         })
-        .expect("deleted path is no longer in stateless page");
-    assert_eq!(error.nodes, Vec::new());
-    assert_eq!(error.next_cursor, None);
+        .expect_err("deleted path should invalidate stateless paging");
+    assert_eq!(error, "snapshot_revision is no longer current");
 }
 
 #[test]

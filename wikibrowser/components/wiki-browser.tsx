@@ -68,7 +68,15 @@ export function WikiBrowser() {
   const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
+    if (!routeState.legacyPath || !routeState.canisterId) return;
+    router.replace(hrefForPath(routeState.canisterId, "default", routeState.nodePath));
+  }, [routeState.canisterId, routeState.legacyPath, routeState.nodePath, router]);
+
+  useEffect(() => {
     let cancelled = false;
+    if (routeState.legacyPath) {
+      return;
+    }
     if (typeof invalidCanister === "string") {
       return;
     }
@@ -123,7 +131,15 @@ export function WikiBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
+  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, routeState.legacyPath, selectedPath]);
+
+  if (routeState.legacyPath) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-paper px-6 text-sm text-muted">
+        Redirecting...
+      </main>
+    );
+  }
 
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
@@ -246,6 +262,9 @@ function TopBar({
       <div className="w-[168px] shrink-0">
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Wiki Canister Browser</p>
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
+      </div>
+      <div className="hidden min-w-0 max-w-[180px] shrink text-xs text-muted sm:block">
+        <span className="font-mono">db:</span> <span className="font-medium text-ink">{databaseId}</span>
       </div>
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
         <Link
@@ -432,10 +451,23 @@ function validateCanisterText(canisterId: string): string | null {
   return null;
 }
 
-function parseWikiRoute(pathname: string): { canisterId: string | null; databaseId: string | null; nodePath: string } {
+function parseWikiRoute(pathname: string): { canisterId: string | null; databaseId: string | null; nodePath: string; legacyPath: boolean } {
   const segments = pathname.split("/").filter(Boolean);
   if (segments[0] !== "w" || !segments[1] || segments[2] !== "db" || !segments[3]) {
-    return { canisterId: null, databaseId: null, nodePath: "/Wiki" };
+    if (segments[0] === "w" && segments[1]) {
+      const path = segments
+        .slice(2)
+        .filter(Boolean)
+        .map(decodePathSegment)
+        .join("/");
+      return {
+        canisterId: decodePathSegment(segments[1]),
+        databaseId: "default",
+        nodePath: path ? `/${path}` : "/Wiki",
+        legacyPath: true
+      };
+    }
+    return { canisterId: null, databaseId: null, nodePath: "/Wiki", legacyPath: false };
   }
   const path = segments
     .slice(4)
@@ -445,7 +477,8 @@ function parseWikiRoute(pathname: string): { canisterId: string | null; database
   return {
     canisterId: decodePathSegment(segments[1]),
     databaseId: decodePathSegment(segments[3]),
-    nodePath: path ? `/${path}` : "/Wiki"
+    nodePath: path ? `/${path}` : "/Wiki",
+    legacyPath: false
   };
 }
 

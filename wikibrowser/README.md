@@ -13,7 +13,7 @@ pnpm dev
 Open a canister with:
 
 ```text
-http://localhost:3000/w/<canister-id>/Wiki
+http://localhost:3000/w/<canister-id>/db/<database-id>/Wiki
 ```
 
 `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host:
@@ -62,7 +62,7 @@ pnpm dev
 Run the browser smoke against an existing file node:
 
 ```bash
-pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/Wiki/<existing-file>.md
+pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/db/<database-id>/Wiki/<existing-file>.md
 ```
 
 The URL must point to a readable file node. Directory paths and missing files intentionally fail.
@@ -104,9 +104,9 @@ Covered methods:
 ## Public MVP
 
 Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`.
-The app is public read-only and accepts arbitrary canister IDs.
+The app is public read-only and accepts arbitrary canister IDs. The target DB must grant reader access to anonymous principal `2vxsx-fae`.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
-The `/w/<canister-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway.
+The `/w/<canister-id>/db/<database-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway. Legacy `/w/<canister-id>/...` URLs redirect to `/db/default/...`.
 
 ## Troubleshooting
 

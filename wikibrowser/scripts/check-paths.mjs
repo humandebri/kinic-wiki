@@ -5,6 +5,7 @@ import ts from "typescript";
 
 const sourcePath = new URL("../lib/paths.ts", import.meta.url);
 const source = readFileSync(sourcePath, "utf8");
+const browserSource = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,
@@ -48,5 +49,7 @@ assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/demo/index.md", "https://example.com"),
   null
 );
+assert.match(browserSource, /if \(routeState\.legacyPath\) \{\s+return;/);
+assert.match(browserSource, /Redirecting\.\.\./);
 
 console.log(`Path helpers OK: ${pathToFileURL(sourcePath.pathname).pathname}`);

@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
-use candid::export_service;
+use candid::{Principal, export_service};
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
@@ -134,6 +134,9 @@ fn grant_database_access(
         "grant_database_access",
         Some(database_id.clone()),
         |service, caller, now| {
+            let principal = Principal::from_text(&principal)
+                .map_err(|error| format!("invalid principal: {error}"))?
+                .to_text();
             service.grant_database_access(&database_id, caller, &principal, role, now)
         },
     )

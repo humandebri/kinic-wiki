@@ -736,6 +736,11 @@ impl FsStore {
                 prefix: prefix.clone(),
             },
         };
+        if request.snapshot_revision.is_some()
+            && has_prefix_changes_after_revision(&conn, &prefix, snapshot.revision)?
+        {
+            return Err(SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string());
+        }
         let mut nodes = load_snapshot_nodes_page(
             &conn,
             &prefix,
@@ -1071,6 +1076,25 @@ fn load_changed_paths_page(
     stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn has_prefix_changes_after_revision(
+    conn: &Connection,
+    prefix: &str,
+    snapshot_revision: i64,
+) -> Result<bool, String> {
+    let mut sql = String::from("SELECT 1 FROM fs_change_log WHERE revision > ?1");
+    let mut values = vec![rusqlite::types::Value::from(snapshot_revision)];
+    if prefix != "/" {
+        let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
+        sql.push_str(&scope_sql);
+        values.extend(scope_values);
+    }
+    sql.push_str(" LIMIT 1");
+    conn.prepare(&sql)
+        .map_err(|error| error.to_string())?
+        .exists(rusqlite::params_from_iter(values))
         .map_err(|error| error.to_string())
 }
 

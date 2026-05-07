@@ -15,8 +15,8 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use vfs_cli::commands::{
-    collect_paged_snapshot, collect_paged_updates, resync_required_error, run_vfs_command,
-    snapshot_restart_required_error,
+    collect_paged_snapshot, collect_paged_updates, database_id_or_env, resync_required_error,
+    run_vfs_command, snapshot_restart_required_error,
 };
 use vfs_client::VfsApi;
 use vfs_types::{DeleteNodeRequest, WriteNodeRequest};
@@ -32,11 +32,11 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
     }
     match command {
         Command::RebuildIndex => {
-            rebuild_index(client, require_database_id(database_id)?).await?;
+            rebuild_index(client, database_id_or_env(database_id)?.as_ref()).await?;
             println!("index rebuilt");
         }
         Command::RebuildScopeIndex { scope } => {
-            rebuild_scope_index(client, require_database_id(database_id)?, &scope).await?;
+            rebuild_scope_index(client, database_id_or_env(database_id)?.as_ref(), &scope).await?;
             println!("scope index rebuilt: {scope}");
         }
         Command::LintLocal {
@@ -52,8 +52,8 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
             mirror_root,
             json,
         } => {
-            let database_id = require_database_id(database_id)?;
-            let remote = client.status(database_id).await?;
+            let database_id = database_id_or_env(database_id)?;
+            let remote = client.status(database_id.as_ref()).await?;
             let local = vault_path
                 .as_deref()
                 .map(|vault| read_local_status(&vault.join(&mirror_root)))
@@ -80,7 +80,7 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
         } => {
             pull(
                 client,
-                require_database_id(database_id)?,
+                database_id_or_env(database_id)?.as_ref(),
                 &vault_path.join(mirror_root),
                 resync,
             )
@@ -92,7 +92,7 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
         } => {
             push(
                 client,
-                require_database_id(database_id)?,
+                database_id_or_env(database_id)?.as_ref(),
                 &vault_path.join(mirror_root),
             )
             .await?;
@@ -305,12 +305,6 @@ fn read_local_status(mirror_root: &Path) -> Result<(MirrorState, usize)> {
     let state = load_state(mirror_root)?;
     let tracked_count = collect_managed_nodes(mirror_root)?.len();
     Ok((state, tracked_count))
-}
-
-fn require_database_id(database_id: Option<&str>) -> Result<&str> {
-    database_id
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("--database-id is required for DB-backed VFS operations"))
 }
 
 fn mirror_state_exists(mirror_root: &Path) -> bool {

@@ -1,6 +1,7 @@
 // Where: crates/vfs_cli_core/src/commands.rs
 // What: Generic VFS command execution and sync paging helpers.
 // Why: The app-facing CLI package should delegate shared VFS command behavior instead of owning it.
+use std::borrow::Cow;
 use std::fs;
 
 use anyhow::{Result, anyhow};
@@ -31,7 +32,8 @@ pub async fn run_vfs_command(
         run_database_command(client, command).await?;
         return Ok(());
     }
-    let database_id = require_database_id(database_id)?;
+    let database_id = database_id_or_env(database_id)?;
+    let database_id = database_id.as_ref();
     match command {
         VfsCommand::Database { .. } => {
             unreachable!("database command handled before db requirement")
@@ -484,10 +486,18 @@ async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) ->
     Ok(())
 }
 
-fn require_database_id(database_id: Option<&str>) -> Result<&str> {
-    database_id
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("--database-id is required for DB-backed VFS operations"))
+pub fn database_id_or_env(database_id: Option<&str>) -> Result<Cow<'_, str>> {
+    if let Some(database_id) = database_id.filter(|value| !value.is_empty()) {
+        return Ok(Cow::Borrowed(database_id));
+    }
+    let env_database_id = std::env::var("VFS_DATABASE_ID").unwrap_or_default();
+    if env_database_id.is_empty() {
+        Err(anyhow!(
+            "--database-id is required for DB-backed VFS operations"
+        ))
+    } else {
+        Ok(Cow::Owned(env_database_id))
+    }
 }
 
 fn print_link_summary(label: &str, links: &[LinkEdge]) {
@@ -635,6 +645,8 @@ mod tests {
     use tempfile::tempdir;
     use vfs_client::VfsApi;
     use vfs_types::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Default)]
     struct MockClient {
@@ -793,6 +805,38 @@ mod tests {
         .await
         .expect("list children should succeed");
         assert_eq!(client.child_lists.lock().unwrap()[0].path, "/Wiki");
+    }
+
+    #[test]
+    fn database_id_falls_back_to_env() {
+        with_vfs_database_id("env-db", || {
+            let database_id = super::database_id_or_env(None).expect("env database id should load");
+            assert_eq!(database_id.as_ref(), "env-db");
+        });
+    }
+
+    #[test]
+    fn explicit_database_id_overrides_env() {
+        with_vfs_database_id("env-db", || {
+            let database_id =
+                super::database_id_or_env(Some("flag-db")).expect("flag database id should load");
+            assert_eq!(database_id.as_ref(), "flag-db");
+        });
+    }
+
+    fn with_vfs_database_id(value: &str, assert_fn: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous = std::env::var("VFS_DATABASE_ID").ok();
+        unsafe {
+            std::env::set_var("VFS_DATABASE_ID", value);
+        }
+        assert_fn();
+        unsafe {
+            match previous {
+                Some(previous) => std::env::set_var("VFS_DATABASE_ID", previous),
+                None => std::env::remove_var("VFS_DATABASE_ID"),
+            }
+        }
     }
 
     #[tokio::test]

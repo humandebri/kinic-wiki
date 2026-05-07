@@ -4,8 +4,9 @@
 use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
-use vfs_runtime::{UsageEvent, VfsService};
+use vfs_runtime::{USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService};
 use vfs_types::{
     DatabaseRole, DatabaseStatus, NodeKind, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
@@ -34,6 +35,10 @@ fn assert_restore_size(root: &std::path::Path, database_id: &str, expected: Opti
         )
         .expect("restore size row should exist");
     assert_eq!(actual.map(|size| size as u64), expected);
+}
+
+fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
 }
 
 fn database_index_row(
@@ -231,6 +236,61 @@ fn records_minimal_usage_events() {
 }
 
 #[test]
+fn usage_events_keep_recent_retention_window() {
+    let (service, root) = service_with_root();
+    let mut conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    let tx = conn.transaction().expect("transaction should start");
+
+    for index in 0..USAGE_EVENTS_RETENTION_LIMIT + 98 {
+        tx.execute(
+            "INSERT INTO usage_events
+             (method, database_id, caller, success, cycles_delta, error, created_at_ms)
+             VALUES ('write_node', 'alpha', 'owner', 1, 1, NULL, ?1)",
+            params![i64::try_from(index).expect("index should fit")],
+        )
+        .expect("usage event should insert");
+    }
+    tx.commit().expect("transaction should commit");
+
+    service
+        .record_usage_event(UsageEvent {
+            method: "write_node",
+            database_id: Some("alpha"),
+            caller: "owner",
+            success: true,
+            cycles_delta: 1,
+            error: None,
+            now: i64::try_from(USAGE_EVENTS_RETENTION_LIMIT + 98).expect("index should fit"),
+        })
+        .expect("usage event should record");
+    assert_eq!(
+        service
+            .usage_event_count()
+            .expect("usage count should load"),
+        USAGE_EVENTS_RETENTION_LIMIT + 99
+    );
+
+    service
+        .record_usage_event(UsageEvent {
+            method: "write_node",
+            database_id: Some("alpha"),
+            caller: "owner",
+            success: true,
+            cycles_delta: 1,
+            error: None,
+            now: i64::try_from(USAGE_EVENTS_RETENTION_LIMIT + 99).expect("index should fit"),
+        })
+        .expect("usage event should record");
+
+    assert_eq!(
+        service
+            .usage_event_count()
+            .expect("usage count should load"),
+        USAGE_EVENTS_RETENTION_LIMIT
+    );
+}
+
+#[test]
 fn creates_databases_with_unique_mount_ids() {
     let service = service();
 
@@ -400,7 +460,7 @@ fn isolates_nodes_between_databases() {
 }
 
 #[test]
-fn tracks_logical_size_and_reuses_deleted_slots() {
+fn tracks_logical_size_and_does_not_reuse_deleted_slots() {
     let (service, root) = service_with_root();
     let alpha = service
         .create_database("alpha", "owner", 1)
@@ -437,13 +497,13 @@ fn tracks_logical_size_and_reuses_deleted_slots() {
         service
             .read_node("alpha", "owner", "/Wiki/a.md")
             .expect_err("deleted DB should reject reads")
-            .contains("database not found")
+            .contains("database is deleted")
     );
 
     let beta = service
         .create_database("beta", "owner", 4)
-        .expect("beta should reuse freed slot");
-    assert_eq!(beta.mount_id, alpha.mount_id);
+        .expect("beta should create with a fresh slot");
+    assert_ne!(beta.mount_id, alpha.mount_id);
 }
 
 #[test]
@@ -508,8 +568,9 @@ fn archives_and_restores_database_bytes() {
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
         .expect("archive chunk should read");
     assert_eq!(full_chunk, bytes);
+    let snapshot_hash = sha256_bytes(&bytes);
     service
-        .finalize_database_archive("alpha", "owner", vec![1, 2, 3], 3)
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
         .expect("archive should finalize");
     assert_eq!(
         database_index_row(&root, "alpha"),
@@ -519,11 +580,17 @@ fn archives_and_restores_database_bytes() {
         service
             .read_node("alpha", "owner", "/Wiki/a.md")
             .expect_err("archived DB should reject reads")
-            .contains("database not found")
+            .contains("database is archived")
     );
 
     service
-        .begin_database_restore("alpha", "owner", vec![1, 2, 3], archive.size_bytes, 4)
+        .begin_database_restore(
+            "alpha",
+            "owner",
+            snapshot_hash.clone(),
+            archive.size_bytes,
+            4,
+        )
         .expect("restore should begin");
     let restoring = database_index_row(&root, "alpha");
     assert_eq!(restoring.0, "restoring");
@@ -532,8 +599,8 @@ fn archives_and_restores_database_bytes() {
     assert_eq!(restoring.3, Some(archive.size_bytes));
     let error = service
         .begin_database_restore("alpha", "owner", vec![1, 2, 3], archive.size_bytes, 5)
-        .expect_err("restoring DB should reject restore begin");
-    assert!(error.contains("database restore can only begin"));
+        .expect_err("invalid restore hash should fail before state checks");
+    assert!(error.contains("snapshot_hash must be"));
     assert_eq!(
         service
             .list_database_infos()
@@ -548,7 +615,7 @@ fn archives_and_restores_database_bytes() {
         service
             .read_node("alpha", "owner", "/Wiki/a.md")
             .expect_err("restoring DB should reject reads")
-            .contains("database not found")
+            .contains("database is restoring")
     );
     service
         .write_database_restore_chunk("alpha", "owner", 0, &bytes)
@@ -569,7 +636,7 @@ fn archives_and_restores_database_bytes() {
         .find(|info| info.database_id == "alpha")
         .expect("alpha info should exist");
     assert_eq!(info.status, DatabaseStatus::Hot);
-    assert_eq!(info.snapshot_hash, Some(vec![1, 2, 3]));
+    assert_eq!(info.snapshot_hash, Some(snapshot_hash));
     assert_eq!(info.archived_at_ms, None);
     assert_eq!(info.deleted_at_ms, None);
     assert_restore_size(&root, "alpha", None);
@@ -606,13 +673,14 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
         .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
     service
-        .finalize_database_archive("alpha", "owner", vec![1, 2, 3], 3)
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
         .expect("archive should finalize");
     assert_restore_size(&root, "alpha", None);
 
     service
-        .begin_database_restore("alpha", "owner", vec![1, 2, 3], archive.size_bytes, 4)
+        .begin_database_restore("alpha", "owner", snapshot_hash, archive.size_bytes, 4)
         .expect("restore should begin");
     assert_restore_size(&root, "alpha", Some(archive.size_bytes));
     let overflow_error = service
@@ -654,6 +722,59 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
 }
 
 #[test]
+fn archive_and_restore_reject_snapshot_hash_mismatch() {
+    let (service, _root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+
+    let archive = service
+        .begin_database_archive("alpha", "owner")
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let mut wrong_hash = sha256_bytes(&bytes);
+    wrong_hash[0] ^= 0xff;
+    let error = service
+        .finalize_database_archive("alpha", "owner", wrong_hash, 3)
+        .expect_err("wrong archive hash should fail");
+    assert!(error.contains("snapshot_hash does not match archived"));
+
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 4)
+        .expect("archive should finalize");
+    service
+        .begin_database_restore("alpha", "owner", snapshot_hash, archive.size_bytes, 5)
+        .expect("restore should begin");
+    let mut changed = bytes;
+    let last = changed.len() - 1;
+    changed[last] ^= 0xff;
+    service
+        .write_database_restore_chunk("alpha", "owner", 0, &changed)
+        .expect("restore chunk should write");
+    let error = service
+        .finalize_database_restore("alpha", "owner", 6)
+        .expect_err("wrong restored bytes should fail");
+    assert!(error.contains("snapshot_hash does not match restored"));
+}
+
+#[test]
 fn restore_accepts_in_range_chunks_written_out_of_order() {
     let (service, _root) = service_with_root();
     service
@@ -680,11 +801,18 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
         .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
     service
-        .finalize_database_archive("alpha", "owner", vec![9, 9, 9], 3)
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 3)
         .expect("archive should finalize");
     service
-        .begin_database_restore("alpha", "owner", vec![8, 8, 8], archive.size_bytes, 4)
+        .begin_database_restore(
+            "alpha",
+            "owner",
+            snapshot_hash.clone(),
+            archive.size_bytes,
+            4,
+        )
         .expect("restore should begin");
 
     let split_at = bytes.len() / 2;
@@ -709,7 +837,7 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
         .into_iter()
         .find(|info| info.database_id == "alpha")
         .expect("alpha info should exist");
-    assert_eq!(info.snapshot_hash, Some(vec![8, 8, 8]));
+    assert_eq!(info.snapshot_hash, Some(snapshot_hash));
 }
 
 #[test]

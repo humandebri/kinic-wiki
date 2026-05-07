@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use vfs_store::FsStore;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRole,
@@ -29,6 +30,9 @@ const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
+pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
+const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
+const SHA256_DIGEST_BYTES: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatabaseMeta {
@@ -109,6 +113,10 @@ impl VfsService {
             ],
         )
         .map_err(|error| error.to_string())?;
+        let event_id = conn.last_insert_rowid();
+        if event_id % USAGE_EVENTS_PURGE_INTERVAL == 0 {
+            let _ = purge_old_usage_events(&conn);
+        }
         Ok(())
     }
 
@@ -297,7 +305,12 @@ impl VfsService {
         now: i64,
     ) -> Result<(), String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
-        self.database_meta(database_id)?;
+        let meta = self.database_meta(database_id)?;
+        validate_snapshot_hash(&snapshot_hash)?;
+        let actual_hash = file_sha256(&meta.db_file_name)?;
+        if actual_hash != snapshot_hash {
+            return Err("snapshot_hash does not match archived database bytes".to_string());
+        }
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
@@ -323,6 +336,7 @@ impl VfsService {
         now: i64,
     ) -> Result<DatabaseMeta, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
+        validate_snapshot_hash(&snapshot_hash)?;
         let current_status = self.database_status(database_id)?;
         if !matches!(
             current_status,
@@ -433,6 +447,11 @@ impl VfsService {
             return Err(format!(
                 "restore size mismatch: expected {expected_size} bytes, got {size} bytes"
             ));
+        }
+        let expected_hash = self.restore_snapshot_hash(database_id)?;
+        let actual_hash = file_sha256(&meta.db_file_name)?;
+        if actual_hash != expected_hash {
+            return Err("snapshot_hash does not match restored database bytes".to_string());
         }
         FsStore::new(PathBuf::from(&meta.db_file_name)).run_fs_migrations()?;
         let mut conn = self.open_index()?;
@@ -868,8 +887,7 @@ impl VfsService {
 
     fn database_meta(&self, database_id: &str) -> Result<DatabaseMeta, String> {
         let conn = self.open_index()?;
-        load_database(&conn, database_id)?
-            .ok_or_else(|| format!("database not found: {database_id}"))
+        load_database(&conn, database_id)?.ok_or_else(|| database_meta_error(&conn, database_id))
     }
 
     fn database_meta_allowing_restoring(&self, database_id: &str) -> Result<DatabaseMeta, String> {
@@ -886,7 +904,7 @@ impl VfsService {
     ) -> Result<DatabaseMeta, String> {
         let conn = self.open_index()?;
         load_database_with_statuses(&conn, database_id, statuses)?
-            .ok_or_else(|| format!("database not found: {database_id}"))
+            .ok_or_else(|| database_meta_error(&conn, database_id))
     }
 
     fn database_status(&self, database_id: &str) -> Result<DatabaseStatus, String> {
@@ -916,13 +934,27 @@ impl VfsService {
             .ok_or_else(|| format!("restore size is missing: {database_id}"))
     }
 
+    fn restore_snapshot_hash(&self, database_id: &str) -> Result<Vec<u8>, String> {
+        let conn = self.open_index()?;
+        let hash: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT snapshot_hash FROM databases WHERE database_id = ?1",
+                params![database_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("database not found: {database_id}"))?;
+        hash.ok_or_else(|| format!("snapshot_hash is missing: {database_id}"))
+    }
+
     fn refresh_logical_size(&self, database_id: &str) -> Result<(), String> {
         let meta = self.database_meta_allowing_restoring(database_id)?;
         let size = file_size(&meta.db_file_name)?;
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
-             SET logical_size_bytes = ?2, updated_at_ms = updated_at_ms
+             SET logical_size_bytes = ?2
              WHERE database_id = ?1",
             params![database_id, i64::try_from(size).unwrap_or(i64::MAX)],
         )
@@ -1130,17 +1162,25 @@ fn database_file_name(databases_dir: &Path, database_id: &str) -> Result<String,
 }
 
 fn database_exists(conn: &Connection, database_id: &str) -> Result<bool, String> {
-    load_database(conn, database_id).map(|meta| meta.is_some())
+    conn.query_row(
+        "SELECT 1 FROM databases WHERE database_id = ?1",
+        params![database_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
 }
 
 fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
     let used = conn
         .prepare(
-            "SELECT active_mount_id
+            "SELECT mount_id AS used_mount_id FROM databases
+             UNION
+             SELECT active_mount_id AS used_mount_id
              FROM databases
              WHERE active_mount_id IS NOT NULL
-               AND status IN ('hot', 'restoring')
-             ORDER BY active_mount_id ASC",
+             ORDER BY used_mount_id ASC",
         )
         .map_err(|error| error.to_string())?
         .query_map([], |row| row.get::<_, i64>(0))
@@ -1165,6 +1205,60 @@ fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
         used.next();
     }
     Err("database mount_id capacity exhausted".to_string())
+}
+
+fn validate_snapshot_hash(snapshot_hash: &[u8]) -> Result<(), String> {
+    if snapshot_hash.len() == SHA256_DIGEST_BYTES {
+        Ok(())
+    } else {
+        Err(format!(
+            "snapshot_hash must be a {SHA256_DIGEST_BYTES}-byte SHA-256 digest"
+        ))
+    }
+}
+
+fn file_sha256(path: &str) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
+fn purge_old_usage_events(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM usage_events
+         WHERE event_id <= (
+           SELECT COALESCE(MAX(event_id), 0) - ?1 FROM usage_events
+         )",
+        params![i64::try_from(USAGE_EVENTS_RETENTION_LIMIT).unwrap_or(i64::MAX)],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn database_meta_error(conn: &Connection, database_id: &str) -> String {
+    match conn
+        .query_row(
+            "SELECT status FROM databases WHERE database_id = ?1",
+            params![database_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    {
+        Ok(Some(status))
+            if status == "archived" || status == "restoring" || status == "deleted" =>
+        {
+            format!("database is {status}: {database_id}")
+        }
+        _ => format!("database not found: {database_id}"),
+    }
 }
 
 fn load_database(conn: &Connection, database_id: &str) -> Result<Option<DatabaseMeta>, String> {

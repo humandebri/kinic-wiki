@@ -1,11 +1,12 @@
 // Where: crates/vfs_canister/src/tests.rs
 // What: Entry-point level tests for the FS-first canister surface.
 // Why: Phase 3 replaces the public canister contract, so tests must assert the wrapper behavior directly.
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, DatabaseStatus, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, EditNodeRequest,
+    ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
     NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
@@ -15,9 +16,9 @@ use vfs_types::{
 
 use super::{
     SERVICE, append_node, begin_database_archive, create_database, delete_node, edit_node,
-    export_snapshot, fetch_updates, finalize_database_archive, glob_nodes, graph_links,
-    graph_neighborhood, incoming_links, list_children, list_databases, list_nodes, memory_manifest,
-    mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
+    export_snapshot, fetch_updates, finalize_database_archive, glob_nodes, grant_database_access,
+    graph_links, graph_neighborhood, incoming_links, list_children, list_databases, list_nodes,
+    memory_manifest, mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
     read_database_archive_chunk, read_node, read_node_context, recent_nodes, search_node_paths,
     search_nodes, source_evidence, status, write_node,
 };
@@ -53,6 +54,10 @@ fn usage_event_count() -> u64 {
             .usage_event_count()
             .expect("usage count should load")
     })
+}
+
+fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
 }
 
 #[test]
@@ -126,6 +131,42 @@ fn query_entrypoints_do_not_record_usage_events() {
     .expect("snapshot query should succeed");
     assert_eq!(snapshot.snapshot_session_id, None);
     assert_eq!(usage_event_count(), 0);
+}
+
+#[test]
+fn grant_database_access_rejects_invalid_principal() {
+    install_test_service();
+
+    let error = grant_database_access(
+        "default".to_string(),
+        "not a principal".to_string(),
+        DatabaseRole::Reader,
+    )
+    .expect_err("invalid principal should fail");
+
+    assert!(error.contains("invalid principal"));
+}
+
+#[test]
+fn anonymous_reader_grant_allows_public_read() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("public", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("public", "owner", "2vxsx-fae", DatabaseRole::Reader, 2)
+        .expect("anonymous reader should grant");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+
+    let node = read_node("public".to_string(), "/Wiki/missing.md".to_string())
+        .expect("anonymous reader query should pass role check");
+
+    assert_eq!(node, None);
 }
 
 #[test]
@@ -679,12 +720,13 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
     }
     assert_eq!(bytes.len() as u64, archive.size_bytes);
 
-    finalize_database_archive("default".to_string(), vec![1, 2, 3])
+    let snapshot_hash = sha256_bytes(&bytes);
+    finalize_database_archive("default".to_string(), snapshot_hash.clone())
         .expect("archive should finalize");
     assert!(
         read_node("default".to_string(), "/Wiki/archive-smoke.md".to_string())
             .expect_err("archived DB should reject normal reads")
-            .contains("database not found")
+            .contains("database is archived")
     );
 
     let info = list_databases()
@@ -693,6 +735,6 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(info.status, DatabaseStatus::Archived);
-    assert_eq!(info.snapshot_hash, Some(vec![1, 2, 3]));
+    assert_eq!(info.snapshot_hash, Some(snapshot_hash));
     assert!(info.mount_id.is_none());
 }
