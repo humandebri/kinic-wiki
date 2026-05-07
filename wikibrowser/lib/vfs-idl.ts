@@ -103,26 +103,29 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     evidence: idl.Vec(SourceEvidence),
     truncated: idl.Bool
   });
-  const ListChildrenRequest = idl.Record({ path: idl.Text });
-  const RecentNodesRequest = idl.Record({ path: idl.Opt(idl.Text), limit: idl.Nat32 });
-  const IncomingLinksRequest = idl.Record({ path: idl.Text, limit: idl.Nat32 });
-  const OutgoingLinksRequest = idl.Record({ path: idl.Text, limit: idl.Nat32 });
-  const GraphLinksRequest = idl.Record({ prefix: idl.Text, limit: idl.Nat32 });
-  const GraphNeighborhoodRequest = idl.Record({ center_path: idl.Text, depth: idl.Nat32, limit: idl.Nat32 });
-  const NodeContextRequest = idl.Record({ path: idl.Text, link_limit: idl.Nat32 });
+  const ListChildrenRequest = idl.Record({ path: idl.Text, database_id: idl.Text });
+  const RecentNodesRequest = idl.Record({ path: idl.Opt(idl.Text), limit: idl.Nat32, database_id: idl.Text });
+  const IncomingLinksRequest = idl.Record({ path: idl.Text, limit: idl.Nat32, database_id: idl.Text });
+  const OutgoingLinksRequest = idl.Record({ path: idl.Text, limit: idl.Nat32, database_id: idl.Text });
+  const GraphLinksRequest = idl.Record({ prefix: idl.Text, limit: idl.Nat32, database_id: idl.Text });
+  const GraphNeighborhoodRequest = idl.Record({ center_path: idl.Text, depth: idl.Nat32, limit: idl.Nat32, database_id: idl.Text });
+  const NodeContextRequest = idl.Record({ path: idl.Text, link_limit: idl.Nat32, database_id: idl.Text });
   const SearchNodePathsRequest = idl.Record({
+    database_id: idl.Text,
     query_text: idl.Text,
     prefix: idl.Opt(idl.Text),
     top_k: idl.Nat32,
     preview_mode: idl.Opt(SearchPreviewMode)
   });
   const SearchNodesRequest = idl.Record({
+    database_id: idl.Text,
     query_text: idl.Text,
     prefix: idl.Opt(idl.Text),
     top_k: idl.Nat32,
     preview_mode: idl.Opt(SearchPreviewMode)
   });
   const QueryContextRequest = idl.Record({
+    database_id: idl.Text,
     task: idl.Text,
     entities: idl.Vec(idl.Text),
     namespace: idl.Opt(idl.Text),
@@ -130,7 +133,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     include_evidence: idl.Bool,
     depth: idl.Nat32
   });
-  const SourceEvidenceRequest = idl.Record({ node_path: idl.Text });
+  const SourceEvidenceRequest = idl.Record({ node_path: idl.Text, database_id: idl.Text });
   const ResultNode = idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text });
   const ResultChildren = idl.Variant({ Ok: idl.Vec(ChildNode), Err: idl.Text });
   const ResultRecent = idl.Variant({ Ok: idl.Vec(RecentNodeHit), Err: idl.Text });
@@ -147,7 +150,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     incoming_links: idl.Func([IncomingLinksRequest], [ResultLinks], ["query"]),
     memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
     query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
-    read_node: idl.Func([idl.Text], [ResultNode], ["query"]),
+    read_node: idl.Func([idl.Text, idl.Text], [ResultNode], ["query"]),
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"]),
     list_children: idl.Func([ListChildrenRequest], [ResultChildren], ["query"]),
     outgoing_links: idl.Func([OutgoingLinksRequest], [ResultLinks], ["query"]),

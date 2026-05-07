@@ -7,7 +7,7 @@ const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
-const { graphRequestKey, nodeRequestKey } = await importTs("../lib/request-keys.ts");
+const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
 const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
@@ -91,12 +91,16 @@ assert.deepEqual(
   ["# One", "## Two"]
 );
 assert.equal(splitMarkdownPreviewSections("No headings\nOnly prose").length, 1);
-assert.notEqual(nodeRequestKey("aaaaa-aa", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "/Wiki/index.md"));
+assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "alpha", "/Wiki/index.md"));
 assert.notEqual(
-  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 1),
-  graphRequestKey("aaaaa-aa", "/Wiki/index.md", 2)
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 2)
 );
-assert.equal(graphRequestKey("aaaaa-aa", null, 1), null);
+assert.equal(graphRequestKey("aaaaa-aa", "alpha", null, 1), null);
+assert.equal(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "full", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "beta", "path", "budget"));
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("bbbbb-bb", "alpha", "path", "budget"));
 assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
 assert.equal(formatCycles(850_000_000_000n), "850.00B");
 assert.equal(formatCycles(123_450_000n), "123.45M");

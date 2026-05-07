@@ -14,6 +14,7 @@ type ProvenanceState = {
 };
 export function Inspector({
   canisterId,
+  databaseId,
   path,
   node,
   childNodes,
@@ -23,6 +24,7 @@ export function Inspector({
   outgoingLinks
 }: {
   canisterId: string;
+  databaseId: string;
   path: string;
   node: WikiNode | null;
   childNodes: ChildNode[];
@@ -47,7 +49,7 @@ export function Inspector({
     }
     let cancelled = false;
     import("@/lib/vfs-client")
-      .then(({ readNode }) => readNode(canisterId, expectedProvenancePath))
+      .then(({ readNode }) => readNode(canisterId, databaseId, expectedProvenancePath))
       .then((provenanceNode) => {
         if (!cancelled) {
           setProvenance({
@@ -64,7 +66,7 @@ export function Inspector({
     return () => {
       cancelled = true;
     };
-  }, [canisterId, expectedProvenancePath]);
+  }, [canisterId, databaseId, expectedProvenancePath]);
 
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
@@ -99,7 +101,7 @@ export function Inspector({
           <ul className="space-y-1">
             {outgoingLinks.map((edge) => (
               <li key={`${edge.targetPath}-${edge.rawHref}`} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, edge.targetPath)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.targetPath)}>
                   {edge.targetPath}
                 </Link>
                 <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
@@ -121,7 +123,7 @@ export function Inspector({
           <ul className="space-y-1">
             {incomingLinks.map((edge) => (
               <li key={`${edge.sourcePath}-${edge.rawHref}`} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, edge.sourcePath)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.sourcePath)}>
                   {edge.sourcePath}
                 </Link>
                 <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
@@ -137,7 +139,7 @@ export function Inspector({
           <ul className="space-y-1">
             {rawSourceLinks.map((link) => (
               <li key={link} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, link)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, link)}>
                   {link}
                 </Link>
               </li>
