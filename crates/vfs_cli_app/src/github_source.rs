@@ -76,6 +76,14 @@ pub async fn fetch_github_skill_package(
     })
 }
 
+pub async fn fetch_github_optional_package_file(
+    source: &GitHubSkillSource,
+    sha: &str,
+    file: &str,
+) -> Result<Option<String>> {
+    fetch_optional_file(source, sha, file).await
+}
+
 pub async fn ensure_gh_ready() -> Result<()> {
     run_gh_version().await?;
     run_gh_auth_status().await

@@ -1,6 +1,7 @@
 use crate::cli::{SkillCommand, SkillImportCommand, SkillRunOutcomeArg, SkillStatusArg};
 use crate::github_source::{
-    fetch_github_skill_package, github_source_string, github_source_url, parse_github_skill_source,
+    fetch_github_optional_package_file, fetch_github_skill_package, github_source_string,
+    github_source_url, parse_github_skill_source,
 };
 mod model;
 use anyhow::{Context, Result, anyhow};
@@ -291,6 +292,23 @@ async fn import_github_skill(
     if let Some(evals) = package.evals {
         files.insert("evals.md".to_string(), evals);
     }
+    for target in markdown_link_targets(files.get("SKILL.md").expect("SKILL.md should exist")) {
+        let Some(relative_path) = markdown_target_package_key(&target) else {
+            continue;
+        };
+        if files.contains_key(&relative_path) {
+            continue;
+        }
+        if let Some(content) = fetch_github_optional_package_file(
+            &package.source,
+            &package.resolved_ref,
+            &relative_path,
+        )
+        .await?
+        {
+            files.insert(relative_path, content);
+        }
+    }
     write_skill_package(client, database_id, &skill_id, public, prune, files).await
 }
 
@@ -550,6 +568,11 @@ fn package_relative_markdown_path(
     Ok(path_to_package_key(relative_path))
 }
 
+pub(crate) fn markdown_target_package_key(raw_target: &str) -> Option<String> {
+    let target = clean_markdown_link_target(raw_target)?;
+    path_to_package_key(Path::new(&target))
+}
+
 fn clean_markdown_link_target(raw_target: &str) -> Option<String> {
     let target = raw_target.split_whitespace().next()?.trim();
     let target = target.split(['#', '?']).next()?.trim();
@@ -567,10 +590,11 @@ fn clean_markdown_link_target(raw_target: &str) -> Option<String> {
 fn path_to_package_key(path: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in path.components() {
-        let std::path::Component::Normal(part) = component else {
-            return None;
-        };
-        parts.push(part.to_str()?.to_string());
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_str()?.to_string()),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
     }
     if parts.is_empty() {
         None

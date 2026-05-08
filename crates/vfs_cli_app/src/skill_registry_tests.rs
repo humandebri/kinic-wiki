@@ -1,7 +1,7 @@
 use crate::cli::{SkillRunOutcomeArg, SkillStatusArg};
 use crate::skill_registry::{
-    SkillRunInput, approve_proposal, find_skills, inspect_skill, propose_improvement,
-    record_skill_run, set_skill_status, upsert_skill,
+    SkillRunInput, approve_proposal, find_skills, inspect_skill, markdown_target_package_key,
+    propose_improvement, record_skill_run, set_skill_status, upsert_skill,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -774,6 +774,25 @@ async fn skill_set_status_records_promoted_at_as_rfc3339() {
         .expect("manifest exists")
         .content;
     assert_rfc3339_field(&manifest, "promoted_at");
+}
+
+#[test]
+fn skill_markdown_targets_normalize_package_local_paths() {
+    assert_eq!(
+        markdown_target_package_key("ingest.md").as_deref(),
+        Some("ingest.md")
+    );
+    assert_eq!(
+        markdown_target_package_key("./docs/usage.md#setup").as_deref(),
+        Some("docs/usage.md")
+    );
+    assert_eq!(markdown_target_package_key("../outside.md"), None);
+    assert_eq!(markdown_target_package_key("/Wiki/skills/x.md"), None);
+    assert_eq!(
+        markdown_target_package_key("https://example.com/x.md"),
+        None
+    );
+    assert_eq!(markdown_target_package_key("image.png"), None);
 }
 
 #[tokio::test]
