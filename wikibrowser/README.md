@@ -136,7 +136,7 @@ Dashboard settings:
 - Build Command: `pnpm build`
 - Output Directory: Vercel default
 - Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>` for Preview and Production
-- Routing: keep `vercel.json` so `/:databaseId/:segments*` rewrites to the `/w` browser shell
+- Routing: keep `vercel.json` so `/:databaseId/:segments*` rewrites to the `/w` browser shell. Static export does not apply Next.js `rewrites()` from `next.config.ts`, so Vercel routing is the source of truth. Non-Vercel static hosts need an equivalent host-level rewrite.
 
 CLI deploy from this directory:
 

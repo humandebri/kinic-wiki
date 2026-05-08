@@ -6,19 +6,7 @@ const nextConfig: NextConfig = {
   env: {
     KINIC_WIKI_CANISTER_ID: process.env.KINIC_WIKI_CANISTER_ID ?? ""
   },
-  reactStrictMode: true,
-  async rewrites() {
-    return [
-      {
-        source: "/:databaseId",
-        destination: "/w"
-      },
-      {
-        source: "/:databaseId/:segments*",
-        destination: "/w"
-      }
-    ];
-  }
+  reactStrictMode: true
 };
 
 export default nextConfig;
