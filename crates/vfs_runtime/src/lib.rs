@@ -1311,7 +1311,7 @@ fn generated_database_id(caller: &str, now: i64, mount_id: u16, attempt: u32) ->
     hasher.update(attempt.to_be_bytes());
     format!(
         "{GENERATED_DATABASE_ID_PREFIX}{}",
-        base32_lower(&hasher.finalize())[..GENERATED_DATABASE_ID_HASH_CHARS].to_string()
+        &base32_lower(&hasher.finalize())[..GENERATED_DATABASE_ID_HASH_CHARS]
     )
 }
 
