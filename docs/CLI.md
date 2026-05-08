@@ -51,6 +51,8 @@ cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id>
 
 Archive and restore are low-level canister APIs for snapshot bytes. The CLI does not yet persist archive bytes for you. See [`DB_LIFECYCLE.md`](DB_LIFECYCLE.md) for status, slot reuse, and restore validation details.
 
+If `pull` or `push` reports a snapshot revision resync condition, run `pull --resync` before retrying the workflow.
+
 ## Search
 
 Full-text search uses `search-remote`.

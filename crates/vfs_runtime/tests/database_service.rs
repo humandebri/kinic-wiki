@@ -69,6 +69,16 @@ fn database_index_row(
     .expect("database index row should exist")
 }
 
+fn database_updated_at_ms(root: &std::path::Path, database_id: &str) -> i64 {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.query_row(
+        "SELECT updated_at_ms FROM databases WHERE database_id = ?1",
+        params![database_id],
+        |row| row.get(0),
+    )
+    .expect("database updated_at_ms should load")
+}
+
 fn database_member_count(root: &std::path::Path, database_id: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -626,6 +636,21 @@ fn delete_database_allows_missing_file_but_rejects_other_remove_errors() {
 }
 
 #[test]
+fn begin_database_archive_updates_updated_at_ms() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    assert_eq!(database_updated_at_ms(&root, "alpha"), 1);
+
+    service
+        .begin_database_archive("alpha", "owner", 2)
+        .expect("archive should begin");
+
+    assert_eq!(database_updated_at_ms(&root, "alpha"), 2);
+}
+
+#[test]
 fn archives_and_restores_database_bytes() {
     let (service, root) = service_with_root();
     service
@@ -653,8 +678,9 @@ fn archives_and_restores_database_bytes() {
             .contains("database")
     );
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
+    assert_eq!(database_updated_at_ms(&root, "alpha"), 2);
     assert!(archive.size_bytes > 0);
     let archiving = database_index_row(&root, "alpha");
     let archiving_mount_id = archiving.1;
@@ -877,7 +903,7 @@ fn restored_mount_id_is_not_reused_after_rearchive() {
         .expect("write should succeed");
 
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let bytes = archive_bytes_for_chunk_size(&service, "alpha", archive.size_bytes, 17);
     let snapshot_hash = sha256_bytes(&bytes);
@@ -895,7 +921,7 @@ fn restored_mount_id_is_not_reused_after_rearchive() {
         .expect("restore should finalize");
 
     let second_archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("second archive should begin");
     let second_bytes =
         archive_bytes_for_chunk_size(&service, "alpha", second_archive.size_bytes, 17);
@@ -936,7 +962,7 @@ fn cancel_database_archive_returns_archiving_database_to_hot() {
 
     let before = database_index_row(&root, "alpha");
     service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let archiving = database_index_row(&root, "alpha");
     assert_eq!(archiving.0, "archiving");
@@ -993,7 +1019,7 @@ fn cancel_database_archive_after_hash_mismatch_keeps_mount_id() {
         .expect("write should succeed");
     let before = database_index_row(&root, "alpha");
     service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
 
     assert!(
@@ -1029,7 +1055,7 @@ fn cancel_database_archive_rejects_invalid_statuses_and_non_owner() {
         .create_database("archiving_db", "owner", 3)
         .expect("archiving_db should create");
     service
-        .begin_database_archive("archiving_db", "owner")
+        .begin_database_archive("archiving_db", "owner", 2)
         .expect("archive should begin");
     assert!(
         service
@@ -1059,7 +1085,7 @@ fn cancel_database_archive_rejects_invalid_statuses_and_non_owner() {
         )
         .expect("write should succeed");
     let archive = service
-        .begin_database_archive("archived_db", "owner")
+        .begin_database_archive("archived_db", "owner", 2)
         .expect("archive should begin");
     let bytes = read_archive_in_chunks(&service, "archived_db", archive.size_bytes, 17);
     let snapshot_hash = sha256_bytes(&bytes);
@@ -1125,7 +1151,7 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
         .expect("write should succeed");
 
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
@@ -1200,7 +1226,7 @@ fn archive_and_restore_reject_snapshot_hash_mismatch() {
         .expect("write should succeed");
 
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
@@ -1254,7 +1280,7 @@ fn archive_and_restore_enforce_size_limits_without_state_changes() {
         .expect("write should succeed");
 
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
@@ -1315,7 +1341,7 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
         .expect("write should succeed");
 
     let archive = service
-        .begin_database_archive("alpha", "owner")
+        .begin_database_archive("alpha", "owner", 2)
         .expect("archive should begin");
     let bytes = service
         .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)

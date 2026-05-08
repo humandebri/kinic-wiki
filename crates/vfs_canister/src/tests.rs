@@ -835,7 +835,7 @@ fn cancel_database_archive_entrypoint_rejects_non_owner() {
         .create_database("default", "owner", 1_700_000_000_000)
         .expect("default database should create");
     service
-        .begin_database_archive("default", "owner")
+        .begin_database_archive("default", "owner", 1_700_000_000_001)
         .expect("archive should begin");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
 

@@ -336,6 +336,7 @@ impl VfsService {
         &self,
         database_id: &str,
         caller: &str,
+        now: i64,
     ) -> Result<DatabaseArchiveInfo, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         let meta = self.database_meta(database_id)?;
@@ -343,9 +344,10 @@ impl VfsService {
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
-             SET status = 'archiving'
+             SET status = 'archiving',
+                 updated_at_ms = ?2
              WHERE database_id = ?1",
-            params![database_id],
+            params![database_id, now],
         )
         .map_err(|error| error.to_string())?;
         Ok(DatabaseArchiveInfo {

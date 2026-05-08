@@ -11,11 +11,11 @@ test("processExportTargets records out-of-order worker completions without losin
   try {
     const state = exportingState(2);
     await writeExportState(state);
-    globalThis.fetch = async (url) => {
+    globalThis.fetch = chatGptFetch(async (url) => {
       const id = String(url).split("/").pop();
       if (id === "slow") await new Promise((resolve) => setTimeout(resolve, 10));
       return jsonResponse(conversationPayload(id, id));
-    };
+    });
 
     const states = [];
     const latest = await processExportTargets(
@@ -57,7 +57,7 @@ test("processExportTargets serializes state writes that would otherwise lose pro
   try {
     const state = exportingState(2);
     await writeExportState(state);
-    globalThis.fetch = async (url) => jsonResponse(conversationPayload(String(url).split("/").pop(), "Title"));
+    globalThis.fetch = chatGptFetch(async (url) => jsonResponse(conversationPayload(String(url).split("/").pop(), "Title")));
 
     const latest = await processExportTargets(
       [
@@ -91,7 +91,7 @@ test("processExportTargets suppresses events completed after cancellation", asyn
   try {
     const state = exportingState(1);
     await writeExportState(state);
-    globalThis.fetch = async () => jsonResponse(conversationPayload("cancelled", "Cancelled"));
+    globalThis.fetch = chatGptFetch(async () => jsonResponse(conversationPayload("cancelled", "Cancelled")));
 
     const latest = await processExportTargets(
       [{ id: "cancelled", title: "Cancelled", url: "https://chatgpt.com/c/cancelled" }],
@@ -128,7 +128,7 @@ test("processExportTargets does not overwrite cancellation during progress write
   try {
     const state = exportingState(1);
     await writeExportState(state);
-    globalThis.fetch = async () => jsonResponse(conversationPayload("cancelled", "Cancelled"));
+    globalThis.fetch = chatGptFetch(async () => jsonResponse(conversationPayload("cancelled", "Cancelled")));
 
     const latest = await processExportTargets(
       [{ id: "cancelled", title: "Cancelled", url: "https://chatgpt.com/c/cancelled" }],
@@ -157,10 +157,10 @@ test("processExportTargets does not save after cancellation before save starts",
     const state = exportingState(1);
     let saveCount = 0;
     await writeExportState(state);
-    globalThis.fetch = async () => {
+    globalThis.fetch = chatGptFetch(async () => {
       await writeExportState({ ...state, status: "cancelled" });
       return jsonResponse(conversationPayload("cancelled", "Cancelled"));
-    };
+    });
 
     const latest = await processExportTargets(
       [{ id: "cancelled", title: "Cancelled", url: "https://chatgpt.com/c/cancelled" }],
@@ -199,6 +199,15 @@ function jsonResponse(payload) {
     async json() {
       return payload;
     }
+  };
+}
+
+function chatGptFetch(handler) {
+  return async (url, init) => {
+    if (url === "/api/auth/session") {
+      return jsonResponse({ accessToken: "test-token" });
+    }
+    return handler(url, init);
   };
 }
 

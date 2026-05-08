@@ -43,7 +43,7 @@ test("createExportState initializes direct-api state", () => {
 
 test("fetchRecentConversationTargets paginates, dedupes, and limits", async () => {
   const calls = [];
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = chatGptFetch(async (url, init) => {
     calls.push({ url, init });
     if (url.includes("offset=0")) {
       return jsonResponse({
@@ -61,7 +61,7 @@ test("fetchRecentConversationTargets paginates, dedupes, and limits", async () =
       ],
       has_more: false
     });
-  };
+  });
 
   const targets = await fetchRecentConversationTargets(3, fetchImpl, { origin: "https://chatgpt.com" });
 
@@ -71,12 +71,41 @@ test("fetchRecentConversationTargets paginates, dedupes, and limits", async () =
   );
   assert.equal(targets[2].url, "https://chatgpt.com/c/three");
   assert.equal(calls[0].init.credentials, "include");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer test-token");
   assert.match(calls[0].url, /offset=0&limit=3/);
+});
+
+test("fetchRecentConversationTargets includes the current conversation when history is empty", async () => {
+  const targets = await fetchRecentConversationTargets(
+    3,
+    chatGptFetch(async () => jsonResponse({ items: [], total: 0, offset: 0 })),
+    { origin: "https://chatgpt.com", href: "https://chatgpt.com/c/current-chat" }
+  );
+
+  assert.deepEqual(targets, [
+    {
+      id: "current-chat",
+      title: "Current conversation",
+      url: "https://chatgpt.com/c/current-chat"
+    }
+  ]);
+});
+
+test("fetchRecentConversationTargets reports empty history details", async () => {
+  await assert.rejects(
+    () =>
+      fetchRecentConversationTargets(
+        1,
+        chatGptFetch(async () => jsonResponse({ items: [], total: 0, offset: 0 })),
+        { origin: "https://chatgpt.com", href: "https://chatgpt.com/" }
+      ),
+    /No recent ChatGPT conversations found.*total=0/
+  );
 });
 
 test("fetchRecentConversationTargets surfaces API errors", async () => {
   await assert.rejects(
-    () => fetchRecentConversationTargets(1, async () => jsonResponse({}, false, 500), { origin: "https://chatgpt.com" }),
+    () => fetchRecentConversationTargets(1, chatGptFetch(async () => jsonResponse({}, false, 500)), { origin: "https://chatgpt.com" }),
     /ChatGPT API failed: 500/
   );
 });
@@ -84,7 +113,7 @@ test("fetchRecentConversationTargets surfaces API errors", async () => {
 test("fetchConversationCapture converts payloads and rejects empty messages", async () => {
   const ok = await fetchConversationCapture(
     { id: "abc", title: "Project", url: "https://chatgpt.com/c/abc" },
-    async () =>
+    chatGptFetch(async () =>
       jsonResponse({
         conversation_id: "abc",
         title: "Project",
@@ -94,7 +123,7 @@ test("fetchConversationCapture converts payloads and rejects empty messages", as
           user1: node("root", message("user", "Hello")),
           assistant1: node("user1", message("assistant", "Hi"))
         }
-      })
+      }))
   );
   assert.equal(ok.ok, true);
   assert.equal(ok.capture.captureMethod, "direct api");
@@ -105,7 +134,7 @@ test("fetchConversationCapture converts payloads and rejects empty messages", as
 
   const empty = await fetchConversationCapture(
     { id: "empty", title: "Empty", url: "https://chatgpt.com/c/empty" },
-    async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } })
+    chatGptFetch(async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } }))
   );
   assert.equal(empty.ok, false);
   assert.match(empty.error, /no conversation messages/);
@@ -121,10 +150,10 @@ test("exportTarget saves immediately after fetching a valid conversation", async
       calls.push(["save", message.capture.conversationTitle]);
       return { result: { path: "/Sources/raw/chatgpt-abc/chatgpt-abc.md", created: true } };
     },
-    async () => {
+    chatGptFetch(async (url) => {
       calls.push(["fetch", target.id]);
       return jsonResponse(conversationPayload("abc", "Project"));
-    }
+    })
   );
 
   assert.deepEqual(calls, [
@@ -143,7 +172,7 @@ test("exportTarget does not save API failures or empty conversations", async () 
     async () => {
       saveCount += 1;
     },
-    async () => jsonResponse({}, false, 500)
+    chatGptFetch(async () => jsonResponse({}, false, 500))
   );
   const empty = await exportTarget(
     { id: "empty", title: "Empty", url: "https://chatgpt.com/c/empty" },
@@ -151,7 +180,7 @@ test("exportTarget does not save API failures or empty conversations", async () 
     async () => {
       saveCount += 1;
     },
-    async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } })
+    chatGptFetch(async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } }))
   );
 
   assert.equal(saveCount, 0);
@@ -436,6 +465,17 @@ test("load-config defaults databaseId to default", async () => {
   }
 });
 
+test("handleMessage reports the unknown message type value", async () => {
+  assert.deepEqual(await handleMessage({ type: "legacy-save" }, null), {
+    ok: false,
+    error: "unknown message type: legacy-save"
+  });
+  assert.deepEqual(await handleMessage({}, null), {
+    ok: false,
+    error: "unknown message type: missing"
+  });
+});
+
 test("isLocalHost only accepts parsed localhost hostnames", () => {
   assert.equal(isLocalHost("http://127.0.0.1:8001"), true);
   assert.equal(isLocalHost("http://localhost:8001"), true);
@@ -451,6 +491,15 @@ function jsonResponse(payload, ok = true, status = 200) {
     async json() {
       return payload;
     }
+  };
+}
+
+function chatGptFetch(handler) {
+  return async (url, init) => {
+    if (url === "/api/auth/session") {
+      return jsonResponse({ accessToken: "test-token" });
+    }
+    return handler(url, init);
   };
 }
 

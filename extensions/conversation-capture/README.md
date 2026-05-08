@@ -13,7 +13,15 @@ npm install
 npm run build
 ```
 
-Load `extensions/conversation-capture` as an unpacked extension after `dist/service-worker.js` and `dist/content-ui.js` exist.
+Optional build-time defaults can be set in `extensions/conversation-capture/.env`:
+
+```env
+KINIC_CAPTURE_HOST=http://127.0.0.1:8001
+KINIC_CAPTURE_CANISTER_ID=t63gs-up777-77776-aaaba-cai
+KINIC_CAPTURE_DATABASE_ID=db_d36yep4rv43e
+```
+
+Load `extensions/conversation-capture` as an unpacked extension after `dist/service-worker.js`, `dist/content-ui.js`, and `dist/popup.js` exist.
 
 ## Flow
 
@@ -33,8 +41,8 @@ The CLI creates a conversation wiki scaffold. Re-running it preserves hand-edite
 
 ## Safety Notes
 
-- Default host is `http://127.0.0.1:8001`.
-- Default database ID is `default`; the database is not created automatically.
+- Default host is `http://127.0.0.1:8001` unless `KINIC_CAPTURE_HOST` is set at build time.
+- Default database ID is `default` unless `KINIC_CAPTURE_DATABASE_ID` is set at build time; the database is not created automatically.
 - Mainnet hosts require explicit confirmation before export.
 - Writes are anonymous and depend on the target canister accepting `write_node`.
 - ChatGPT export uses private `/backend-api/*` endpoints. Endpoint shape can change without notice.

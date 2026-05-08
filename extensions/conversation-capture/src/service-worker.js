@@ -4,9 +4,9 @@
 import { buildRawSource } from "./raw-source.js";
 
 const DEFAULT_CONFIG = {
-  canisterId: "",
-  databaseId: "default",
-  host: "http://127.0.0.1:8001"
+  canisterId: process.env.KINIC_CAPTURE_CANISTER_ID || "",
+  databaseId: process.env.KINIC_CAPTURE_DATABASE_ID || "default",
+  host: process.env.KINIC_CAPTURE_HOST || "http://127.0.0.1:8001"
 };
 const ALLOWED_CHATGPT_ORIGINS = new Set(["https://chatgpt.com", "https://chat.openai.com"]);
 const ALLOWED_MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
@@ -46,7 +46,7 @@ export async function handleMessage(message, sender) {
     await removeSessionValue(message.key);
     return { ok: true };
   }
-  return { ok: false, error: "unknown message type" };
+  return { ok: false, error: `unknown message type: ${describeMessageType(message)}` };
 }
 
 async function saveSource(capture, overrideConfig, sender) {
@@ -213,4 +213,9 @@ function stateStatus(value) {
   } catch {
     return "";
   }
+}
+
+function describeMessageType(message) {
+  if (!message || typeof message !== "object") return typeof message;
+  return typeof message.type === "string" && message.type ? message.type : "missing";
 }

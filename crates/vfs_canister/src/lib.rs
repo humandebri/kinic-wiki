@@ -190,7 +190,7 @@ fn begin_database_archive(database_id: String) -> Result<DatabaseArchiveInfo, St
     with_usage(
         "begin_database_archive",
         Some(database_id.clone()),
-        |service, caller, _now| service.begin_database_archive(&database_id, caller),
+        |service, caller, now| service.begin_database_archive(&database_id, caller, now),
     )
 }
 

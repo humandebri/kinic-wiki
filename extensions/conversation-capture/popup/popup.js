@@ -6,8 +6,9 @@ const databaseInput = document.querySelector("#database-id");
 const hostInput = document.querySelector("#host");
 const saveButton = document.querySelector("#save-settings");
 const statusText = document.querySelector("#status");
-const DEFAULT_HOST = "http://127.0.0.1:8001";
-const DEFAULT_DATABASE_ID = "default";
+const DEFAULT_CANISTER_ID = process.env.KINIC_CAPTURE_CANISTER_ID || "";
+const DEFAULT_HOST = process.env.KINIC_CAPTURE_HOST || "http://127.0.0.1:8001";
+const DEFAULT_DATABASE_ID = process.env.KINIC_CAPTURE_DATABASE_ID || "default";
 
 saveButton.addEventListener("click", async () => {
   try {
@@ -23,7 +24,7 @@ load();
 async function load() {
   try {
     const response = await send({ type: "load-config" });
-    canisterInput.value = response.config.canisterId;
+    canisterInput.value = response.config.canisterId || DEFAULT_CANISTER_ID;
     databaseInput.value = response.config.databaseId || DEFAULT_DATABASE_ID;
     hostInput.value = response.config.host;
   } catch (error) {
