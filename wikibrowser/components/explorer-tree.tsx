@@ -43,9 +43,20 @@ function TreeNode({
 }) {
   const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
   const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
+  const autoExpandedKey = useRef<string | null>(expanded ? selectedPath : null);
   const requestedPath = useRef<string | null>(null);
   const canExpand = canExpandChildNode(node);
   const selected = selectedPath === node.path;
+  const selectedAncestor = node.path === selectedPath || selectedPath.startsWith(`${node.path}/`);
+
+  useEffect(() => {
+    if (!autoExpandSelected || !selectedAncestor || autoExpandedKey.current === selectedPath) return;
+    const timeout = window.setTimeout(() => {
+      autoExpandedKey.current = selectedPath;
+      setExpanded(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [autoExpandSelected, selectedAncestor, selectedPath]);
 
   useEffect(() => {
     if (!expanded || !canExpand || children.data || children.error || requestedPath.current === node.path) return;
