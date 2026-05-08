@@ -1,11 +1,16 @@
-use crate::cli::{SkillCommand, SkillRunOutcomeArg, SkillStatusArg};
+use crate::cli::{SkillCommand, SkillImportCommand, SkillRunOutcomeArg, SkillStatusArg};
+use crate::github_source::{
+    fetch_github_skill_package, github_source_string, github_source_url, parse_github_skill_source,
+};
 mod model;
 use anyhow::{Context, Result, anyhow};
 use model::{
-    SkillId, catalog, manifest_for_source, normalize_manifest, now_millis,
-    parse_skill_source_frontmatter, print, run_base_path, set_manifest_status_preserving_content,
-    skill_base_path,
+    PRIVATE_ROOT, PUBLIC_ROOT, SkillId, catalog, extract_frontmatter, manifest_for_source,
+    normalize_manifest, now_millis, now_rfc3339, parse_skill_source_frontmatter, print,
+    run_base_path, set_manifest_provenance_field, set_manifest_status_preserving_content,
+    set_root_frontmatter_field_preserving_content, skill_base_path,
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -46,18 +51,75 @@ pub async fn run_skill_command(
             task,
             outcome,
             notes_file,
+            agent,
+            public,
             json,
         } => print(
-            record_skill_run(client, database_id, &id, &task, outcome, &notes_file).await?,
+            record_skill_run(
+                client,
+                SkillRunInput {
+                    database_id,
+                    id: &id,
+                    task: &task,
+                    outcome,
+                    notes_file: &notes_file,
+                    agent: &agent,
+                    public,
+                },
+            )
+            .await?,
             json,
         )?,
         SkillCommand::SetStatus {
             id,
             status,
+            reason,
             public,
             json,
         } => print(
-            set_skill_status(client, database_id, &id, status, public).await?,
+            set_skill_status(client, database_id, &id, status, reason.as_deref(), public).await?,
+            json,
+        )?,
+        SkillCommand::Import { source } => match source {
+            SkillImportCommand::Github {
+                source,
+                id,
+                reference,
+                public,
+                prune,
+                json,
+            } => print(
+                import_github_skill(client, database_id, &source, &id, &reference, public, prune)
+                    .await?,
+                json,
+            )?,
+        },
+        SkillCommand::ProposeImprovement {
+            id,
+            runs,
+            summary,
+            diff_file,
+            public,
+            json,
+        } => print(
+            propose_improvement(
+                client,
+                database_id,
+                &id,
+                &runs,
+                &summary,
+                &diff_file,
+                public,
+            )
+            .await?,
+            json,
+        )?,
+        SkillCommand::ApproveProposal {
+            id,
+            proposal_path,
+            json,
+        } => print(
+            approve_proposal(client, database_id, &id, &proposal_path).await?,
             json,
         )?,
     }
@@ -73,11 +135,22 @@ pub(crate) async fn upsert_skill(
     prune: bool,
 ) -> Result<serde_json::Value> {
     let skill_id = SkillId::parse(id)?;
-    let base_path = skill_base_path(&skill_id, public);
     let skill = std::fs::read_to_string(source_dir.join("SKILL.md"))
         .with_context(|| format!("missing SKILL.md in {}", source_dir.display()))?;
     let source_frontmatter = parse_skill_source_frontmatter(&skill)?;
     let files = discover_skill_package_files(source_dir, &skill, &skill_id, &source_frontmatter)?;
+    write_skill_package(client, database_id, &skill_id, public, prune, files).await
+}
+
+async fn write_skill_package(
+    client: &impl VfsApi,
+    database_id: &str,
+    skill_id: &SkillId,
+    public: bool,
+    prune: bool,
+    files: BTreeMap<String, String>,
+) -> Result<serde_json::Value> {
+    let base_path = skill_base_path(skill_id, public);
     let file_names = files.keys().cloned().collect::<BTreeSet<_>>();
     let mut written_paths = Vec::new();
     for (name, content) in files {
@@ -90,37 +163,48 @@ pub(crate) async fn upsert_skill(
         Vec::new()
     };
     Ok(
-        json!({ "id": id, "catalog": catalog(public), "base_path": base_path, "written_paths": written_paths, "pruned_paths": pruned_paths }),
+        json!({ "id": skill_id.to_string(), "catalog": catalog(public), "base_path": base_path, "written_paths": written_paths, "pruned_paths": pruned_paths }),
     )
 }
 
 pub(crate) async fn record_skill_run(
     client: &impl VfsApi,
-    database_id: &str,
-    id: &str,
-    task: &str,
-    outcome: SkillRunOutcomeArg,
-    notes_file: &Path,
+    input: SkillRunInput<'_>,
 ) -> Result<serde_json::Value> {
-    let skill_id = SkillId::parse(id)?;
+    let SkillRunInput {
+        database_id,
+        id,
+        task,
+        outcome,
+        notes_file,
+        agent,
+        public,
+    } = input;
     let notes = std::fs::read_to_string(notes_file)
         .with_context(|| format!("failed to read {}", notes_file.display()))?;
-    let run_path = format!("{}/{}.md", run_base_path(&skill_id), now_millis());
-    let outcome = outcome.as_str();
-    let content = format!(
-        "---\nkind: kinic.skill_run\nskill_id: {id}\noutcome: {outcome}\n---\n# Skill Run\n\n## Task\n\n{task}\n\n## Notes\n\n{notes}\n"
-    );
-    client
-        .write_node(WriteNodeRequest {
-            database_id: database_id.to_string(),
-            path: run_path.clone(),
-            kind: NodeKind::Source,
-            content,
-            metadata_json: "{}".to_string(),
-            expected_etag: None,
-        })
-        .await?;
-    Ok(json!({ "id": id, "run_path": run_path, "outcome": outcome }))
+    vfs_cli::skill_kb::record_skill_run(
+        client,
+        vfs_cli::skill_kb::SkillRunRecord {
+            database_id,
+            id,
+            task,
+            outcome: outcome.into(),
+            notes: &notes,
+            agent,
+            public,
+        },
+    )
+    .await
+}
+
+pub(crate) struct SkillRunInput<'a> {
+    pub(crate) database_id: &'a str,
+    pub(crate) id: &'a str,
+    pub(crate) task: &'a str,
+    pub(crate) outcome: SkillRunOutcomeArg,
+    pub(crate) notes_file: &'a Path,
+    pub(crate) agent: &'a str,
+    pub(crate) public: bool,
 }
 
 pub(crate) async fn set_skill_status(
@@ -128,6 +212,7 @@ pub(crate) async fn set_skill_status(
     database_id: &str,
     id: &str,
     status: SkillStatusArg,
+    reason: Option<&str>,
     public: bool,
 ) -> Result<serde_json::Value> {
     let skill_id = SkillId::parse(id)?;
@@ -136,7 +221,29 @@ pub(crate) async fn set_skill_status(
         .read_node(database_id, &path)
         .await?
         .ok_or_else(|| anyhow!("manifest not found: {path}"))?;
-    let content = set_manifest_status_preserving_content(&node.content, status.as_str())?;
+    let mut content = set_manifest_status_preserving_content(&node.content, status.as_str())?;
+    let timestamp = now_rfc3339();
+    match status {
+        SkillStatusArg::Promoted => {
+            content =
+                set_root_frontmatter_field_preserving_content(&content, "promoted_at", &timestamp)?;
+        }
+        SkillStatusArg::Deprecated => {
+            if let Some(reason) = reason {
+                content = set_root_frontmatter_field_preserving_content(
+                    &content,
+                    "deprecated_reason",
+                    reason,
+                )?;
+            }
+            content = set_root_frontmatter_field_preserving_content(
+                &content,
+                "deprecated_at",
+                &timestamp,
+            )?;
+        }
+        SkillStatusArg::Draft | SkillStatusArg::Reviewed => {}
+    }
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.to_string(),
@@ -148,6 +255,160 @@ pub(crate) async fn set_skill_status(
         })
         .await?;
     Ok(json!({ "id": id, "catalog": catalog(public), "status": status.as_str(), "path": path }))
+}
+
+async fn import_github_skill(
+    client: &impl VfsApi,
+    database_id: &str,
+    source: &str,
+    id: &str,
+    reference: &str,
+    public: bool,
+    prune: bool,
+) -> Result<serde_json::Value> {
+    let skill_id = SkillId::parse(id)?;
+    let source = parse_github_skill_source(source, None)?;
+    let package = fetch_github_skill_package(source, reference).await?;
+    let source_frontmatter = parse_skill_source_frontmatter(&package.skill)?;
+    let mut files = BTreeMap::new();
+    files.insert("SKILL.md".to_string(), package.skill);
+    let mut manifest = match package.manifest {
+        Some(content) => normalize_manifest(&content, &skill_id, &source_frontmatter)?,
+        None => manifest_for_source(&skill_id, &source_frontmatter)?,
+    };
+    manifest =
+        set_manifest_provenance_field(&manifest, "source", &github_source_string(&package.source))?;
+    manifest = set_manifest_provenance_field(
+        &manifest,
+        "source_url",
+        &github_source_url(&package.source, &package.resolved_ref),
+    )?;
+    manifest = set_manifest_provenance_field(&manifest, "revision", &package.resolved_ref)?;
+    files.insert("manifest.md".to_string(), manifest);
+    if let Some(provenance) = package.provenance {
+        files.insert("provenance.md".to_string(), provenance);
+    }
+    if let Some(evals) = package.evals {
+        files.insert("evals.md".to_string(), evals);
+    }
+    write_skill_package(client, database_id, &skill_id, public, prune, files).await
+}
+
+pub(crate) async fn propose_improvement(
+    client: &impl VfsApi,
+    database_id: &str,
+    id: &str,
+    runs: &[String],
+    summary: &str,
+    diff_file: &Path,
+    public: bool,
+) -> Result<serde_json::Value> {
+    let skill_id = SkillId::parse(id)?;
+    for run in runs {
+        if !run.starts_with(&format!("{}/", run_base_path(&skill_id))) {
+            return Err(anyhow!(
+                "proposal run path must belong to skill {id}: {run}"
+            ));
+        }
+    }
+    let diff = std::fs::read_to_string(diff_file)
+        .with_context(|| format!("failed to read {}", diff_file.display()))?;
+    let path_timestamp = now_millis();
+    let created_at = now_rfc3339();
+    let proposal_path = format!(
+        "{}/improvement-proposals/{path_timestamp}.md",
+        skill_base_path(&skill_id, public)
+    );
+    let source_runs = runs
+        .iter()
+        .map(|run| format!("  - {run}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let evidence_links = runs
+        .iter()
+        .map(|run| format!("- [{run}]({run})"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = format!(
+        "---\nkind: kinic.skill_improvement_proposal\nschema_version: 1\nskill_id: {id}\nstatus: proposed\nsource_runs:\n{source_runs}\ncreated_at: {created_at}\ncreated_by: cli\n---\n# Skill Improvement Proposal\n\n## Summary\n\n{summary}\n\n## Evidence\n\n{evidence_links}\n\n## Proposed Diff\n\n```diff\n{diff}\n```\n"
+    );
+    client
+        .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
+            path: proposal_path.clone(),
+            kind: NodeKind::File,
+            content,
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await?;
+    Ok(json!({ "id": id, "proposal_path": proposal_path, "status": "proposed" }))
+}
+
+pub(crate) async fn approve_proposal(
+    client: &impl VfsApi,
+    database_id: &str,
+    id: &str,
+    proposal_path: &str,
+) -> Result<serde_json::Value> {
+    validate_proposal_target(id, proposal_path)?;
+    let node = client
+        .read_node(database_id, proposal_path)
+        .await?
+        .ok_or_else(|| anyhow!("proposal not found: {proposal_path}"))?;
+    validate_proposal_frontmatter(id, &node.content)?;
+    let content =
+        set_root_frontmatter_field_preserving_content(&node.content, "status", "approved")?;
+    client
+        .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
+            path: proposal_path.to_string(),
+            kind: NodeKind::File,
+            content,
+            metadata_json: node.metadata_json,
+            expected_etag: Some(node.etag),
+        })
+        .await?;
+    Ok(json!({ "id": id, "proposal_path": proposal_path, "status": "approved" }))
+}
+
+#[derive(Deserialize)]
+struct ProposalFrontmatter {
+    kind: String,
+    schema_version: u32,
+    skill_id: String,
+    status: String,
+}
+
+fn validate_proposal_target(id: &str, proposal_path: &str) -> Result<()> {
+    let skill_id = SkillId::parse(id)?;
+    let private_prefix = format!("{}/{}/improvement-proposals/", PRIVATE_ROOT, skill_id);
+    let public_prefix = format!("{}/{}/improvement-proposals/", PUBLIC_ROOT, skill_id);
+    if proposal_path.starts_with(&private_prefix) || proposal_path.starts_with(&public_prefix) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "proposal path must belong to skill {id} improvement-proposals"
+    ))
+}
+
+fn validate_proposal_frontmatter(id: &str, content: &str) -> Result<()> {
+    let frontmatter: ProposalFrontmatter = serde_yaml::from_str(extract_frontmatter(content)?)?;
+    if frontmatter.kind != "kinic.skill_improvement_proposal" {
+        return Err(anyhow!(
+            "proposal kind must be kinic.skill_improvement_proposal"
+        ));
+    }
+    if frontmatter.schema_version != 1 {
+        return Err(anyhow!("proposal schema_version must be 1"));
+    }
+    if frontmatter.skill_id != id {
+        return Err(anyhow!("proposal skill_id must match id"));
+    }
+    if frontmatter.status != "proposed" {
+        return Err(anyhow!("proposal status must be proposed"));
+    }
+    Ok(())
 }
 
 async fn write_file_node(
@@ -333,12 +594,12 @@ impl SkillStatusArg {
     }
 }
 
-impl SkillRunOutcomeArg {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Partial => "partial",
-            Self::Fail => "fail",
+impl From<SkillRunOutcomeArg> for vfs_cli::skill_kb::SkillRunOutcome {
+    fn from(value: SkillRunOutcomeArg) -> Self {
+        match value {
+            SkillRunOutcomeArg::Success => Self::Success,
+            SkillRunOutcomeArg::Partial => Self::Partial,
+            SkillRunOutcomeArg::Fail => Self::Fail,
         }
     }
 }

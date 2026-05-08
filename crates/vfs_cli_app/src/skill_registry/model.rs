@@ -2,6 +2,7 @@
 // What: Skill Knowledge Base path, manifest, and ranking helpers.
 // Why: The CLI workflow stays thin while manifest handling remains testable and schema-free.
 use anyhow::{Result, anyhow};
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -26,6 +27,18 @@ pub(super) struct SkillManifest {
     pub(super) use_cases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) promoted_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) promoted_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) deprecated_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) deprecated_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) deprecated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_evidence_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) replaces: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -51,6 +64,12 @@ impl SkillManifest {
             tags: Vec::new(),
             use_cases: Vec::new(),
             status: Some("draft".to_string()),
+            promoted_by: None,
+            promoted_at: None,
+            deprecated_reason: None,
+            deprecated_by: None,
+            deprecated_at: None,
+            last_evidence_at: None,
             replaces: Vec::new(),
             related: Vec::new(),
             knowledge: Vec::new(),
@@ -178,6 +197,14 @@ pub(super) fn set_manifest_status_preserving_content(
     status: &str,
 ) -> Result<String> {
     parse_manifest(content)?;
+    set_root_frontmatter_field_preserving_content(content, "status", status)
+}
+
+pub(super) fn set_root_frontmatter_field_preserving_content(
+    content: &str,
+    key: &str,
+    value: &str,
+) -> Result<String> {
     let frontmatter = extract_frontmatter(content)?;
     let frontmatter_start = "---\n".len();
     let frontmatter_end = frontmatter_start + frontmatter.len();
@@ -186,8 +213,12 @@ pub(super) fn set_manifest_status_preserving_content(
     for line in frontmatter.split_inclusive('\n') {
         let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
         let newline = if line.ends_with('\n') { "\n" } else { "" };
-        if !line.starts_with(' ') && line_without_newline.trim_start().starts_with("status:") {
-            updated.push_str(&format!("status: {status}{newline}"));
+        if !line.starts_with(' ')
+            && line_without_newline
+                .trim_start()
+                .starts_with(&format!("{key}:"))
+        {
+            updated.push_str(&format!("{key}: {}{newline}", yaml_scalar(value)));
             replaced = true;
         } else {
             updated.push_str(line);
@@ -197,7 +228,7 @@ pub(super) fn set_manifest_status_preserving_content(
         if !updated.is_empty() && !updated.ends_with('\n') {
             updated.push('\n');
         }
-        updated.push_str(&format!("status: {status}"));
+        updated.push_str(&format!("{key}: {}", yaml_scalar(value)));
     }
     Ok(format!(
         "{}{}{}",
@@ -205,6 +236,29 @@ pub(super) fn set_manifest_status_preserving_content(
         updated,
         &content[frontmatter_end..]
     ))
+}
+
+pub(super) fn set_manifest_provenance_field(
+    content: &str,
+    key: &str,
+    value: &str,
+) -> Result<String> {
+    let mut manifest = parse_manifest(content)?;
+    manifest
+        .provenance
+        .insert(key.to_string(), value.to_string());
+    Ok(render_manifest(&manifest))
+}
+
+fn yaml_scalar(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
+    {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).expect("string should serialize")
+    }
 }
 
 pub(super) fn skill_base_path(id: &SkillId, public: bool) -> String {
@@ -230,12 +284,16 @@ pub(super) fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
+pub(super) fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 pub(super) fn print(value: serde_json::Value, _json_output: bool) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
-fn extract_frontmatter(content: &str) -> Result<&str> {
+pub(super) fn extract_frontmatter(content: &str) -> Result<&str> {
     let rest = content
         .strip_prefix("---\n")
         .ok_or_else(|| anyhow!("manifest must start with YAML frontmatter"))?;

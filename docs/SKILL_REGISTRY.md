@@ -159,7 +159,11 @@ Status values are intentionally simple:
 - `deprecated`: hidden from default `skill find`; include with `--include-deprecated`.
 
 Run evidence under `/Sources/skill-runs/...` is the product differentiator.
-It records what happened when a skill was used, so teams can promote useful skills and retire weak ones.
+It records what happened when a skill was used, including skill and manifest hashes, so teams can promote useful skills and retire weak ones.
+`skill find` and `skill inspect` include `run_summary` with total runs, success/partial/fail counts, last use, and last outcome.
+Old or invalid run evidence is ignored by `run_summary` but still appears in `recent_runs`.
+`recorded_by: cli` is a v1 placeholder; principal-backed recording is deferred.
+Path timestamps are millis IDs; frontmatter `*_at` timestamps are RFC3339.
 
 `skill upsert` stores the package, not just the entry file.
 It writes `SKILL.md`, `manifest.md`, optional `provenance.md` and `evals.md`, and direct package-local `.md` links from `SKILL.md`.
@@ -168,6 +172,28 @@ For example, `[ingest](ingest.md)` is stored as `/Wiki/skills/<name>/ingest.md`.
 URLs, absolute paths, missing files, and files outside the package directory are ignored.
 By default, upsert does not delete existing DB files.
 Use `--prune` when the source package is the desired exact file set and stale package files should be removed.
+
+Import uses existing package storage after fetching upstream files:
+
+```bash
+cargo run -p vfs-cli --bin vfs-cli -- skill import github owner/repo:skills/legal-review --id legal-review --ref main --prune
+```
+
+GitHub import records `source`, `source_url`, and `revision` in manifest provenance.
+Vercel and SkillHub are next-phase supply sources; this PR only exposes import commands that can complete successfully.
+
+Improvement proposals are evidence-backed records, not automatic rewrites:
+
+```bash
+cargo run -p vfs-cli --bin vfs-cli -- skill propose-improvement legal-review \
+  --runs /Sources/skill-runs/legal-review/123.md \
+  --summary "Tighten missing-approval checks" \
+  --diff-file ./proposal.diff
+cargo run -p vfs-cli --bin vfs-cli -- skill approve-proposal legal-review /Wiki/skills/legal-review/improvement-proposals/123.md
+```
+
+`approve-proposal` marks the proposal approved. It does not apply the diff to `SKILL.md`; update the source package and run `skill upsert`.
+Approval only accepts proposal nodes under the target skill's `improvement-proposals/` directory with matching proposal frontmatter.
 
 ## Example
 
@@ -197,23 +223,25 @@ Registry access follows the selected database role.
 Agents can use Skill KB without shelling out to the CLI through the shared tool dispatcher:
 
 ```text
-skill_find -> skill_inspect -> skill_read SKILL.md -> skill_read helper files
+skill_find -> skill_inspect -> skill_read SKILL.md -> skill_read helper files -> skill_record_run
 ```
 
-Runtime tools are read-only.
-They require `database_id` and use existing VFS reads and searches.
+Discovery and read tools are read-only.
+`skill_record_run` is a write tool and is not included in the read-only tool set.
+All tools require `database_id` and use existing VFS reads, searches, and writes.
 Agents should ignore `deprecated` skills by default, prefer `promoted` or `reviewed` candidates, and treat the read `SKILL.md` as task-local instruction.
-Use the CLI for `skill upsert`, `skill record-run`, and database linking.
+Use the CLI for package operations such as `skill upsert`, import, proposal approval, and database linking.
 
 ## v1 Limits
 
 - No path-level ACL.
 - No signed release verification.
-- No hash pinning.
+- No marketplace-wide hash pinning beyond per-run `skill_hash` and `manifest_hash`.
 - No dependency resolution.
 - No install-time execution permission enforcement.
 - No dedicated Store UI.
 - No automatic GitHub update monitoring.
+- No automatic skill rewriting from evidence.
 - No GitHub org/team policy sync.
 - No skill install command.
 - No implicit protected knowledge from skill manifests; use separate databases for different access boundaries.

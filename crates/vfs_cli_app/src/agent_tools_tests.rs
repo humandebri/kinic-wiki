@@ -13,8 +13,8 @@ use vfs_types::{
 };
 
 use vfs_cli::agent_tools::{
-    create_anthropic_tools, create_openai_tools, handle_anthropic_tool_call,
-    handle_openai_tool_call,
+    create_anthropic_tools, create_openai_read_only_tools, create_openai_tools,
+    handle_anthropic_tool_call, handle_openai_tool_call,
 };
 #[derive(Default)]
 struct ToolMockClient {
@@ -392,8 +392,8 @@ async fn agent_tools_default_read_scopes_to_vfs_root() {
 fn tool_schemas_include_minimal_vfs_tools() {
     let openai = create_openai_tools();
     let anthropic = create_anthropic_tools();
-    assert_eq!(openai.len(), 21);
-    assert_eq!(anthropic.len(), 21);
+    assert_eq!(openai.len(), 22);
+    assert_eq!(anthropic.len(), 22);
 
     let openai_names = tool_names(&openai, "function");
     let anthropic_names = tool_names(&anthropic, "name");
@@ -420,10 +420,20 @@ fn tool_schemas_include_minimal_vfs_tools() {
         "skill_find",
         "skill_inspect",
         "skill_read",
+        "skill_record_run",
     ] {
         assert!(openai_names.contains(&name.to_string()));
         assert!(anthropic_names.contains(&name.to_string()));
     }
+}
+
+#[test]
+fn read_only_tool_schemas_exclude_skill_record_run() {
+    let tools = create_openai_read_only_tools();
+    let names = tool_names(&tools, "name");
+    assert!(names.contains(&"skill_find".to_string()));
+    assert!(names.contains(&"skill_read".to_string()));
+    assert!(!names.contains(&"skill_record_run".to_string()));
 }
 
 #[test]
@@ -760,6 +770,23 @@ async fn anthropic_dispatch_routes_skill_tools() {
     .expect("skill read should dispatch");
     assert!(!read.is_error);
     assert!(read.text.contains("contract ingest"));
+
+    let recorded = handle_anthropic_tool_call(
+        &client,
+        "skill_record_run",
+        serde_json::json!({
+            "database_id": "default",
+            "id": "legal-review",
+            "task": "review contract",
+            "outcome": "success",
+            "notes": "helped find missing approval",
+            "agent": "codex"
+        }),
+    )
+    .await
+    .expect("skill record run should dispatch");
+    assert!(!recorded.is_error);
+    assert!(recorded.text.contains("/Sources/skill-runs/legal-review/"));
 }
 
 #[tokio::test]

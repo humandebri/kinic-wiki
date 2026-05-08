@@ -291,6 +291,25 @@ async fn dispatch_tool_call_impl(
                 .await?,
             )
         }
+        "skill_record_run" => {
+            let args: SkillRecordRunArgs = serde_json::from_value(input)?;
+            let database_id = database_id(args.database_id)?;
+            tool_ok(
+                skill_kb::record_skill_run(
+                    client,
+                    skill_kb::SkillRunRecord {
+                        database_id: &database_id,
+                        id: &args.id,
+                        task: &args.task,
+                        outcome: skill_run_outcome(&args.outcome)?,
+                        notes: &args.notes,
+                        agent: &args.agent,
+                        public: args.public.unwrap_or(false),
+                    },
+                )
+                .await?,
+            )
+        }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),
     };
     Ok(result)
@@ -319,6 +338,7 @@ fn tool_names_slice() -> &'static [&'static str] {
         "skill_find",
         "skill_inspect",
         "skill_read",
+        "skill_record_run",
     ]
 }
 fn tool_ok(value: Value) -> ToolResult {
@@ -410,6 +430,11 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Read a package-local file from a Skill KB package.",
             skill_read_schema(),
         ),
+        ToolSpec::new(
+            "skill_record_run",
+            "Record Skill KB run evidence after an agent uses a skill.",
+            skill_record_run_schema(),
+        ),
     ]
 }
 
@@ -469,6 +494,9 @@ fn skill_id_schema() -> Value {
 }
 fn skill_read_schema() -> Value {
     json!({"type":"object","properties":{"database_id":{"type":"string"},"id":{"type":"string"},"file":{"type":"string"},"public":{"type":"boolean"}},"required":["database_id","id","file"],"additionalProperties":false})
+}
+fn skill_record_run_schema() -> Value {
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"id":{"type":"string"},"task":{"type":"string"},"outcome":{"type":"string","enum":["success","partial","fail"]},"notes":{"type":"string"},"agent":{"type":"string"},"public":{"type":"boolean"}},"required":["database_id","id","task","outcome","notes","agent"],"additionalProperties":false})
 }
 
 fn database_id(value: Option<String>) -> Result<String> {
@@ -607,6 +635,25 @@ struct SkillReadArgs {
     id: String,
     file: String,
     public: Option<bool>,
+}
+#[derive(Deserialize)]
+struct SkillRecordRunArgs {
+    database_id: Option<String>,
+    id: String,
+    task: String,
+    outcome: String,
+    notes: String,
+    agent: String,
+    public: Option<bool>,
+}
+
+fn skill_run_outcome(value: &str) -> Result<skill_kb::SkillRunOutcome> {
+    match value {
+        "success" => Ok(skill_kb::SkillRunOutcome::Success),
+        "partial" => Ok(skill_kb::SkillRunOutcome::Partial),
+        "fail" => Ok(skill_kb::SkillRunOutcome::Fail),
+        _ => anyhow::bail!("invalid skill run outcome: {value}"),
+    }
 }
 
 struct ToolSpec {

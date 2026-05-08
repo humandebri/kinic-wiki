@@ -310,6 +310,10 @@ pub enum SkillCommand {
         outcome: SkillRunOutcomeArg,
         #[arg(long)]
         notes_file: PathBuf,
+        #[arg(long, default_value = "cli")]
+        agent: String,
+        #[arg(long)]
+        public: bool,
         #[arg(long)]
         json: bool,
     },
@@ -318,7 +322,49 @@ pub enum SkillCommand {
         #[arg(long, value_enum)]
         status: SkillStatusArg,
         #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
         public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Import {
+        #[command(subcommand)]
+        source: SkillImportCommand,
+    },
+    ProposeImprovement {
+        id: String,
+        #[arg(long = "runs", required = true)]
+        runs: Vec<String>,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        diff_file: PathBuf,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    ApproveProposal {
+        id: String,
+        proposal_path: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillImportCommand {
+    Github {
+        source: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long = "ref", default_value = "HEAD")]
+        reference: String,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        prune: bool,
         #[arg(long)]
         json: bool,
     },
@@ -560,7 +606,7 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillStatusArg};
+    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillImportCommand, SkillStatusArg};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -701,5 +747,38 @@ mod tests {
             panic!("expected skill set-status command");
         };
         assert_eq!(status, SkillStatusArg::Deprecated);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "import",
+            "github",
+            "owner/repo:skills/foo",
+            "--id",
+            "foo",
+            "--ref",
+            "main",
+            "--prune",
+        ]);
+        let Command::Skill {
+            command:
+                SkillCommand::Import {
+                    source:
+                        SkillImportCommand::Github {
+                            source,
+                            id,
+                            reference,
+                            prune,
+                            ..
+                        },
+                },
+        } = cli.command
+        else {
+            panic!("expected skill import github command");
+        };
+        assert_eq!(source, "owner/repo:skills/foo");
+        assert_eq!(id, "foo");
+        assert_eq!(reference, "main");
+        assert!(prune);
     }
 }

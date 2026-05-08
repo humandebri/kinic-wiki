@@ -1,13 +1,16 @@
 // Where: crates/vfs_cli_core/src/skill_kb.rs
 // What: Read-only Skill Knowledge Base helpers shared by CLI and agent tools.
 // Why: Human CLI and agent runtime must rank and inspect skill packages identically.
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use vfs_client::VfsApi;
 use vfs_types::{
-    ListNodesRequest, NodeEntryKind, RecentNodesRequest, SearchNodesRequest, SearchPreviewMode,
+    ListNodesRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodesRequest,
+    SearchPreviewMode, WriteNodeRequest,
 };
 
 const PRIVATE_SKILL_ROOT: &str = "/Wiki/skills";
@@ -42,6 +45,44 @@ pub struct SkillManifestView {
     pub status: Option<String>,
     pub tags: Vec<String>,
     pub use_cases: Vec<String>,
+    pub deprecated_reason: Option<String>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct SkillRunSummary {
+    pub runs: u32,
+    pub success: u32,
+    pub partial: u32,
+    pub fail: u32,
+    pub last_used_at: Option<String>,
+    pub last_outcome: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub enum SkillRunOutcome {
+    Success,
+    Partial,
+    Fail,
+}
+
+pub struct SkillRunRecord<'a> {
+    pub database_id: &'a str,
+    pub id: &'a str,
+    pub task: &'a str,
+    pub outcome: SkillRunOutcome,
+    pub notes: &'a str,
+    pub agent: &'a str,
+    pub public: bool,
+}
+
+impl SkillRunOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Partial => "partial",
+            Self::Fail => "fail",
+        }
+    }
 }
 
 pub async fn find_skills(
@@ -84,8 +125,10 @@ pub async fn find_skills(
             "id": id,
             "catalog": skill_catalog(public),
             "status": status,
+            "deprecated_reason": manifest.deprecated_reason,
             "title": manifest.title.unwrap_or_default(),
             "summary": manifest.summary.unwrap_or_default(),
+            "run_summary": run_summary(client, database_id, &id).await?,
             "score": acc.best_score.unwrap_or_default(),
             "matched_paths": acc.matched_paths.into_iter().collect::<Vec<_>>(),
             "why": acc.why.into_iter().collect::<Vec<_>>()
@@ -139,14 +182,61 @@ pub async fn inspect_skill(
         .into_iter()
         .map(|hit| hit.path)
         .collect::<Vec<_>>();
+    let run_summary = run_summary(client, database_id, id).await?;
     Ok(json!({
         "id": id,
         "catalog": skill_catalog(public),
         "base_path": base_path,
         "manifest": manifest,
         "files": files,
+        "run_summary": run_summary,
         "recent_runs": recent_runs
     }))
+}
+
+pub async fn record_skill_run(client: &impl VfsApi, record: SkillRunRecord<'_>) -> Result<Value> {
+    let SkillRunRecord {
+        database_id,
+        id,
+        task,
+        outcome,
+        notes,
+        agent,
+        public,
+    } = record;
+    validate_skill_id(id)?;
+    let base_path = skill_base_path(id, public);
+    let skill = client
+        .read_node(database_id, &format!("{base_path}/SKILL.md"))
+        .await?
+        .ok_or_else(|| anyhow!("SKILL.md not found for skill: {id}"))?;
+    let manifest = client
+        .read_node(database_id, &format!("{base_path}/manifest.md"))
+        .await?
+        .ok_or_else(|| anyhow!("manifest.md not found for skill: {id}"))?;
+    let run_id = now_millis().to_string();
+    let recorded_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let run_path = format!("{SKILL_RUN_ROOT}/{id}/{run_id}.md");
+    let outcome = outcome.as_str();
+    let content = format!(
+        "---\nkind: kinic.skill_run\nschema_version: 1\nskill_id: {id}\nskill_hash: {}\nmanifest_hash: {}\ntask: {}\ntask_hash: {}\noutcome: {outcome}\nagent: {}\nrecorded_by: cli\nrecorded_at: {recorded_at}\n---\n# Skill Run\n\n## Task\n\n{task}\n\n## Notes\n\n{notes}\n",
+        sha256_hex(&skill.content),
+        sha256_hex(&manifest.content),
+        yaml_quote(task),
+        sha256_hex(task),
+        yaml_quote(agent),
+    );
+    client
+        .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
+            path: run_path.clone(),
+            kind: NodeKind::Source,
+            content,
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await?;
+    Ok(json!({ "id": id, "run_path": run_path, "outcome": outcome }))
 }
 
 pub async fn read_skill_file(
@@ -213,11 +303,108 @@ fn parse_manifest_view(content: &str) -> SkillManifestView {
             "title" => manifest.title = non_empty(value),
             "summary" => manifest.summary = non_empty(value),
             "status" => manifest.status = non_empty(value),
+            "deprecated_reason" => manifest.deprecated_reason = non_empty(value),
             "tags" | "use_cases" if value.is_empty() => current_list = Some(key),
             _ => {}
         }
     }
     manifest
+}
+
+async fn run_summary(client: &impl VfsApi, database_id: &str, id: &str) -> Result<SkillRunSummary> {
+    let mut summary = SkillRunSummary::default();
+    let mut last_seen: Option<(String, String)> = None;
+    for entry in client
+        .list_nodes(ListNodesRequest {
+            database_id: database_id.to_string(),
+            prefix: format!("{SKILL_RUN_ROOT}/{id}"),
+            recursive: true,
+        })
+        .await?
+    {
+        if entry.kind != NodeEntryKind::Source && entry.kind != NodeEntryKind::File {
+            continue;
+        }
+        let Some(node) = client.read_node(database_id, &entry.path).await? else {
+            continue;
+        };
+        let Some(run) = parse_run_frontmatter(&node.content) else {
+            continue;
+        };
+        if run.skill_id.as_deref() != Some(id) {
+            continue;
+        }
+        summary.runs += 1;
+        match run.outcome.as_deref() {
+            Some("success") => summary.success += 1,
+            Some("partial") => summary.partial += 1,
+            Some("fail") => summary.fail += 1,
+            _ => {}
+        }
+        if let Some(recorded_at) = run.recorded_at {
+            let replace = last_seen
+                .as_ref()
+                .map(|(current, _)| recorded_at > *current)
+                .unwrap_or(true);
+            if replace {
+                last_seen = Some((recorded_at, run.outcome.unwrap_or_default()));
+            }
+        }
+    }
+    if let Some((recorded_at, outcome)) = last_seen {
+        summary.last_used_at = Some(recorded_at);
+        summary.last_outcome = Some(outcome);
+    }
+    Ok(summary)
+}
+
+#[derive(Default)]
+struct RunFrontmatter {
+    skill_id: Option<String>,
+    outcome: Option<String>,
+    recorded_at: Option<String>,
+}
+
+fn parse_run_frontmatter(content: &str) -> Option<RunFrontmatter> {
+    let frontmatter = extract_frontmatter(content)?;
+    let mut run = RunFrontmatter::default();
+    for line in frontmatter.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = clean_yaml_value(value);
+        match key.trim() {
+            "skill_id" => run.skill_id = non_empty(value),
+            "outcome" => run.outcome = non_empty(value),
+            "recorded_at" => run.recorded_at = non_empty(value),
+            _ => {}
+        }
+    }
+    Some(run)
+}
+
+fn sha256_hex(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn yaml_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
+    {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).expect("string should serialize")
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis() as i64
 }
 
 fn extract_frontmatter(content: &str) -> Option<&str> {

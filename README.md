@@ -137,6 +137,9 @@ Main commands:
 - `skill upsert`
 - `skill find`
 - `skill inspect`
+- `skill import github`
+- `skill propose-improvement`
+- `skill approve-proposal`
 - `skill record-run`
 - `skill set-status`
 - `github ingest`
@@ -197,11 +200,13 @@ Current tool names:
 - `skill_find`
 - `skill_inspect`
 - `skill_read`
+- `skill_record_run`
 
-Skill tools are read-only runtime helpers.
+Skill discovery and read tools are read-only runtime helpers.
 Agents should call `skill_find` at task start, inspect promising candidates, read `SKILL.md` and package-local helper files, then apply those instructions to the current task.
 They do not require shelling out to the CLI.
-Use the CLI for operational writes such as `skill upsert`, `database link`, and `skill record-run`.
+`skill_record_run` is a write tool for agent-side evidence capture and is excluded from read-only tool sets.
+Use the CLI for operational writes such as `skill upsert`, `database link`, imports, and improvement proposal approval.
 
 ### Canister Agent Memory API
 
