@@ -243,14 +243,22 @@ fn begin_database_restore(
         "begin_database_restore",
         Some(database_id.clone()),
         |service, caller, now| {
-            let meta = service.begin_database_restore(
+            let restore = service.begin_database_restore_session(
                 &database_id,
                 caller,
                 snapshot_hash,
                 size_bytes,
                 now,
             )?;
-            mount_database_file(&meta)
+            if let Err(error) = mount_database_file(&restore.meta) {
+                service
+                    .rollback_database_restore_begin(restore.rollback, now)
+                    .map_err(|rollback_error| {
+                        format!("{error}; restore rollback failed: {rollback_error}")
+                    })?;
+                return Err(error);
+            }
+            Ok(())
         },
     )
 }
@@ -477,6 +485,9 @@ fn mount_database_file(meta: &DatabaseMeta) -> Result<(), String> {
 
 #[cfg(test)]
 fn mount_database_file(_meta: &DatabaseMeta) -> Result<(), String> {
+    if TEST_MOUNT_DATABASE_FILE_FAIL_ONCE.with(|flag| flag.replace(false)) {
+        return Err("test mount failure".to_string());
+    }
     Ok(())
 }
 
@@ -487,6 +498,16 @@ fn unmount_database_file(db_file_name: &str) {
 
 #[cfg(test)]
 fn unmount_database_file(_db_file_name: &str) {}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MOUNT_DATABASE_FILE_FAIL_ONCE: RefCell<bool> = const { RefCell::new(false) };
+}
+
+#[cfg(test)]
+fn fail_next_mount_database_file_for_test() {
+    TEST_MOUNT_DATABASE_FILE_FAIL_ONCE.with(|flag| flag.replace(true));
+}
 
 fn database_create_error(error: String, cleanup_error: Option<String>) -> String {
     match cleanup_error {

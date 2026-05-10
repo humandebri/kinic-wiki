@@ -96,6 +96,7 @@ Restore is a low-level snapshot byte import flow:
 3. `finalize_database_restore(database_id)` checks file size and SHA-256 digest, runs DB migrations, and returns the DB to `hot`.
 
 Restore can only begin from `archived` or `deleted`. It cannot begin from `hot` or while already `restoring`.
+If the canister cannot mount the newly allocated DB file during begin, the DB rolls back to its previous `archived` or `deleted` state. The failed mount ID remains in mount history and is not reused.
 
 If finalize fails because the file size is wrong, the DB stays `restoring`. The caller can write missing bytes and retry finalize.
 Restore rejects chunks larger than 1 MiB and declared DB sizes larger than `i64::MAX`.
@@ -113,5 +114,9 @@ Busy DBs may require caller retry; the CLI reports this as a resync condition an
 - Archive export and restore import chunks are limited to 1 MiB.
 - Declared restore DB size must fit the runtime database size limit, currently `i64::MAX`.
 - v1 does not treat archived or deleted slots as reusable concurrent capacity.
+
+## Follow-ups
+
+- `delete_database` currently deletes the SQLite file before marking the DB `deleted`. A later lifecycle change should add a `deleting` state or equivalent two-phase flow before reordering this safely.
 - Archive/restore APIs are canister-level primitives. The CLI does not yet provide archive export/import commands.
 - Caffeine or external object storage integration is out of scope for v1.

@@ -117,6 +117,16 @@ fn mount_history_row(root: &std::path::Path, mount_id: u16) -> (String, String) 
     .expect("mount history row should exist")
 }
 
+fn database_restore_chunk_count(root: &std::path::Path, database_id: &str) -> i64 {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.query_row(
+        "SELECT COUNT(*) FROM database_restore_chunks WHERE database_id = ?1",
+        params![database_id],
+        |row| row.get(0),
+    )
+    .expect("restore chunk count should load")
+}
+
 type UsageEventTuple = (
     String,
     Option<String>,
@@ -1386,6 +1396,71 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
 }
 
 #[test]
+fn rollback_database_restore_begin_restores_archived_state() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+    let archive = service
+        .begin_database_archive("alpha", "owner", 3)
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 4)
+        .expect("archive should finalize");
+
+    let restore = service
+        .begin_database_restore_session(
+            "alpha",
+            "owner",
+            snapshot_hash.clone(),
+            archive.size_bytes,
+            5,
+        )
+        .expect("restore should begin");
+    let failed_mount_id = restore.meta.mount_id;
+    service
+        .write_database_restore_chunk("alpha", "owner", 0, &bytes)
+        .expect("restore chunk should write");
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 1);
+
+    service
+        .rollback_database_restore_begin(restore.rollback, 6)
+        .expect("restore begin should rollback");
+    assert_eq!(
+        database_index_row(&root, "alpha"),
+        ("archived".to_string(), None, archive.size_bytes, None)
+    );
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 0);
+    assert_eq!(
+        mount_history_row(&root, failed_mount_id),
+        ("alpha".to_string(), "restore".to_string())
+    );
+
+    let retry = service
+        .begin_database_restore_session("alpha", "owner", snapshot_hash, archive.size_bytes, 7)
+        .expect("restore should retry");
+    assert_ne!(retry.meta.mount_id, failed_mount_id);
+}
+
+#[test]
 fn enforces_reader_writer_owner_roles() {
     let service = service();
     service
@@ -1475,4 +1550,94 @@ fn enforces_reader_writer_owner_roles() {
             .expect_err("owner should not revoke own access")
             .contains("own access")
     );
+}
+
+#[test]
+fn append_node_validates_effective_kind_paths() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+
+    let error = service
+        .append_node(
+            "owner",
+            AppendNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Sources/raw/bad.md".to_string(),
+                content: "bad".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: Some(NodeKind::Source),
+            },
+            2,
+        )
+        .expect_err("non-canonical source append should fail");
+    assert!(error.contains("canonical form"));
+
+    let error = service
+        .append_node(
+            "owner",
+            AppendNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Sources/raw/bad/bad.md".to_string(),
+                content: "bad".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            3,
+        )
+        .expect_err("kind=None under sources should be treated as file");
+    assert!(error.contains("source path must use source kind"));
+
+    let source = service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Sources/raw/good/good.md".to_string(),
+                kind: NodeKind::Source,
+                content: "source".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            4,
+        )
+        .expect("canonical source should write");
+    let appended = service
+        .append_node(
+            "owner",
+            AppendNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Sources/raw/good/good.md".to_string(),
+                content: " body".to_string(),
+                expected_etag: Some(source.node.etag),
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            5,
+        )
+        .expect("kind=None should append to existing source");
+    assert_eq!(appended.node.kind, NodeKind::Source);
+
+    let wiki = service
+        .append_node(
+            "owner",
+            AppendNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/new.md".to_string(),
+                content: "wiki".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            6,
+        )
+        .expect("kind=None should create wiki file");
+    assert_eq!(wiki.node.kind, NodeKind::File);
 }

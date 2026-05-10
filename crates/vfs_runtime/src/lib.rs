@@ -15,7 +15,7 @@ use vfs_types::{
     GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
     IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MkdirNodeRequest,
     MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult,
-    Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext,
+    Node, NodeContext, NodeContextRequest, NodeEntry, NodeKind, OutgoingLinksRequest, QueryContext,
     QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
     SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest,
     WriteNodeResult,
@@ -47,6 +47,23 @@ pub struct DatabaseMeta {
     pub mount_id: u16,
     pub schema_version: String,
     pub logical_size_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseRestoreBegin {
+    pub meta: DatabaseMeta,
+    pub rollback: DatabaseRestoreRollback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseRestoreRollback {
+    database_id: String,
+    status: DatabaseStatus,
+    active_mount_id: Option<u16>,
+    snapshot_hash: Option<Vec<u8>>,
+    archived_at_ms: Option<i64>,
+    deleted_at_ms: Option<i64>,
+    restore_size_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -447,6 +464,18 @@ impl VfsService {
         size_bytes: u64,
         now: i64,
     ) -> Result<DatabaseMeta, String> {
+        self.begin_database_restore_session(database_id, caller, snapshot_hash, size_bytes, now)
+            .map(|restore| restore.meta)
+    }
+
+    pub fn begin_database_restore_session(
+        &self,
+        database_id: &str,
+        caller: &str,
+        snapshot_hash: Vec<u8>,
+        size_bytes: u64,
+        now: i64,
+    ) -> Result<DatabaseRestoreBegin, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         validate_snapshot_hash(&snapshot_hash)?;
         if size_bytes > MAX_DATABASE_SIZE_BYTES {
@@ -454,9 +483,9 @@ impl VfsService {
                 "database size exceeds limit: {size_bytes} > {MAX_DATABASE_SIZE_BYTES}"
             ));
         }
-        let current_status = self.database_status(database_id)?;
+        let rollback = self.database_restore_rollback(database_id)?;
         if !matches!(
-            current_status,
+            rollback.status,
             DatabaseStatus::Archived | DatabaseStatus::Deleted
         ) {
             return Err(
@@ -494,7 +523,55 @@ impl VfsService {
         tx.commit().map_err(|error| error.to_string())?;
         let meta = self.database_meta_allowing_restoring(database_id)?;
         let _ = remove_file(&meta.db_file_name);
-        Ok(meta)
+        Ok(DatabaseRestoreBegin { meta, rollback })
+    }
+
+    pub fn rollback_database_restore_begin(
+        &self,
+        rollback: DatabaseRestoreRollback,
+        now: i64,
+    ) -> Result<(), String> {
+        let mut conn = self.open_index()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let current_status = load_database_status(&tx, &rollback.database_id)?;
+        if current_status != DatabaseStatus::Restoring {
+            return Err(format!(
+                "database restore rollback requires restoring status: {}",
+                rollback.database_id
+            ));
+        }
+        tx.execute(
+            "DELETE FROM database_restore_chunks WHERE database_id = ?1",
+            params![&rollback.database_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "UPDATE databases
+             SET status = ?2,
+                 active_mount_id = ?3,
+                 snapshot_hash = ?4,
+                 archived_at_ms = ?5,
+                 deleted_at_ms = ?6,
+                 restore_size_bytes = ?7,
+                 updated_at_ms = ?8
+            WHERE database_id = ?1",
+            params![
+                &rollback.database_id,
+                status_to_db(rollback.status),
+                rollback.active_mount_id.map(i64::from),
+                rollback.snapshot_hash,
+                rollback.archived_at_ms,
+                rollback.deleted_at_ms,
+                rollback
+                    .restore_size_bytes
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
     }
 
     pub fn write_database_restore_chunk(
@@ -755,12 +832,15 @@ impl VfsService {
         request: AppendNodeRequest,
         now: i64,
     ) -> Result<WriteNodeResult, String> {
-        if let Some(kind) = request.kind.as_ref() {
-            validate_source_path_for_kind(&request.path, kind)?;
-        }
         let database_id = request.database_id.clone();
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
+                let kind = store
+                    .read_node(&request.path)?
+                    .map(|node| node.kind)
+                    .or_else(|| request.kind.clone())
+                    .unwrap_or(NodeKind::File);
+                validate_source_path_for_kind(&request.path, &kind)?;
                 store.append_node(request, now)
             });
         if result.is_ok() {
@@ -1035,12 +1115,30 @@ impl VfsService {
             .ok_or_else(|| database_meta_error(&conn, database_id))
     }
 
-    fn database_status(&self, database_id: &str) -> Result<DatabaseStatus, String> {
+    fn database_restore_rollback(
+        &self,
+        database_id: &str,
+    ) -> Result<DatabaseRestoreRollback, String> {
         let conn = self.open_index()?;
         conn.query_row(
-            "SELECT status FROM databases WHERE database_id = ?1",
+            "SELECT database_id, status, active_mount_id, snapshot_hash, archived_at_ms,
+                    deleted_at_ms, restore_size_bytes
+             FROM databases
+             WHERE database_id = ?1",
             params![database_id],
-            |row| status_from_db(&row.get::<_, String>(0)?),
+            |row| {
+                let active_mount_id: Option<i64> = row.get(2)?;
+                let restore_size_bytes: Option<i64> = row.get(6)?;
+                Ok(DatabaseRestoreRollback {
+                    database_id: row.get(0)?,
+                    status: status_from_db(&row.get::<_, String>(1)?)?,
+                    active_mount_id: active_mount_id.map(mount_id_from_db).transpose()?,
+                    snapshot_hash: row.get(3)?,
+                    archived_at_ms: row.get(4)?,
+                    deleted_at_ms: row.get(5)?,
+                    restore_size_bytes: restore_size_bytes.map(|size| size.max(0) as u64),
+                })
+            },
         )
         .optional()
         .map_err(|error| error.to_string())?
@@ -1468,6 +1566,17 @@ fn load_database(conn: &Connection, database_id: &str) -> Result<Option<Database
     load_database_with_statuses(conn, database_id, &[DatabaseStatus::Hot])
 }
 
+fn load_database_status(conn: &Connection, database_id: &str) -> Result<DatabaseStatus, String> {
+    conn.query_row(
+        "SELECT status FROM databases WHERE database_id = ?1",
+        params![database_id],
+        |row| status_from_db(&row.get::<_, String>(0)?),
+    )
+    .optional()
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| format!("database not found: {database_id}"))
+}
+
 fn load_database_with_statuses(
     conn: &Connection,
     database_id: &str,
@@ -1625,6 +1734,16 @@ fn status_from_db(status: &str) -> rusqlite::Result<DatabaseStatus> {
         "deleted" => Ok(DatabaseStatus::Deleted),
         "restoring" => Ok(DatabaseStatus::Restoring),
         _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+fn status_to_db(status: DatabaseStatus) -> &'static str {
+    match status {
+        DatabaseStatus::Hot => "hot",
+        DatabaseStatus::Archiving => "archiving",
+        DatabaseStatus::Archived => "archived",
+        DatabaseStatus::Deleted => "deleted",
+        DatabaseStatus::Restoring => "restoring",
     }
 }
 

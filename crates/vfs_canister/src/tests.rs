@@ -15,8 +15,9 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, append_node, begin_database_archive, cancel_database_archive, create_database,
-    delete_node, edit_node, export_snapshot, fetch_updates, finalize_database_archive, glob_nodes,
+    SERVICE, append_node, begin_database_archive, begin_database_restore, cancel_database_archive,
+    create_database, delete_node, edit_node, export_snapshot,
+    fail_next_mount_database_file_for_test, fetch_updates, finalize_database_archive, glob_nodes,
     grant_database_access, graph_links, graph_neighborhood, incoming_links, list_children,
     list_databases, list_nodes, memory_manifest, mkdir_node, move_node, multi_edit_node,
     outgoing_links, query_context, read_database_archive_chunk, read_node, read_node_context,
@@ -775,6 +776,54 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
     assert_eq!(info.status, DatabaseStatus::Archived);
     assert_eq!(info.snapshot_hash, Some(snapshot_hash));
     assert!(info.mount_id.is_none());
+}
+
+#[test]
+fn begin_database_restore_rolls_back_when_mount_fails() {
+    install_test_service();
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/restore-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "restore body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+
+    let archive = begin_database_archive("default".to_string()).expect("archive should begin");
+    let bytes = read_database_archive_chunk("default".to_string(), 0, archive.size_bytes as u32)
+        .expect("archive chunk should read")
+        .bytes;
+    let snapshot_hash = sha256_bytes(&bytes);
+    finalize_database_archive("default".to_string(), snapshot_hash.clone())
+        .expect("archive should finalize");
+
+    fail_next_mount_database_file_for_test();
+    let error = begin_database_restore(
+        "default".to_string(),
+        snapshot_hash.clone(),
+        archive.size_bytes,
+    )
+    .expect_err("mount failure should fail restore begin");
+    assert!(error.contains("test mount failure"));
+    let rolled_back = list_databases()
+        .expect("database infos should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(rolled_back.status, DatabaseStatus::Archived);
+    assert!(rolled_back.mount_id.is_none());
+
+    begin_database_restore("default".to_string(), snapshot_hash, archive.size_bytes)
+        .expect("restore begin should retry after rollback");
+    let restoring = list_databases()
+        .expect("database infos should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(restoring.status, DatabaseStatus::Restoring);
+    assert!(restoring.mount_id.is_some());
 }
 
 #[test]
