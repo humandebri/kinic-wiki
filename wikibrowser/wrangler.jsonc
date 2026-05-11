@@ -13,5 +13,11 @@
       "binding": "WORKER_SELF_REFERENCE",
       "service": "kinic-wiki-browser"
     }
+  ],
+  "routes": [
+    {
+      "pattern": "wiki.kinic.xyz",
+      "custom_domain": true
+    }
   ]
 }
