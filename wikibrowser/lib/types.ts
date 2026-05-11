@@ -15,6 +15,25 @@ export type CanisterHealth = {
   cyclesBalance: bigint;
 };
 
+export type DatabaseRole = "reader" | "writer" | "owner";
+export type DatabaseStatus = "hot" | "restoring" | "archiving" | "archived" | "deleted";
+
+export type DatabaseSummary = {
+  databaseId: string;
+  role: DatabaseRole;
+  status: DatabaseStatus;
+  logicalSizeBytes: string;
+  archivedAtMs: string | null;
+  deletedAtMs: string | null;
+};
+
+export type DatabaseMember = {
+  databaseId: string;
+  principal: string;
+  role: DatabaseRole;
+  createdAtMs: string;
+};
+
 export type ChildNode = {
   path: string;
   name: string;

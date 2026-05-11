@@ -1,6 +1,14 @@
 {
   "rewrites": [
     {
+      "source": "/dashboard/:databaseId",
+      "destination": "/dashboard"
+    },
+    {
+      "source": "/dashboard/:databaseId/:segments*",
+      "destination": "/dashboard"
+    },
+    {
       "source": "/:databaseId",
       "destination": "/w"
     },

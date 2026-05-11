@@ -5,6 +5,28 @@ type ActorInterfaceFactory = Parameters<typeof Actor.createActor>[0];
 
 export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const CanisterHealth = idl.Record({ cycles_balance: idl.Nat });
+  const DatabaseRole = idl.Variant({ Reader: idl.Null, Writer: idl.Null, Owner: idl.Null });
+  const DatabaseStatus = idl.Variant({
+    Hot: idl.Null,
+    Restoring: idl.Null,
+    Archiving: idl.Null,
+    Archived: idl.Null,
+    Deleted: idl.Null
+  });
+  const DatabaseSummary = idl.Record({
+    status: DatabaseStatus,
+    role: DatabaseRole,
+    logical_size_bytes: idl.Nat64,
+    database_id: idl.Text,
+    archived_at_ms: idl.Opt(idl.Int64),
+    deleted_at_ms: idl.Opt(idl.Int64)
+  });
+  const DatabaseMember = idl.Record({
+    principal: idl.Text,
+    role: DatabaseRole,
+    created_at_ms: idl.Int64,
+    database_id: idl.Text
+  });
   const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
   const NodeEntryKind = idl.Variant({
     File: idl.Null,
@@ -142,12 +164,20 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultSearch = idl.Variant({ Ok: idl.Vec(SearchNodeHit), Err: idl.Text });
   const ResultQueryContext = idl.Variant({ Ok: QueryContext, Err: idl.Text });
   const ResultSourceEvidence = idl.Variant({ Ok: SourceEvidence, Err: idl.Text });
+  const ResultCreateDatabase = idl.Variant({ Ok: idl.Text, Err: idl.Text });
+  const ResultDatabases = idl.Variant({ Ok: idl.Vec(DatabaseSummary), Err: idl.Text });
+  const ResultMembers = idl.Variant({ Ok: idl.Vec(DatabaseMember), Err: idl.Text });
+  const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
 
   return idl.Service({
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
+    create_database: idl.Func([], [ResultCreateDatabase], []),
+    grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
     incoming_links: idl.Func([IncomingLinksRequest], [ResultLinks], ["query"]),
+    list_databases: idl.Func([], [ResultDatabases], ["query"]),
+    list_database_members: idl.Func([idl.Text], [ResultMembers], ["query"]),
     memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
     query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
     read_node: idl.Func([idl.Text, idl.Text], [ResultNode], ["query"]),
@@ -155,6 +185,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     list_children: idl.Func([ListChildrenRequest], [ResultChildren], ["query"]),
     outgoing_links: idl.Func([OutgoingLinksRequest], [ResultLinks], ["query"]),
     recent_nodes: idl.Func([RecentNodesRequest], [ResultRecent], ["query"]),
+    revoke_database_access: idl.Func([idl.Text, idl.Text], [ResultUnit], []),
     search_node_paths: idl.Func([SearchNodePathsRequest], [ResultSearch], ["query"]),
     search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"]),
     source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"])
