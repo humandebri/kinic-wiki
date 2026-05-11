@@ -21,6 +21,7 @@ pub struct LatencyBenchArgs {
     pub replica_host: String,
     pub canister_id: String,
     pub prefix: String,
+    pub database_id: String,
     pub payload_size_bytes: usize,
     pub iterations: usize,
     pub warmup_iterations: usize,
@@ -34,6 +35,7 @@ pub struct LatencyBenchResult {
     pub replica_host: String,
     pub canister_id: String,
     pub prefix: String,
+    pub database_id: String,
     pub operation: LatencyOperation,
     pub measurement_mode: MeasurementMode,
     pub payload_size_bytes: usize,
@@ -101,6 +103,7 @@ where
         replica_host: args.replica_host,
         canister_id: args.canister_id,
         prefix: args.prefix,
+        database_id: args.database_id,
         operation: args.operation,
         measurement_mode: args.measurement_mode,
         payload_size_bytes: args.payload_size_bytes,
@@ -123,8 +126,10 @@ async fn seed_latency_base_node<C>(client: &Arc<C>, args: &LatencyBenchArgs) -> 
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.clone(),
             path: latency_path(args),
             kind: NodeKind::File,
             content: seed_payload(args).to_string(),
@@ -139,8 +144,9 @@ async fn current_latency_etag<C>(client: &Arc<C>, args: &LatencyBenchArgs) -> Re
 where
     C: VfsApi + Send + Sync + 'static,
 {
+    let database_id = args.database_id.clone();
     client
-        .read_node(&latency_path(args))
+        .read_node(&database_id, &latency_path(args))
         .await?
         .map(|node| node.etag)
         .ok_or_else(|| anyhow!("missing seeded node for {}", args.benchmark_name))
@@ -156,9 +162,11 @@ where
 {
     let started_at = Instant::now();
     let payload = make_payload(args.payload_size_bytes);
+    let database_id = args.database_id.clone();
     let (request_bytes, response_bytes, next_etag) = match args.operation {
         LatencyOperation::WriteNode => {
             let request = WriteNodeRequest {
+                database_id: database_id.clone(),
                 path: latency_path(args),
                 kind: NodeKind::File,
                 content: payload,
@@ -175,6 +183,7 @@ where
         }
         LatencyOperation::AppendNode => {
             let request = AppendNodeRequest {
+                database_id: database_id.clone(),
                 path: latency_path(args),
                 content: payload,
                 expected_etag: Some(current_etag.to_string()),
@@ -240,10 +249,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             Ok(self.nodes.lock().unwrap().get(path).cloned())
         }
         async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -296,6 +305,7 @@ mod tests {
                 .cloned()
                 .unwrap();
             self.write_node(WriteNodeRequest {
+                database_id: request.database_id.clone(),
                 path: request.path,
                 kind: NodeKind::File,
                 content: format!("{}{}", current.content, request.content),
@@ -353,6 +363,7 @@ mod tests {
 
     fn args(operation: LatencyOperation) -> LatencyBenchArgs {
         LatencyBenchArgs {
+            database_id: "default".to_string(),
             benchmark_name: "latency".to_string(),
             replica_host: "http://127.0.0.1:8000".to_string(),
             canister_id: "aaaaa-aa".to_string(),

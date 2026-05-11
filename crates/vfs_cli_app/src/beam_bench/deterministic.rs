@@ -17,15 +17,29 @@ use super::import::{ImportedConversation, ImportedNote};
 use super::model::ToolCallRecord;
 use super::report::{FailureReason, QuestionResult};
 
+pub struct RunQuestionRequest<'a> {
+    pub database_id: &'a str,
+    pub conversation_id: &'a str,
+    pub imported: &'a ImportedConversation,
+    pub question: BeamQuestion,
+    pub top_k: u32,
+    pub include_in_primary_metrics: bool,
+    pub answer_enabled: bool,
+}
+
 pub async fn run_question(
     client: &impl VfsApi,
-    conversation_id: &str,
-    imported: &ImportedConversation,
-    question: BeamQuestion,
-    top_k: u32,
-    include_in_primary_metrics: bool,
-    answer_enabled: bool,
+    request: RunQuestionRequest<'_>,
 ) -> Result<QuestionResult> {
+    let RunQuestionRequest {
+        database_id,
+        conversation_id,
+        imported,
+        question,
+        top_k,
+        include_in_primary_metrics,
+        answer_enabled,
+    } = request;
     let started_at = Instant::now();
     let gold = materialize_gold(imported, &question);
     if let Some(failure_reason) = gold.failure_reason {
@@ -42,6 +56,7 @@ pub async fn run_question(
 
     let mut tool_calls = Vec::new();
     let search_request = SearchNodesRequest {
+        database_id: database_id.to_string(),
         query_text: question.query.clone(),
         prefix: Some(imported.base_path.clone()),
         top_k,
@@ -61,7 +76,7 @@ pub async fn run_question(
         if imported.notes.iter().all(|note| &note.path != path) {
             continue;
         }
-        let node = client.read_node(path).await?;
+        let node = client.read_node(database_id, path).await?;
         docs_read_count += 1;
         tool_calls.push(ToolCallRecord {
             name: "read_node".to_string(),
@@ -422,7 +437,7 @@ fn build_precheck_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::run_question;
+    use super::{RunQuestionRequest, run_question};
     use crate::beam_bench::dataset::{BeamQuestion, BeamQuestionClass};
     use crate::beam_bench::import::{ImportedConversation, ImportedNote};
     use crate::beam_bench::report::FailureReason;
@@ -446,10 +461,10 @@ mod tests {
 
     #[async_trait]
     impl VfsApi for MockClient {
-        async fn status(&self) -> Result<Status> {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
             Ok(self.nodes.get(path).cloned())
         }
         async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -553,26 +568,29 @@ mod tests {
         };
         let result = run_question(
             &client,
-            "conv",
-            &imported,
-            BeamQuestion {
-                question_id: "factoid-000".to_string(),
-                question_type: "factoid".to_string(),
-                question_class: BeamQuestionClass::Factoid,
-                query: "When is the meeting?".to_string(),
-                as_of: None,
-                reference_answer: Some("March 15, 2024".to_string()),
-                gold_answers: vec!["March 15, 2024".to_string()],
-                gold_paths: vec!["facts.md".to_string()],
-                gold_spans: vec!["March 15, 2024".to_string()],
-                expects_abstention: false,
-                tags: vec!["factoid".to_string(), "facts".to_string()],
-                rubric_items: Vec::new(),
-                raw: serde_json::json!({}),
+            RunQuestionRequest {
+                database_id: "default",
+                conversation_id: "conv",
+                imported: &imported,
+                question: BeamQuestion {
+                    question_id: "factoid-000".to_string(),
+                    question_type: "factoid".to_string(),
+                    question_class: BeamQuestionClass::Factoid,
+                    query: "When is the meeting?".to_string(),
+                    as_of: None,
+                    reference_answer: Some("March 15, 2024".to_string()),
+                    gold_answers: vec!["March 15, 2024".to_string()],
+                    gold_paths: vec!["facts.md".to_string()],
+                    gold_spans: vec!["March 15, 2024".to_string()],
+                    expects_abstention: false,
+                    tags: vec!["factoid".to_string(), "facts".to_string()],
+                    rubric_items: Vec::new(),
+                    raw: serde_json::json!({}),
+                },
+                top_k: 3,
+                include_in_primary_metrics: true,
+                answer_enabled: true,
             },
-            3,
-            true,
-            true,
         )
         .await
         .expect("question should run");
@@ -621,26 +639,29 @@ mod tests {
         };
         let result = run_question(
             &client,
-            "conv",
-            &imported,
-            BeamQuestion {
-                question_id: "factoid-000".to_string(),
-                question_type: "factoid".to_string(),
-                question_class: BeamQuestionClass::Factoid,
-                query: "When is the meeting?".to_string(),
-                as_of: None,
-                reference_answer: Some("March 15, 2024".to_string()),
-                gold_answers: vec!["March 15, 2024".to_string()],
-                gold_paths: vec!["facts.md".to_string()],
-                gold_spans: vec!["March 15, 2024".to_string()],
-                expects_abstention: false,
-                tags: vec!["factoid".to_string(), "facts".to_string()],
-                rubric_items: Vec::new(),
-                raw: serde_json::json!({}),
+            RunQuestionRequest {
+                database_id: "default",
+                conversation_id: "conv",
+                imported: &imported,
+                question: BeamQuestion {
+                    question_id: "factoid-000".to_string(),
+                    question_type: "factoid".to_string(),
+                    question_class: BeamQuestionClass::Factoid,
+                    query: "When is the meeting?".to_string(),
+                    as_of: None,
+                    reference_answer: Some("March 15, 2024".to_string()),
+                    gold_answers: vec!["March 15, 2024".to_string()],
+                    gold_paths: vec!["facts.md".to_string()],
+                    gold_spans: vec!["March 15, 2024".to_string()],
+                    expects_abstention: false,
+                    tags: vec!["factoid".to_string(), "facts".to_string()],
+                    rubric_items: Vec::new(),
+                    raw: serde_json::json!({}),
+                },
+                top_k: 3,
+                include_in_primary_metrics: true,
+                answer_enabled: false,
             },
-            3,
-            true,
-            false,
         )
         .await
         .expect("question should run");
@@ -669,26 +690,29 @@ mod tests {
         };
         let result = run_question(
             &client,
-            "conv",
-            &imported,
-            BeamQuestion {
-                question_id: "factoid-000".to_string(),
-                question_type: "factoid".to_string(),
-                question_class: BeamQuestionClass::Factoid,
-                query: "When is the meeting?".to_string(),
-                as_of: None,
-                reference_answer: Some("March 15, 2024".to_string()),
-                gold_answers: vec!["March 15, 2024".to_string()],
-                gold_paths: vec!["facts.md".to_string()],
-                gold_spans: vec!["March 15, 2024".to_string()],
-                expects_abstention: false,
-                tags: vec!["factoid".to_string()],
-                rubric_items: Vec::new(),
-                raw: serde_json::json!({}),
+            RunQuestionRequest {
+                database_id: "default",
+                conversation_id: "conv",
+                imported: &imported,
+                question: BeamQuestion {
+                    question_id: "factoid-000".to_string(),
+                    question_type: "factoid".to_string(),
+                    question_class: BeamQuestionClass::Factoid,
+                    query: "When is the meeting?".to_string(),
+                    as_of: None,
+                    reference_answer: Some("March 15, 2024".to_string()),
+                    gold_answers: vec!["March 15, 2024".to_string()],
+                    gold_paths: vec!["facts.md".to_string()],
+                    gold_spans: vec!["March 15, 2024".to_string()],
+                    expects_abstention: false,
+                    tags: vec!["factoid".to_string()],
+                    rubric_items: Vec::new(),
+                    raw: serde_json::json!({}),
+                },
+                top_k: 3,
+                include_in_primary_metrics: true,
+                answer_enabled: true,
             },
-            3,
-            true,
-            true,
         )
         .await
         .expect("question should run");
@@ -735,26 +759,29 @@ mod tests {
         };
         let result = run_question(
             &client,
-            "conv",
-            &imported,
-            BeamQuestion {
-                question_id: "factoid-000".to_string(),
-                question_type: "factoid".to_string(),
-                question_class: BeamQuestionClass::Factoid,
-                query: "When is the meeting?".to_string(),
-                as_of: None,
-                reference_answer: Some("March 15, 2024".to_string()),
-                gold_answers: vec!["March 15, 2024".to_string()],
-                gold_paths: vec!["provenance.md".to_string()],
-                gold_spans: vec!["March 15, 2024".to_string()],
-                expects_abstention: false,
-                tags: vec!["factoid".to_string()],
-                rubric_items: Vec::new(),
-                raw: serde_json::json!({}),
+            RunQuestionRequest {
+                database_id: "default",
+                conversation_id: "conv",
+                imported: &imported,
+                question: BeamQuestion {
+                    question_id: "factoid-000".to_string(),
+                    question_type: "factoid".to_string(),
+                    question_class: BeamQuestionClass::Factoid,
+                    query: "When is the meeting?".to_string(),
+                    as_of: None,
+                    reference_answer: Some("March 15, 2024".to_string()),
+                    gold_answers: vec!["March 15, 2024".to_string()],
+                    gold_paths: vec!["provenance.md".to_string()],
+                    gold_spans: vec!["March 15, 2024".to_string()],
+                    expects_abstention: false,
+                    tags: vec!["factoid".to_string()],
+                    rubric_items: Vec::new(),
+                    raw: serde_json::json!({}),
+                },
+                top_k: 3,
+                include_in_primary_metrics: true,
+                answer_enabled: true,
             },
-            3,
-            true,
-            true,
         )
         .await
         .expect("question should run");

@@ -47,14 +47,14 @@ const SNAPSHOT_REVISION_1: &str = "v5:1:2f57696b69";
 
 #[async_trait]
 impl VfsApi for MockClient {
-    async fn status(&self) -> Result<Status> {
+    async fn status(&self, _database_id: &str) -> Result<Status> {
         Ok(Status {
             file_count: 0,
             source_count: 0,
         })
     }
 
-    async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
+    async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
         if self.nodes.is_empty() {
             return Ok(Some(Node {
                 path: _path.to_string(),
@@ -279,10 +279,10 @@ impl VfsApi for MockClient {
 
 #[async_trait]
 impl VfsApi for SnapshotRestartClient {
-    async fn status(&self) -> Result<Status> {
+    async fn status(&self, _database_id: &str) -> Result<Status> {
         unreachable!()
     }
-    async fn read_node(&self, _path: &str) -> Result<Option<Node>> {
+    async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
         unreachable!()
     }
     async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
@@ -339,7 +339,7 @@ impl VfsApi for SnapshotRestartClient {
         let response = match *calls {
             0 => ExportSnapshotResponse {
                 snapshot_revision: "v5:1:2f57696b69".to_string(),
-                snapshot_session_id: Some("session-1".to_string()),
+                snapshot_session_id: None,
                 nodes: vec![Node {
                     path: "/Wiki/000.md".to_string(),
                     kind: NodeKind::File,
@@ -352,7 +352,7 @@ impl VfsApi for SnapshotRestartClient {
                 next_cursor: Some("/Wiki/000.md".to_string()),
             },
             _ => {
-                assert_eq!(request.snapshot_session_id.as_deref(), Some("session-1"));
+                assert_eq!(request.snapshot_session_id, None);
                 assert_eq!(
                     request.snapshot_revision.as_deref(),
                     Some("v5:1:2f57696b69")
@@ -386,7 +386,7 @@ async fn pull_writes_nodes_under_mirror_root() {
         ..Default::default()
     };
 
-    pull(&client, &root, false)
+    pull(&client, "default", &root, false)
         .await
         .expect("pull should succeed");
 
@@ -429,7 +429,7 @@ async fn initial_pull_deduplicates_paths_when_delta_overwrites_snapshot_node() {
         ..Default::default()
     };
 
-    pull(&client, &root, false)
+    pull(&client, "default", &root, false)
         .await
         .expect("pull should succeed");
 
@@ -447,7 +447,7 @@ async fn initial_pull_reports_snapshot_restart_when_paged_snapshot_turns_stale()
         calls: Mutex::new(0),
     };
 
-    let error = pull(&client, &root, false)
+    let error = pull(&client, "default", &root, false)
         .await
         .expect_err("pull should surface snapshot restart");
     assert_eq!(
@@ -516,7 +516,9 @@ async fn push_uses_expected_etag_from_frontmatter() {
         ..Default::default()
     };
 
-    push(&client, &root).await.expect("push should succeed");
+    push(&client, "default", &root)
+        .await
+        .expect("push should succeed");
 
     let writes = client.writes.lock().expect("writes should lock");
     assert_eq!(writes.len(), 1);
@@ -538,6 +540,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
             &client,
             Cli {
                 connection: ConnectionArgs {
+                    database_id: Some("default".to_string()),
                     local: false,
                     canister_id: None,
                 },
@@ -577,6 +580,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
             &client,
             Cli {
                 connection: ConnectionArgs {
+                    database_id: Some("default".to_string()),
                     local: false,
                     canister_id: None,
                 },

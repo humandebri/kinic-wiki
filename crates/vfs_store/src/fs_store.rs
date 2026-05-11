@@ -8,11 +8,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use uuid::Uuid;
+use rusqlite::{Connection, Transaction, params};
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
@@ -54,23 +52,27 @@ const CONTEXT_SEARCH_LIMIT: u32 = 10;
 const TOKEN_CHAR_APPROX: usize = 4;
 const SNAPSHOT_REVISION_NO_LONGER_CURRENT: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
-const SNAPSHOT_SESSION_EXPIRED: &str = "snapshot_session_id has expired";
-const SNAPSHOT_SESSION_PREFIX_MISMATCH: &str =
-    "snapshot_session_id prefix does not match request prefix";
-const SNAPSHOT_SESSION_CURSOR_REQUIRED: &str = "snapshot_session_id is required when cursor is set";
-const SNAPSHOT_SESSION_CURSOR_FORBIDDEN: &str =
-    "snapshot_session_id cannot be used when cursor is absent";
-const SNAPSHOT_SESSION_CURSOR_INVALID: &str = "cursor is invalid for snapshot_session_id";
+const SNAPSHOT_REVISION_CURSOR_REQUIRED: &str = "snapshot_revision is required when cursor is set";
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
-const SNAPSHOT_SESSION_TTL_SECS: i64 = 300;
 const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
-SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
-FROM fs_nodes
-WHERE path >= ?1
-  AND path < ?2
-  AND instr(substr(path, ?3), '/') = 0
-ORDER BY path ASC";
+SELECT child.path,
+       child.kind,
+       child.updated_at,
+       child.etag,
+       length(CAST(child.content AS BLOB)),
+       EXISTS (
+           SELECT 1
+           FROM fs_nodes descendant
+           WHERE descendant.path >= child.path || '/'
+             AND descendant.path < child.path || '/' || char(1114111)
+           LIMIT 1
+       )
+FROM fs_nodes child
+WHERE child.path >= ?1
+  AND child.path < ?2
+  AND instr(substr(child.path, ?3), '/') = 0
+ORDER BY child.path ASC";
 const LIST_VIRTUAL_CHILD_NAMES_SQL: &str = "\
 SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
 FROM fs_nodes
@@ -85,6 +87,7 @@ struct ChildRow {
     updated_at: i64,
     etag: String,
     size_bytes: u64,
+    has_children: bool,
 }
 
 // Where: crates/vfs_store/src/fs_store.rs
@@ -160,8 +163,7 @@ impl FsStore {
         {
             return Err(format!("path not found: {path}"));
         }
-        let children_with_descendants = load_descendant_child_paths(&conn, &path)?;
-        build_child_nodes(&path, rows, virtual_names, &children_with_descendants)
+        build_child_nodes(&path, rows, virtual_names)
     }
 
     pub fn write_node(
@@ -485,6 +487,7 @@ impl FsStore {
         let budget_chars = budget_chars(request.budget_tokens);
         let query_text = context_query_text(&request.task, &request.entities)?;
         let search_hits = self.search_nodes(SearchNodesRequest {
+            database_id: request.database_id.clone(),
             query_text,
             prefix: Some(namespace.clone()),
             top_k: CONTEXT_SEARCH_LIMIT,
@@ -716,15 +719,46 @@ impl FsStore {
             .map(|value| normalize_node_path(value, true))
             .transpose()?;
         let prefix = prefix.unwrap_or_else(|| "/".to_string());
-        let _legacy_snapshot_revision = request.snapshot_revision;
-        match (request.cursor, request.snapshot_session_id) {
-            (None, None) => self.start_snapshot_session(prefix, limit),
-            (Some(cursor), Some(session_id)) => {
-                self.resume_snapshot_session(prefix, cursor, session_id, limit)
-            }
-            (Some(_), None) => Err(SNAPSHOT_SESSION_CURSOR_REQUIRED.to_string()),
-            (None, Some(_)) => Err(SNAPSHOT_SESSION_CURSOR_FORBIDDEN.to_string()),
+        if request.snapshot_session_id.is_some() {
+            return Err(SNAPSHOT_SESSION_INVALID.to_string());
         }
+        let cursor = normalize_sync_cursor(request.cursor.as_deref(), &prefix)?;
+        if cursor.is_some() && request.snapshot_revision.is_none() {
+            return Err(SNAPSHOT_REVISION_CURSOR_REQUIRED.to_string());
+        }
+        let conn = self.open()?;
+        let current_revision = current_snapshot_revision_number(&conn)?;
+        let snapshot = match request.snapshot_revision.as_deref() {
+            Some(snapshot_revision) => parse_target_snapshot_revision(
+                snapshot_revision,
+                &prefix,
+                current_revision,
+                "snapshot_revision",
+            )?,
+            None => KnownSnapshotRevision {
+                revision: current_revision,
+                prefix: prefix.clone(),
+            },
+        };
+        if request.snapshot_revision.is_some()
+            && has_prefix_changes_after_revision(&conn, &prefix, snapshot.revision)?
+        {
+            return Err(SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string());
+        }
+        let mut nodes = load_snapshot_nodes_page(
+            &conn,
+            &prefix,
+            cursor.as_deref(),
+            snapshot.revision,
+            limit + 1,
+        )?;
+        let next_cursor = page_next_cursor(&mut nodes, limit);
+        Ok(ExportSnapshotResponse {
+            snapshot_revision: scoped_snapshot_revision(&prefix, snapshot.revision),
+            snapshot_session_id: None,
+            nodes,
+            next_cursor,
+        })
     }
 
     pub fn fetch_updates(
@@ -817,85 +851,6 @@ impl FsStore {
 
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.database_path).map_err(|error| error.to_string())
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SnapshotSession {
-    session_id: String,
-    prefix: String,
-    snapshot_revision: i64,
-    expires_at: i64,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SnapshotPage {
-    snapshot_revision: String,
-    snapshot_session_id: String,
-    nodes: Vec<Node>,
-    next_cursor: Option<String>,
-}
-
-impl FsStore {
-    fn start_snapshot_session(
-        &self,
-        prefix: String,
-        limit: i64,
-    ) -> Result<ExportSnapshotResponse, String> {
-        let mut conn = self.open()?;
-        let tx = conn.transaction().map_err(|error| error.to_string())?;
-        let now = unix_timestamp_secs()?;
-        delete_expired_snapshot_sessions(&tx, now)?;
-        let snapshot_revision = current_snapshot_revision_number(&tx)?;
-        let session_id = Uuid::new_v4().to_string();
-        let expires_at = now + SNAPSHOT_SESSION_TTL_SECS;
-        insert_snapshot_session(&tx, &session_id, &prefix, snapshot_revision, expires_at)?;
-        let page = build_snapshot_page_from_live_paths(
-            &tx,
-            &session_id,
-            &prefix,
-            snapshot_revision,
-            limit,
-        )?;
-        tx.commit().map_err(|error| error.to_string())?;
-        Ok(ExportSnapshotResponse {
-            snapshot_revision: page.snapshot_revision,
-            snapshot_session_id: Some(page.snapshot_session_id),
-            nodes: page.nodes,
-            next_cursor: page.next_cursor,
-        })
-    }
-
-    fn resume_snapshot_session(
-        &self,
-        prefix: String,
-        cursor: String,
-        session_id: String,
-        limit: i64,
-    ) -> Result<ExportSnapshotResponse, String> {
-        let mut conn = self.open()?;
-        let tx = conn.transaction().map_err(|error| error.to_string())?;
-        let now = unix_timestamp_secs()?;
-        let session = load_snapshot_session(&tx, &session_id)?
-            .ok_or_else(|| SNAPSHOT_SESSION_INVALID.to_string())?;
-        delete_expired_snapshot_sessions(&tx, now)?;
-        if session.expires_at <= now {
-            delete_snapshot_session(&tx, &session.session_id)?;
-            return Err(SNAPSHOT_SESSION_EXPIRED.to_string());
-        }
-        let normalized_prefix = normalize_node_path(&prefix, true)?;
-        if session.prefix != normalized_prefix {
-            return Err(SNAPSHOT_SESSION_PREFIX_MISMATCH.to_string());
-        }
-        let cursor = normalize_snapshot_session_cursor(&cursor, &session.prefix)?;
-        let page = build_snapshot_page_from_session(&tx, &session, &cursor, limit)?;
-        tx.commit().map_err(|error| error.to_string())?;
-        Ok(ExportSnapshotResponse {
-            snapshot_revision: page.snapshot_revision,
-            snapshot_session_id: Some(page.snapshot_session_id),
-            nodes: page.nodes,
-            next_cursor: page.next_cursor,
-        })
     }
 }
 
@@ -1011,21 +966,6 @@ fn normalize_sync_cursor(cursor: Option<&str>, prefix: &str) -> Result<Option<St
     Ok(Some(cursor))
 }
 
-fn normalize_snapshot_session_cursor(cursor: &str, prefix: &str) -> Result<String, String> {
-    let cursor = normalize_node_path(cursor, false)?;
-    if !path_in_prefix(&cursor, prefix) {
-        return Err(SNAPSHOT_SESSION_CURSOR_INVALID.to_string());
-    }
-    Ok(cursor)
-}
-
-fn unix_timestamp_secs() -> Result<i64, String> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .map_err(|error| error.to_string())
-}
-
 fn path_in_prefix(path: &str, prefix: &str) -> bool {
     prefix == "/" || path == prefix || path.starts_with(&format!("{prefix}/"))
 }
@@ -1057,29 +997,13 @@ impl PageCursorPath for String {
     }
 }
 
-fn insert_snapshot_session(
-    tx: &Transaction<'_>,
-    session_id: &str,
+fn load_snapshot_nodes_page(
+    conn: &Connection,
     prefix: &str,
-    snapshot_revision: i64,
-    expires_at: i64,
-) -> Result<(), String> {
-    tx.execute(
-        "INSERT INTO fs_snapshot_sessions (session_id, prefix, snapshot_revision, expires_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![session_id, prefix, snapshot_revision, expires_at],
-    )
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
-fn build_snapshot_page_from_live_paths(
-    tx: &Transaction<'_>,
-    session_id: &str,
-    prefix: &str,
+    cursor: Option<&str>,
     snapshot_revision: i64,
     limit: i64,
-) -> Result<SnapshotPage, String> {
+) -> Result<Vec<Node>, String> {
     let mut sql = String::from("SELECT path FROM fs_nodes WHERE 1 = 1");
     let mut values = Vec::new();
     if prefix != "/" {
@@ -1087,158 +1011,41 @@ fn build_snapshot_page_from_live_paths(
         sql.push_str(&scope_sql);
         values.extend(scope_values);
     }
-    sql.push_str(" ORDER BY path ASC");
-    let mut stmt = tx.prepare(&sql).map_err(|error| error.to_string())?;
-    let mut rows = stmt
-        .query(rusqlite::params_from_iter(values.iter()))
-        .map_err(|error| error.to_string())?;
-    let mut page_paths = Vec::new();
-    let mut ordinal = 0_i64;
-    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
-        let path = row.get::<_, String>(0).map_err(|error| error.to_string())?;
-        tx.execute(
-            "INSERT INTO fs_snapshot_session_paths (session_id, ordinal, path)
-             VALUES (?1, ?2, ?3)",
-            params![session_id, ordinal, path],
-        )
-        .map_err(|error| error.to_string())?;
-        if ordinal <= limit {
-            page_paths.push(path);
-        }
-        ordinal += 1;
+    if let Some(cursor) = cursor {
+        let index = values.len() + 1;
+        sql.push_str(&format!(" AND path > ?{index}"));
+        values.push(rusqlite::types::Value::from(cursor.to_string()));
     }
-    let next_cursor = page_next_cursor(&mut page_paths, limit);
-    Ok(SnapshotPage {
-        snapshot_revision: scoped_snapshot_revision(prefix, snapshot_revision),
-        snapshot_session_id: session_id.to_string(),
-        nodes: load_snapshot_nodes(tx, &page_paths, snapshot_revision)?,
-        next_cursor,
-    })
-}
-
-fn load_snapshot_session(
-    tx: &Transaction<'_>,
-    session_id: &str,
-) -> Result<Option<SnapshotSession>, String> {
-    tx.query_row(
-        "SELECT session_id, prefix, snapshot_revision, expires_at
-         FROM fs_snapshot_sessions
-         WHERE session_id = ?1",
-        params![session_id],
-        |row| {
-            Ok(SnapshotSession {
-                session_id: row.get(0)?,
-                prefix: row.get(1)?,
-                snapshot_revision: row.get(2)?,
-                expires_at: row.get(3)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(|error| error.to_string())
-}
-
-fn build_snapshot_page_from_session(
-    tx: &Transaction<'_>,
-    session: &SnapshotSession,
-    cursor: &str,
-    limit: i64,
-) -> Result<SnapshotPage, String> {
-    let start_ordinal = load_snapshot_cursor_ordinal(tx, &session.session_id, cursor)?
-        .ok_or_else(|| SNAPSHOT_SESSION_CURSOR_INVALID.to_string())?
-        + 1;
-    let mut stmt = tx
-        .prepare(
-            "SELECT path
-             FROM fs_snapshot_session_paths
-             WHERE session_id = ?1 AND ordinal >= ?2
-             ORDER BY ordinal ASC
-             LIMIT ?3",
-        )
-        .map_err(|error| error.to_string())?;
-    let page_paths = stmt
-        .query_map(
-            params![session.session_id, start_ordinal, limit + 1],
-            |row| row.get::<_, String>(0),
-        )
+    let index = values.len() + 1;
+    sql.push_str(&format!(" ORDER BY path ASC LIMIT ?{index}"));
+    values.push(rusqlite::types::Value::from(limit));
+    let paths = conn
+        .prepare(&sql)
+        .map_err(|error| error.to_string())?
+        .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let mut page_paths = page_paths;
-    let next_cursor = page_next_cursor(&mut page_paths, limit);
-    Ok(SnapshotPage {
-        snapshot_revision: scoped_snapshot_revision(&session.prefix, session.snapshot_revision),
-        snapshot_session_id: session.session_id.clone(),
-        nodes: load_snapshot_nodes(tx, &page_paths, session.snapshot_revision)?,
-        next_cursor,
-    })
-}
-
-fn load_snapshot_cursor_ordinal(
-    tx: &Transaction<'_>,
-    session_id: &str,
-    cursor: &str,
-) -> Result<Option<i64>, String> {
-    tx.query_row(
-        "SELECT ordinal
-         FROM fs_snapshot_session_paths
-         WHERE session_id = ?1 AND path = ?2",
-        params![session_id, cursor],
-        |row| row.get::<_, i64>(0),
-    )
-    .optional()
-    .map_err(|error| error.to_string())
+    load_snapshot_nodes(conn, &paths, snapshot_revision)
 }
 
 fn load_snapshot_nodes(
-    tx: &Transaction<'_>,
+    conn: &Connection,
     paths: &[String],
     snapshot_revision: i64,
 ) -> Result<Vec<Node>, String> {
     let mut nodes = Vec::with_capacity(paths.len());
     for path in paths {
-        if load_path_last_change_revision(tx, path)? > snapshot_revision {
+        if load_path_last_change_revision(conn, path)? > snapshot_revision {
             return Err(SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string());
         }
-        let node =
-            load_node(tx, path)?.ok_or_else(|| SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string())?;
+        let node = load_node(conn, path)?
+            .ok_or_else(|| SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string())?;
         nodes.push(node);
     }
     Ok(nodes)
-}
-
-fn delete_expired_snapshot_sessions(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
-    let expired = {
-        let mut stmt = tx
-            .prepare(
-                "SELECT session_id
-                 FROM fs_snapshot_sessions
-                 WHERE expires_at <= ?1",
-            )
-            .map_err(|error| error.to_string())?;
-        stmt.query_map(params![now], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?
-    };
-    for session_id in expired {
-        delete_snapshot_session(tx, &session_id)?;
-    }
-    Ok(())
-}
-
-fn delete_snapshot_session(tx: &Transaction<'_>, session_id: &str) -> Result<(), String> {
-    tx.execute(
-        "DELETE FROM fs_snapshot_sessions WHERE session_id = ?1",
-        params![session_id],
-    )
-    .map_err(|error| error.to_string())?;
-    tx.execute(
-        "DELETE FROM fs_snapshot_session_paths WHERE session_id = ?1",
-        params![session_id],
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 fn load_changed_paths_page(
@@ -1273,6 +1080,25 @@ fn load_changed_paths_page(
     stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn has_prefix_changes_after_revision(
+    conn: &Connection,
+    prefix: &str,
+    snapshot_revision: i64,
+) -> Result<bool, String> {
+    let mut sql = String::from("SELECT 1 FROM fs_change_log WHERE revision > ?1");
+    let mut values = vec![rusqlite::types::Value::from(snapshot_revision)];
+    if prefix != "/" {
+        let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
+        sql.push_str(&scope_sql);
+        values.extend(scope_values);
+    }
+    sql.push_str(" LIMIT 1");
+    conn.prepare(&sql)
+        .map_err(|error| error.to_string())?
+        .exists(rusqlite::params_from_iter(values))
         .map_err(|error| error.to_string())
 }
 
@@ -1330,6 +1156,7 @@ fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, Strin
             updated_at: row.get(2)?,
             etag: row.get(3)?,
             size_bytes: size_bytes.max(0) as u64,
+            has_children: row.get::<_, i64>(5)? != 0,
         })
     })
     .map_err(|error| error.to_string())?
@@ -1356,7 +1183,6 @@ fn build_child_nodes(
     parent_path: &str,
     rows: Vec<ChildRow>,
     virtual_names: Vec<String>,
-    children_with_descendants: &BTreeSet<String>,
 ) -> Result<Vec<ChildNode>, String> {
     let mut children = BTreeMap::<String, ChildNode>::new();
 
@@ -1369,7 +1195,7 @@ fn build_child_nodes(
         children.insert(
             name.clone(),
             ChildNode {
-                has_children: children_with_descendants.contains(&row.path),
+                has_children: row.has_children,
                 path: row.path,
                 name,
                 kind: entry_kind_from_node_kind(&row.kind),
@@ -1380,7 +1206,7 @@ fn build_child_nodes(
             },
         );
     }
-    for child in build_virtual_child_nodes(parent_path, virtual_names, children_with_descendants) {
+    for child in build_virtual_child_nodes(parent_path, virtual_names) {
         children.entry(child.name.clone()).or_insert(child);
     }
 
@@ -1394,17 +1220,13 @@ fn build_child_nodes(
     Ok(children)
 }
 
-fn build_virtual_child_nodes(
-    parent_path: &str,
-    names: Vec<String>,
-    children_with_descendants: &BTreeSet<String>,
-) -> Vec<ChildNode> {
+fn build_virtual_child_nodes(parent_path: &str, names: Vec<String>) -> Vec<ChildNode> {
     names
         .into_iter()
         .map(|name| {
             let path = child_path(parent_path, &name);
             ChildNode {
-                has_children: children_with_descendants.contains(&path),
+                has_children: true,
                 path,
                 name,
                 kind: NodeEntryKind::Directory,
@@ -1415,33 +1237,6 @@ fn build_virtual_child_nodes(
             }
         })
         .collect()
-}
-
-fn load_descendant_child_paths(
-    conn: &Connection,
-    parent_path: &str,
-) -> Result<BTreeSet<String>, String> {
-    let (prefix, upper, _relative_start) = list_child_query_bounds(parent_path);
-    let mut stmt = conn
-        .prepare(
-            "SELECT path
-             FROM fs_nodes
-             WHERE path >= ?1
-               AND path < ?2",
-        )
-        .map_err(|error| error.to_string())?;
-    let paths = stmt
-        .query_map(params![prefix, upper], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(paths
-        .into_iter()
-        .filter_map(|path| {
-            let (name, is_direct) = child_name(parent_path, &path)?;
-            (!is_direct).then(|| child_path(parent_path, &name))
-        })
-        .collect())
 }
 
 fn child_prefix(parent_path: &str) -> String {

@@ -32,14 +32,14 @@ const SNAPSHOT_REVISION_2: &str = "v5:2:2f57696b69";
 const SNAPSHOT_REVISION_3: &str = "v5:3:2f57696b69";
 #[async_trait]
 impl VfsApi for SyncMockClient {
-    async fn status(&self) -> Result<Status> {
+    async fn status(&self, _database_id: &str) -> Result<Status> {
         Ok(Status {
             file_count: 0,
             source_count: 0,
         })
     }
 
-    async fn read_node(&self, path: &str) -> Result<Option<Node>> {
+    async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
         Ok(self
             .snapshot_nodes
             .iter()
@@ -207,7 +207,9 @@ async fn push_writes_conflict_file_when_remote_write_rejects() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    push(&client, &root).await.expect("push should succeed");
+    push(&client, "default", &root)
+        .await
+        .expect("push should succeed");
 
     let conflict = std::fs::read_to_string(
         conflict_file_path(&root, "/Wiki/foo.md").expect("conflict path should build"),
@@ -286,7 +288,9 @@ async fn push_keeps_conflicts_for_same_basename_under_different_paths() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    push(&client, &root).await.expect("push should succeed");
+    push(&client, "default", &root)
+        .await
+        .expect("push should succeed");
 
     let first_conflict = std::fs::read_to_string(
         conflict_file_path(&root, "/Wiki/a/foo.md").expect("first conflict path should build"),
@@ -328,7 +332,7 @@ async fn pull_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    let error = pull(&client, &root, false)
+    let error = pull(&client, "default", &root, false)
         .await
         .expect_err("pull should reject invalid revision");
     assert_eq!(
@@ -363,7 +367,7 @@ async fn pull_reports_resync_for_invalid_known_snapshot_revision() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    let error = pull(&client, &root, false)
+    let error = pull(&client, "default", &root, false)
         .await
         .expect_err("pull should request resync");
     assert_eq!(
@@ -415,7 +419,7 @@ async fn push_rejects_invalid_local_snapshot_revision_before_remote_mutation() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    let error = push(&client, &root)
+    let error = push(&client, "default", &root)
         .await
         .expect_err("push should reject invalid revision");
     assert_eq!(
@@ -457,7 +461,7 @@ async fn push_reports_resync_for_invalid_known_snapshot_revision() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    let error = push(&client, &root)
+    let error = push(&client, "default", &root)
         .await
         .expect_err("push should request resync");
     assert_eq!(
@@ -556,7 +560,9 @@ async fn push_keeps_preflight_remote_delta_in_postflight_refresh() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    push(&client, &root).await.expect("push should succeed");
+    push(&client, "default", &root)
+        .await
+        .expect("push should succeed");
 
     let state = load_state(&root).expect("state should load");
     assert_eq!(state.snapshot_revision, SNAPSHOT_REVISION_3);
@@ -676,7 +682,7 @@ async fn pull_removes_stale_paths_and_refreshes_tracked_state() {
         deletes: Mutex::new(Vec::new()),
     };
 
-    pull(&client, &root, false)
+    pull(&client, "default", &root, false)
         .await
         .expect("pull should succeed");
 

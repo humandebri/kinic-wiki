@@ -24,17 +24,17 @@ type GraphLoadState = LoadState<LinkEdge[]> & {
   requestKey: string | null;
 };
 
-export function GraphPanel({ canisterId, centerPath, depth }: { canisterId: string; centerPath: string | null; depth: 1 | 2 }) {
-  const currentRequestKey = graphRequestKey(canisterId, centerPath, depth);
+export function GraphPanel({ canisterId, databaseId, centerPath, depth }: { canisterId: string; databaseId: string; centerPath: string | null; depth: 1 | 2 }) {
+  const currentRequestKey = graphRequestKey(canisterId, databaseId, centerPath, depth);
   const [links, setLinks] = useState<GraphLoadState>({ centerPath: null, requestKey: null, data: null, error: null, loading: false });
 
   useEffect(() => {
-    const requestKey = graphRequestKey(canisterId, centerPath, depth);
+    const requestKey = graphRequestKey(canisterId, databaseId, centerPath, depth);
     if (!centerPath || !requestKey) {
       return;
     }
     let cancelled = false;
-    graphNeighborhood(canisterId, centerPath, depth, GRAPH_LIMIT)
+    graphNeighborhood(canisterId, databaseId, centerPath, depth, GRAPH_LIMIT)
       .then((data) => {
         if (!cancelled) setLinks({ centerPath, requestKey, data, error: null, loading: false });
       })
@@ -44,7 +44,7 @@ export function GraphPanel({ canisterId, centerPath, depth }: { canisterId: stri
     return () => {
       cancelled = true;
     };
-  }, [canisterId, centerPath, depth]);
+  }, [canisterId, databaseId, centerPath, depth]);
 
   const currentLinks: LoadState<LinkEdge[]> = !centerPath
     ? { data: null, error: null, loading: false }
@@ -71,10 +71,10 @@ export function GraphPanel({ canisterId, centerPath, depth }: { canisterId: stri
               <span className="font-mono text-xs text-muted">{centerPath}</span>
               <span className="rounded-lg border border-line bg-white px-2 py-1 font-mono text-xs text-muted">{nodeCount} nodes</span>
               <span className="rounded-lg border border-line bg-white px-2 py-1 font-mono text-xs text-muted">{edgeCount} edges</span>
-              <Link className={`rounded-lg border border-line px-2 py-1 no-underline ${depth === 1 ? "bg-accent text-white" : "bg-white text-ink"}`} href={hrefForGraph(canisterId, centerPath, 1)}>
+              <Link className={`rounded-lg border border-line px-2 py-1 no-underline ${depth === 1 ? "bg-accent text-white" : "bg-white text-ink"}`} href={hrefForGraph(canisterId, databaseId, centerPath, 1)}>
                 depth 1
               </Link>
-              <Link className={`rounded-lg border border-line px-2 py-1 no-underline ${depth === 2 ? "bg-accent text-white" : "bg-white text-ink"}`} href={hrefForGraph(canisterId, centerPath, 2)}>
+              <Link className={`rounded-lg border border-line px-2 py-1 no-underline ${depth === 2 ? "bg-accent text-white" : "bg-white text-ink"}`} href={hrefForGraph(canisterId, databaseId, centerPath, 2)}>
                 depth 2
               </Link>
             </div>
@@ -95,7 +95,7 @@ export function GraphPanel({ canisterId, centerPath, depth }: { canisterId: stri
                 return <line key={`${edge.sourcePath}-${edge.targetPath}-${edge.rawHref}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#9aa6b2" strokeWidth="1.2" />;
               })}
               {graph.nodes.map((node) => (
-                <Link key={node.path} href={hrefForPath(canisterId, node.path)}>
+                <Link key={node.path} href={hrefForPath(canisterId, databaseId, node.path)}>
                   <circle cx={node.x} cy={node.y} r={node.isCenter ? "16" : "12"} fill={node.isCenter ? "#dc6b19" : "#1f6feb"} />
                   <text x={node.x + 16} y={node.y + 4} className="fill-ink text-[11px]">
                     {shortName(node.path)}

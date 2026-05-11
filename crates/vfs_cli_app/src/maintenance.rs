@@ -21,9 +21,10 @@ const KNOWN_SCOPE_NOTES: [&str; 7] = [
     "provenance.md",
 ];
 
-pub async fn rebuild_index(client: &impl VfsApi) -> Result<()> {
+pub async fn rebuild_index(client: &impl VfsApi, database_id: &str) -> Result<()> {
     let entries = client
         .list_nodes(ListNodesRequest {
+            database_id: database_id.to_string(),
             prefix: WIKI_ROOT_PATH.to_string(),
             recursive: true,
         })
@@ -36,7 +37,7 @@ pub async fn rebuild_index(client: &impl VfsApi) -> Result<()> {
         if entry.kind != NodeEntryKind::File || entry.path == WIKI_INDEX_PATH {
             continue;
         }
-        let node = match client.read_node(&entry.path).await? {
+        let node = match client.read_node(database_id, &entry.path).await? {
             Some(node) => node,
             None => continue,
         };
@@ -55,10 +56,14 @@ pub async fn rebuild_index(client: &impl VfsApi) -> Result<()> {
     }
     scopes.sort();
     let body = render_index(&scopes, &sources, &entities, &concepts);
-    upsert_node(client, WIKI_INDEX_PATH, NodeKind::File, &body).await
+    upsert_node(client, database_id, WIKI_INDEX_PATH, NodeKind::File, &body).await
 }
 
-pub async fn rebuild_scope_index(client: &impl VfsApi, scope: &str) -> Result<()> {
+pub async fn rebuild_scope_index(
+    client: &impl VfsApi,
+    database_id: &str,
+    scope: &str,
+) -> Result<()> {
     let scope_name = normalize_scope_name(scope)?;
     let ancestors = scope_ancestors(&scope_name);
     let mut ensured_index_paths = Vec::new();
@@ -67,13 +72,21 @@ pub async fn rebuild_scope_index(client: &impl VfsApi, scope: &str) -> Result<()
         let scope_index_path = format!("{scope_prefix}/index.md");
         let entries = client
             .list_nodes(ListNodesRequest {
+                database_id: database_id.to_string(),
                 prefix: scope_prefix.clone(),
                 recursive: true,
             })
             .await?;
         let entries = with_ensured_index_entries(entries, &ensured_index_paths, &scope_prefix);
         let scope_index = render_scope_index(current_scope, &scope_prefix, &entries)?;
-        upsert_node(client, &scope_index_path, NodeKind::File, &scope_index).await?;
+        upsert_node(
+            client,
+            database_id,
+            &scope_index_path,
+            NodeKind::File,
+            &scope_index,
+        )
+        .await?;
         ensured_index_paths.push(scope_index_path);
     }
 
@@ -84,20 +97,27 @@ pub async fn rebuild_scope_index(client: &impl VfsApi, scope: &str) -> Result<()
         let scope_prefix = format!("{WIKI_ROOT_PATH}/{root_scope}");
         let scope_index_path = format!("{scope_prefix}/index.md");
         let scope_index = client
-            .read_node(&scope_index_path)
+            .read_node(database_id, &scope_index_path)
             .await?
             .map(|node| node.content)
             .unwrap_or_else(|| String::from("# Index\n"));
         let summary = first_summary_line(&scope_index);
         let current_root = client
-            .read_node(WIKI_INDEX_PATH)
+            .read_node(database_id, WIKI_INDEX_PATH)
             .await?
             .map(|node| node.content)
             .unwrap_or_else(|| String::from("# Index\n"));
         let entry = format!("- [{root_scope}]({scope_index_path}) - {summary}");
         let root_index =
             upsert_list_entry(&current_root, ROOT_SCOPE_SECTION, &entry, &scope_index_path);
-        upsert_node(client, WIKI_INDEX_PATH, NodeKind::File, &root_index).await?;
+        upsert_node(
+            client,
+            database_id,
+            WIKI_INDEX_PATH,
+            NodeKind::File,
+            &root_index,
+        )
+        .await?;
     }
 
     Ok(())
@@ -105,13 +125,15 @@ pub async fn rebuild_scope_index(client: &impl VfsApi, scope: &str) -> Result<()
 
 async fn upsert_node(
     client: &impl VfsApi,
+    database_id: &str,
     path: &str,
     kind: NodeKind,
     content: &str,
 ) -> Result<()> {
-    let current = client.read_node(path).await?;
+    let current = client.read_node(database_id, path).await?;
     client
         .write_node(WriteNodeRequest {
+            database_id: database_id.to_string(),
             path: path.to_string(),
             kind,
             content: content.to_string(),

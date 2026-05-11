@@ -15,11 +15,14 @@ use super::{
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
-    let db_path = dir.keep().join("wiki.sqlite3");
-    let service = VfsService::new(db_path);
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
     service
-        .run_fs_migrations()
-        .expect("fs migrations should run");
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("default", "2vxsx-fae", 1_700_000_000_000)
+        .expect("default database should create");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
 }
 
@@ -28,6 +31,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     install_test_service();
 
     let alpha = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/project-alpha/one.md".to_string(),
         kind: NodeKind::File,
         content: "alpha shared term".to_string(),
@@ -36,6 +40,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     })
     .expect("alpha write should succeed");
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/project-beta/two.md".to_string(),
         kind: NodeKind::File,
         content: "beta shared term".to_string(),
@@ -45,12 +50,14 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     .expect("beta write should succeed");
 
     delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/project-alpha/one.md".to_string(),
         expected_etag: Some(alpha.node.etag),
     })
     .expect("delete should succeed");
 
     let hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "shared".to_string(),
         prefix: Some("/Wiki/project-alpha".to_string()),
         top_k: 10,
@@ -60,6 +67,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     assert!(hits.is_empty());
 
     let beta_hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "shared".to_string(),
         prefix: Some("/Wiki/project-beta".to_string()),
         top_k: 10,
@@ -70,6 +78,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     assert_eq!(beta_hits[0].path, "/Wiki/project-beta/two.md");
 
     let path_hits = search_node_paths(SearchNodePathsRequest {
+        database_id: "default".to_string(),
         query_text: "PROJECT-beta".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 10,
@@ -85,6 +94,7 @@ fn canister_fetch_updates_reports_removed_paths_after_delete() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/scope/item.md".to_string(),
         kind: NodeKind::File,
         content: "scope body".to_string(),
@@ -94,6 +104,7 @@ fn canister_fetch_updates_reports_removed_paths_after_delete() {
     .expect("write should succeed");
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some("/Wiki/scope".to_string()),
         limit: 100,
         cursor: None,
@@ -103,12 +114,14 @@ fn canister_fetch_updates_reports_removed_paths_after_delete() {
     .expect("snapshot should succeed");
 
     delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/scope/item.md".to_string(),
         expected_etag: Some(created.node.etag),
     })
     .expect("delete should succeed");
 
     let updates = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: snapshot.snapshot_revision,
         prefix: Some("/Wiki/scope".to_string()),
         limit: 100,
@@ -128,6 +141,7 @@ fn canister_fetch_updates_rejects_prefix_scope_changes() {
     install_test_service();
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/a/one.md".to_string(),
         kind: NodeKind::File,
         content: "alpha".to_string(),
@@ -136,6 +150,7 @@ fn canister_fetch_updates_rejects_prefix_scope_changes() {
     })
     .expect("write should succeed");
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/b/two.md".to_string(),
         kind: NodeKind::File,
         content: "beta".to_string(),
@@ -145,6 +160,7 @@ fn canister_fetch_updates_rejects_prefix_scope_changes() {
     .expect("write should succeed");
 
     let narrow = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some("/Wiki/a".to_string()),
         limit: 100,
         cursor: None,
@@ -153,6 +169,7 @@ fn canister_fetch_updates_rejects_prefix_scope_changes() {
     })
     .expect("snapshot should succeed");
     let widened = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: narrow.snapshot_revision,
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -170,6 +187,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     install_test_service();
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/base.md".to_string(),
         kind: NodeKind::File,
         content: "base".to_string(),
@@ -178,6 +196,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     })
     .expect("base write should succeed");
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/unchanged.md".to_string(),
         kind: NodeKind::File,
         content: "unchanged".to_string(),
@@ -187,6 +206,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     .expect("unchanged write should succeed");
 
     let base = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
         cursor: None,
@@ -197,6 +217,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
 
     for index in 0..300 {
         write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
             path: format!("/Wiki/history-{index}.md"),
             kind: NodeKind::File,
             content: format!("revision {index}"),
@@ -207,6 +228,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     }
 
     let first = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: base.snapshot_revision.clone(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -215,6 +237,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     })
     .expect("first old snapshot delta page should succeed");
     let second = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: base.snapshot_revision.clone(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -223,6 +246,7 @@ fn canister_fetch_updates_returns_delta_from_old_retained_revision() {
     })
     .expect("second old snapshot delta page should succeed");
     let third = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: base.snapshot_revision,
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -259,11 +283,11 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
 
     for did in [generated.as_str(), checked_in] {
         assert!(
-            did.contains("type MkdirNodeRequest = record { path : text };"),
+            did.contains("type MkdirNodeRequest = record { path : text; database_id : text };"),
             "mkdir_node request type must stay nominal in the public interface",
         );
         assert!(
-            did.contains("type ListChildrenRequest = record { path : text };"),
+            did.contains("type ListChildrenRequest = record { path : text; database_id : text };"),
             "list_children request type must stay nominal in the public interface",
         );
         assert!(
@@ -275,7 +299,7 @@ fn mkdir_node_request_type_is_fixed_at_interface_boundary() {
             "list_children must consume ListChildrenRequest at the interface boundary",
         );
         assert!(
-            has_query_method_input(did, "mkdir_node", "MkdirNodeRequest"),
+            has_method_input(did, "mkdir_node", "MkdirNodeRequest"),
             "mkdir_node must consume MkdirNodeRequest at the interface boundary",
         );
         assert!(
@@ -309,4 +333,9 @@ fn has_query_method_input(did: &str, method: &str, input: &str) -> bool {
     let prefix = format!("  {method} : ({input}) -> (");
     did.lines()
         .any(|line| line.starts_with(&prefix) && line.ends_with(" query;"))
+}
+
+fn has_method_input(did: &str, method: &str, input: &str) -> bool {
+    let prefix = format!("  {method} : ({input}) -> (");
+    did.lines().any(|line| line.starts_with(&prefix))
 }

@@ -10,20 +10,29 @@ cp .env.local.example .env.local
 pnpm dev
 ```
 
-Open a canister with:
+Open a database with:
 
 ```text
-http://localhost:3000/w/<canister-id>/Wiki
+http://localhost:3000/<database-id>/Wiki
 ```
 
-`NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host:
+The browser is read-only and does not create databases. Prepare the target DB first:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+```
+
+`database create` prints the generated database ID. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
 
 ```bash
 # local icp network
 NEXT_PUBLIC_WIKI_IC_HOST=http://127.0.0.1:8000
+KINIC_WIKI_CANISTER_ID=<local-wiki-canister-id>
 
 # mainnet / Vercel
 NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io
+KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 ```
 
 ## Scope
@@ -62,7 +71,7 @@ pnpm dev
 Run the browser smoke against an existing file node:
 
 ```bash
-pnpm smoke -- --url http://127.0.0.1:3000/w/<canister-id>/Wiki/<existing-file>.md
+pnpm smoke -- --url http://127.0.0.1:3000/<database-id>/Wiki/<existing-file>.md
 ```
 
 The URL must point to a readable file node. Directory paths and missing files intentionally fail.
@@ -70,13 +79,13 @@ The URL must point to a readable file node. Directory paths and missing files in
 Run error-state smoke:
 
 ```bash
-pnpm smoke:errors -- --canister-id <canister-id>
+pnpm smoke:errors -- --database-id <database-id>
 ```
 
 Optional base URL:
 
 ```bash
-pnpm smoke:errors -- --base-url http://127.0.0.1:3000 --canister-id <canister-id>
+pnpm smoke:errors -- --base-url http://127.0.0.1:3000 --database-id <database-id>
 ```
 
 ## Candid Surface
@@ -103,15 +112,15 @@ Covered methods:
 
 ## Public MVP
 
-Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`.
-The app is public read-only and accepts arbitrary canister IDs.
+Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>`.
+The app is public read-only and accepts database IDs for the fixed canister. The target DB must grant reader access to anonymous principal `2vxsx-fae`.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
-The `/w/<canister-id>/...` URLs are served by a static `/w` shell through `vercel.json` rewrites; read queries go directly from the browser to the IC gateway.
+The `/<database-id>/...` URLs are served by the `/w` browser shell through `vercel.json` rewrites; read queries go directly from the browser to the configured IC gateway.
 
 ## Troubleshooting
 
-- Local canister not found: the canister ID does not exist on `NEXT_PUBLIC_WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
-- Mainnet canister not found: confirm that the URL canister ID exists on `https://icp0.io`.
+- Local canister not found: `KINIC_WIKI_CANISTER_ID` does not exist on `NEXT_PUBLIC_WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
+- Mainnet canister not found: confirm that `KINIC_WIKI_CANISTER_ID` exists on `https://icp0.io`.
 - Method missing / wrong canister: use a Kinic Wiki canister that exposes the VFS, health, and Agent Memory methods covered by `lib/vfs-idl.ts`.
 - Host unreachable: confirm `NEXT_PUBLIC_WIKI_IC_HOST` and network access to the local replica or IC gateway.
 
@@ -126,8 +135,8 @@ Dashboard settings:
 - Install Command: `pnpm install`
 - Build Command: `pnpm build`
 - Output Directory: Vercel default
-- Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` for Preview and Production
-- Routing: keep `vercel.json` so `/w/:segments*` rewrites to the static `/w` shell
+- Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>` for Preview and Production
+- Routing: keep `vercel.json` so `/:databaseId/:segments*` rewrites to the `/w` browser shell. Static export does not apply Next.js `rewrites()` from `next.config.ts`, so Vercel routing is the source of truth. Non-Vercel static hosts need an equivalent host-level rewrite.
 
 CLI deploy from this directory:
 
@@ -148,7 +157,7 @@ pnpm build
 Post-deploy public smoke:
 
 ```bash
-pnpm smoke:public -- --base-url https://<deployment>.vercel.app --canister-id <mainnet-wiki-canister-id> --path /Wiki/<existing-file>.md
+pnpm smoke:public -- --base-url https://<deployment>.vercel.app --database-id <database-id> --path /Wiki/<existing-file>.md
 ```
 
 `--path` must point to an existing file node on the mainnet canister.

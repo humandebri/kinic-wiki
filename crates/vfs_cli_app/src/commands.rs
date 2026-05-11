@@ -2,7 +2,6 @@
 // What: Command handlers for FS-first remote reads and local mirror sync.
 // Why: The CLI should mirror node paths directly and keep sync behavior explicit.
 use crate::cli::{Cli, Command};
-use crate::conversation_wiki::generate_conversation_wiki;
 use crate::lint_local::{lint_local, print_local_lint_report};
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
 use crate::mirror::{
@@ -16,43 +15,29 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use vfs_cli::commands::{
-    collect_paged_snapshot, collect_paged_updates, resync_required_error, run_vfs_command,
-    snapshot_restart_required_error,
+    collect_paged_snapshot, collect_paged_updates, database_id_or_env, resync_required_error,
+    run_vfs_command, snapshot_restart_required_error,
 };
 use vfs_client::VfsApi;
 use vfs_types::{DeleteNodeRequest, WriteNodeRequest};
-use wiki_domain::{WIKI_ROOT_PATH, validate_source_path_for_kind};
 
 pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
-    let Cli { command, .. } = cli;
+    let Cli {
+        command,
+        connection,
+    } = cli;
+    let database_id = connection.database_id.as_deref();
     if let Some(vfs_command) = command.as_vfs_command() {
-        preflight_wiki_vfs_command(client, &vfs_command).await?;
-        return run_vfs_command(client, vfs_command).await;
+        return run_vfs_command(client, database_id, vfs_command).await;
     }
     match command {
         Command::RebuildIndex => {
-            rebuild_index(client).await?;
+            rebuild_index(client, database_id_or_env(database_id)?.as_ref()).await?;
             println!("index rebuilt");
         }
         Command::RebuildScopeIndex { scope } => {
-            rebuild_scope_index(client, &scope).await?;
+            rebuild_scope_index(client, database_id_or_env(database_id)?.as_ref(), &scope).await?;
             println!("scope index rebuilt: {scope}");
-        }
-        Command::GenerateConversationWiki {
-            source_path,
-            force,
-            json,
-        } => {
-            let result = generate_conversation_wiki(client, &source_path, force).await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                println!(
-                    "conversation wiki scaffold generated: {} ({} pages written)",
-                    result.base_path,
-                    result.written_paths.len()
-                );
-            }
         }
         Command::LintLocal {
             vault_path,
@@ -67,7 +52,8 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
             mirror_root,
             json,
         } => {
-            let remote = client.status().await?;
+            let database_id = database_id_or_env(database_id)?;
+            let remote = client.status(database_id.as_ref()).await?;
             let local = vault_path
                 .as_deref()
                 .map(|vault| read_local_status(&vault.join(&mirror_root)))
@@ -92,20 +78,36 @@ pub async fn run_command(client: &impl VfsApi, cli: Cli) -> Result<()> {
             mirror_root,
             resync,
         } => {
-            pull(client, &vault_path.join(mirror_root), resync).await?;
+            pull(
+                client,
+                database_id_or_env(database_id)?.as_ref(),
+                &vault_path.join(mirror_root),
+                resync,
+            )
+            .await?;
         }
         Command::Push {
             vault_path,
             mirror_root,
         } => {
-            push(client, &vault_path.join(mirror_root)).await?;
+            push(
+                client,
+                database_id_or_env(database_id)?.as_ref(),
+                &vault_path.join(mirror_root),
+            )
+            .await?;
         }
         _ => unreachable!("vfs commands should be delegated before wiki workflow dispatch"),
     }
     Ok(())
 }
 
-pub async fn pull(client: &impl VfsApi, mirror_root: &Path, resync: bool) -> Result<()> {
+pub async fn pull(
+    client: &impl VfsApi,
+    database_id: &str,
+    mirror_root: &Path,
+    resync: bool,
+) -> Result<()> {
     let state = load_state(mirror_root)?;
     if !resync
         && !state.snapshot_revision.is_empty()
@@ -116,12 +118,11 @@ pub async fn pull(client: &impl VfsApi, mirror_root: &Path, resync: bool) -> Res
         ));
     }
     if resync || state.snapshot_revision.is_empty() {
-        let snapshot = collect_paged_snapshot(client, WIKI_ROOT_PATH)
+        let snapshot = collect_paged_snapshot(client, database_id)
             .await
             .map_err(snapshot_restart_required_error)?;
         let updates =
-            collect_paged_updates(client, WIKI_ROOT_PATH, &snapshot.snapshot_revision, None)
-                .await?;
+            collect_paged_updates(client, database_id, &snapshot.snapshot_revision, None).await?;
         let nodes = merge_snapshot_and_updates(
             snapshot.nodes,
             updates.changed_nodes,
@@ -148,7 +149,7 @@ pub async fn pull(client: &impl VfsApi, mirror_root: &Path, resync: bool) -> Res
         return Ok(());
     }
 
-    let updates = collect_paged_updates(client, WIKI_ROOT_PATH, &state.snapshot_revision, None)
+    let updates = collect_paged_updates(client, database_id, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let changed_nodes = updates.changed_nodes;
@@ -175,7 +176,7 @@ pub async fn pull(client: &impl VfsApi, mirror_root: &Path, resync: bool) -> Res
     Ok(())
 }
 
-pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
+pub async fn push(client: &impl VfsApi, database_id: &str, mirror_root: &Path) -> Result<()> {
     let state = load_state(mirror_root)?;
     if state.snapshot_revision.is_empty() {
         let state_exists = mirror_state_exists(mirror_root);
@@ -197,7 +198,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         println!("push skipped: no changed wiki files");
         return Ok(());
     }
-    collect_paged_updates(client, WIKI_ROOT_PATH, &state.snapshot_revision, None)
+    collect_paged_updates(client, database_id, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let mut conflicts = 0usize;
@@ -205,6 +206,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
     for node in &changed_nodes {
         let result = client
             .write_node(WriteNodeRequest {
+                database_id: database_id.to_string(),
                 path: node.metadata.path.clone(),
                 kind: node.metadata.kind.clone(),
                 content: read_managed_node_content(node)?,
@@ -215,7 +217,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         match result {
             Ok(updated) => {
                 let refreshed = client
-                    .read_node(&updated.node.path)
+                    .read_node(database_id, &updated.node.path)
                     .await?
                     .ok_or_else(|| anyhow!("node not found after write: {}", updated.node.path))?;
                 update_local_node_metadata(mirror_root, &refreshed)?;
@@ -237,6 +239,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
     for tracked in &deleted_nodes {
         let result = client
             .delete_node(DeleteNodeRequest {
+                database_id: database_id.to_string(),
                 path: tracked.path.clone(),
                 expected_etag: Some(tracked.etag.clone()),
             })
@@ -250,7 +253,7 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         }
     }
 
-    let updates = collect_paged_updates(client, WIKI_ROOT_PATH, &state.snapshot_revision, None)
+    let updates = collect_paged_updates(client, database_id, &state.snapshot_revision, None)
         .await
         .map_err(resync_required_error)?;
     let changed_nodes = updates.changed_nodes;
@@ -273,37 +276,6 @@ pub async fn push(client: &impl VfsApi, mirror_root: &Path) -> Result<()> {
         "push complete: {} written, {} deleted, {} conflicts",
         writes, deletes, conflicts
     );
-    Ok(())
-}
-
-// CLI preflight gives fast wiki-domain errors; canister entrypoints remain the
-// authoritative policy boundary.
-async fn preflight_wiki_vfs_command(
-    client: &impl VfsApi,
-    command: &vfs_cli::cli::VfsCommand,
-) -> Result<()> {
-    match command {
-        vfs_cli::cli::VfsCommand::WriteNode { path, kind, .. } => {
-            validate_source_path_for_kind(path, &kind.to_node_kind())
-                .map_err(anyhow::Error::msg)?;
-        }
-        vfs_cli::cli::VfsCommand::AppendNode { path, kind, .. } => {
-            if let Some(kind) = kind {
-                validate_source_path_for_kind(path, &kind.to_node_kind())
-                    .map_err(anyhow::Error::msg)?;
-            } else if let Some(node) = client.read_node(path).await? {
-                validate_source_path_for_kind(path, &node.kind).map_err(anyhow::Error::msg)?;
-            }
-        }
-        vfs_cli::cli::VfsCommand::MoveNode {
-            from_path, to_path, ..
-        } => {
-            if let Some(node) = client.read_node(from_path).await? {
-                validate_source_path_for_kind(to_path, &node.kind).map_err(anyhow::Error::msg)?;
-            }
-        }
-        _ => {}
-    }
     Ok(())
 }
 

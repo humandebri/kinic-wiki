@@ -21,6 +21,7 @@ fn node(path: &str, kind: NodeKind, content: &str) -> Node {
 fn test_cli(command: Command) -> Cli {
     Cli {
         connection: ConnectionArgs {
+            database_id: Some("default".to_string()),
             local: false,
             canister_id: Some("aaaaa-aa".to_string()),
         },
@@ -82,7 +83,7 @@ async fn rebuild_index_renders_sections_from_existing_wiki_nodes() {
         ..Default::default()
     };
 
-    rebuild_index(&client)
+    rebuild_index(&client, "default")
         .await
         .expect("rebuild index should succeed");
 
@@ -184,7 +185,7 @@ async fn rebuild_scope_index_renders_direct_children_and_updates_root_entry() {
         ..Default::default()
     };
 
-    rebuild_scope_index(&client, "foo")
+    rebuild_scope_index(&client, "default", "foo")
         .await
         .expect("rebuild scope index should succeed");
 
@@ -279,7 +280,7 @@ async fn rebuild_scope_index_does_not_touch_other_scope_indexes() {
         ..Default::default()
     };
 
-    rebuild_scope_index(&client, "foo")
+    rebuild_scope_index(&client, "default", "foo")
         .await
         .expect("rebuild scope index should succeed");
 
@@ -314,7 +315,7 @@ async fn rebuild_scope_index_nested_scope_updates_leaf_parent_and_root() {
         ..Default::default()
     };
 
-    rebuild_scope_index(&client, "/Wiki/foo/child")
+    rebuild_scope_index(&client, "default", "/Wiki/foo/child")
         .await
         .expect("nested rebuild should succeed");
 
@@ -359,7 +360,7 @@ async fn rebuild_scope_index_lists_child_scope_only_when_child_index_exists() {
         ..Default::default()
     };
 
-    rebuild_scope_index(&client, "foo")
+    rebuild_scope_index(&client, "default", "foo")
         .await
         .expect("scope rebuild should succeed");
 
@@ -395,7 +396,7 @@ async fn rebuild_scope_index_reserved_root_scope_does_not_update_root_scopes() {
         ..Default::default()
     };
 
-    rebuild_scope_index(&client, "/Wiki/sources")
+    rebuild_scope_index(&client, "default", "/Wiki/sources")
         .await
         .expect("reserved scope rebuild should succeed");
 

@@ -37,6 +37,15 @@ Current scope:
 - `/Wiki/...` as the primary durable wiki root
 - `/Sources/...` for raw and session source nodes
 
+Storage constraints:
+
+- User databases consume stable-memory mount IDs `11..=32767`, so one canister has 32757 lifetime database slots in v1.
+- Archived or deleted databases clear their active mount ID, but v1 does not recycle historical mount IDs.
+- Deleting, archiving, and restoring databases still consume cumulative lifetime mount IDs.
+- See [`docs/DB_LIFECYCLE.md`](docs/DB_LIFECYCLE.md) for DB status, slot reuse, archive, and restore behavior.
+- Link graph queries are backed by `fs_links`; SQLite size grows with stored link edges and two link indexes.
+- Node writes update the link index in the same transaction as node content and FTS updates.
+
 ## Quick Start
 
 ### Workspace checks
@@ -70,6 +79,16 @@ canister_id = "aaaaa-aa"
 ```
 
 Use `--local` to target the local replica. Otherwise the default host is `https://icp0.io`.
+
+DB-backed commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` DB is created implicitly. Older single-DB commands such as `vfs-cli read-node --path /Wiki/index.md` must now select a DB:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/index.md --input index.md
+cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+```
+
+`database create` prints the generated DB ID. Use that ID for `--database-id` and grants. Public browser reads use the anonymous principal `2vxsx-fae`, so public DBs must grant that principal `reader`.
 
 ## Main Interfaces
 

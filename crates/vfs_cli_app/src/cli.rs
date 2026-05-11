@@ -4,7 +4,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
-pub use vfs_cli::cli::{ConnectionArgs, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg};
+pub use vfs_cli::cli::{
+    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+};
 use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
 
 #[derive(Parser, Debug)]
@@ -20,18 +22,14 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
     RebuildIndex,
     RebuildScopeIndex {
         #[arg(long)]
         scope: String,
-    },
-    GenerateConversationWiki {
-        #[arg(long)]
-        source_path: String,
-        #[arg(long)]
-        force: bool,
-        #[arg(long)]
-        json: bool,
     },
     ReadNode {
         #[arg(long)]
@@ -263,6 +261,9 @@ pub enum Command {
 impl Command {
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
+            Self::Database { command } => Some(VfsCommand::Database {
+                command: command.clone(),
+            }),
             Self::ReadNode { path, json } => Some(VfsCommand::ReadNode {
                 path: path.clone(),
                 json: *json,
@@ -513,27 +514,5 @@ mod tests {
         assert_eq!(depth, 2);
         assert_eq!(limit, 9);
         assert!(!json);
-    }
-
-    #[test]
-    fn main_cli_parses_conversation_wiki_command() {
-        let cli = Cli::parse_from([
-            "vfs-cli",
-            "generate-conversation-wiki",
-            "--source-path",
-            "/Sources/raw/chatgpt-abc/chatgpt-abc.md",
-            "--json",
-        ]);
-        let Command::GenerateConversationWiki {
-            source_path,
-            force,
-            json,
-        } = cli.command
-        else {
-            panic!("expected generate-conversation-wiki command");
-        };
-        assert_eq!(source_path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
-        assert!(!force);
-        assert!(json);
     }
 }

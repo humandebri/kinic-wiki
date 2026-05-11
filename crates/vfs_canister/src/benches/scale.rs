@@ -77,7 +77,7 @@ fn node_content(index: usize, include_query: bool) -> String {
 }
 
 fn current_etag(path: &str) -> Option<String> {
-    read_node(path.to_string())
+    read_node("default".to_string(), path.to_string())
         .expect("bench read should succeed")
         .map(|node| node.etag)
 }
@@ -86,6 +86,7 @@ fn write_seed(path: &str, content: &str, expected_etag: Option<String>, now: i64
     with_service(|service| {
         service.write_node(
             WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: content.to_string(),
@@ -111,6 +112,7 @@ fn seed_dataset(case: BenchCase, prefix: &str) {
 
 fn snapshot_metrics(prefix: &str) -> SnapshotMetrics {
     let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some(prefix.to_string()),
         limit: 100,
         cursor: None,
@@ -164,6 +166,7 @@ pub(super) fn run_write(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("write_call");
         black_box(
             write_node(WriteNodeRequest {
+                database_id: "default".to_string(),
                 path: target.clone(),
                 kind: NodeKind::File,
                 content: content.clone(),
@@ -186,6 +189,7 @@ pub(super) fn run_append(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("append_call");
         black_box(
             append_node(AppendNodeRequest {
+                database_id: "default".to_string(),
                 path: target.clone(),
                 content: "\nappend-benchmark-tail".to_string(),
                 expected_etag: expected_etag.clone(),
@@ -210,6 +214,7 @@ pub(super) fn run_move(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("move_call");
         black_box(
             move_node(MoveNodeRequest {
+                database_id: "default".to_string(),
                 from_path: from_path.clone(),
                 to_path: to_path.clone(),
                 expected_etag: expected_etag.clone(),
@@ -229,6 +234,7 @@ pub(super) fn run_search(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("search_call");
         black_box(
             search_nodes(SearchNodesRequest {
+                database_id: "default".to_string(),
                 query_text: BENCH_QUERY.to_string(),
                 prefix: Some(prefix.clone()),
                 top_k: SEARCH_TOP_K,
@@ -248,6 +254,7 @@ pub(super) fn run_export_snapshot(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("export_snapshot_call");
         black_box(
             export_snapshot(ExportSnapshotRequest {
+                database_id: "default".to_string(),
                 prefix: Some(prefix.clone()),
                 limit: 100,
                 cursor: None,
@@ -263,6 +270,7 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
     let prefix = bench_prefix(case);
     seed_dataset(case, &prefix);
     let baseline = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some(prefix.clone()),
         limit: 100,
         cursor: None,
@@ -282,6 +290,7 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("fetch_updates_call");
         black_box(
             fetch_updates(FetchUpdatesRequest {
+                database_id: "default".to_string(),
                 known_snapshot_revision: baseline.snapshot_revision.clone(),
                 prefix: Some(prefix.clone()),
                 limit: 100,

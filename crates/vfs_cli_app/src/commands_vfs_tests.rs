@@ -13,6 +13,7 @@ use crate::commands_fs_tests::MockClient;
 fn test_cli(command: Command) -> Cli {
     Cli {
         connection: ConnectionArgs {
+            database_id: Some("default".to_string()),
             local: false,
             canister_id: Some("aaaaa-aa".to_string()),
         },

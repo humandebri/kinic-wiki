@@ -144,23 +144,12 @@ fn current_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
 }
 
 fn base_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
-    for table in [
-        "fs_nodes",
-        "fs_nodes_fts",
-        "fs_change_log",
-        "fs_path_state",
-        "fs_snapshot_sessions",
-        "fs_snapshot_session_paths",
-    ] {
+    for table in ["fs_nodes", "fs_nodes_fts", "fs_change_log", "fs_path_state"] {
         if !table_exists(conn, table)? {
             return Ok(false);
         }
     }
-    for index in [
-        "fs_nodes_path_covering_idx",
-        "fs_nodes_recent_covering_idx",
-        "fs_snapshot_sessions_expires_at_idx",
-    ] {
+    for index in ["fs_nodes_path_covering_idx", "fs_nodes_recent_covering_idx"] {
         if !index_exists(conn, index)? {
             return Ok(false);
         }
@@ -198,8 +187,6 @@ fn managed_table_exists(conn: &Connection) -> Result<bool, String> {
         "fs_nodes_fts",
         "fs_change_log",
         "fs_path_state",
-        "fs_snapshot_sessions",
-        "fs_snapshot_session_paths",
         "fs_links",
     ] {
         if table_exists(conn, table)? {

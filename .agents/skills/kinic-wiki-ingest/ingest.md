@@ -11,6 +11,7 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 3. Decide whether the source should also be persisted under `/Sources/raw/...`.
 4. Read existing wiki context with `read-node-context` by starting from `index.md` and the canonical role-matched notes before broad search.
 5. Use `search-remote` or `search-path-remote` only when the relevant canonical notes are missing, ambiguous, or insufficient.
+   - For wiki-only inspection or edits, pass `--prefix /Wiki` or `path: "/Wiki"` unless raw source material is explicitly needed.
 6. Choose the minimum coherent set of pages to update.
 7. Edit `/Wiki/...` directly through `vfs-cli` remote VFS commands.
 8. When a reorganization needs explicit removal of obsolete `/Wiki/...` page groups, use `delete-tree` from the CLI rather than treating deletion as an implicit side effect.
@@ -38,12 +39,26 @@ Use this workflow when creating a new scope, repairing a thin benchmark import, 
 7. Use source path-level evidence links by default unless the user asks for turn, line, or claim-level provenance.
 8. After setup, append one `log.md` entry for the workflow and rebuild the scope index when the repo workflow requires it.
 
+## Conversation Source Setup
+
+Use this workflow when turning one raw conversation source into wiki material.
+
+1. Confirm the raw source lives at `/Sources/raw/<source_id>/<source_id>.md`; do not move or rewrite it during synthesis.
+2. Read the full raw source and any existing wiki page that already cites the same source.
+3. Let the LLM choose a concrete, content-specific title from the conversation. Do not use the opaque `source_id` as the public page title unless it is the only meaningful identifier.
+4. Default to one page at `/Wiki/conversations/<llm-generated-title>.md`.
+5. In that page, include only the sections that the source actually supports: `Summary`, `Key Facts`, `Decisions`, `Open Questions`, `Follow-ups`, and `Provenance`.
+6. Put a source path reference in `Provenance`, for example `/Sources/raw/<source_id>/<source_id>.md`.
+7. Do not create fixed empty scaffolds such as `facts.md`, `events.md`, `plans.md`, `preferences.md`, `open_questions.md`, `provenance.md`, and `log.md` by default.
+8. Split into multiple pages only when the conversation is large, will receive continuing updates, or clearly needs role-specific retrieval paths. If splitting, state the page map before writing.
+
 ## Working Rules
 
 - Current repo-local note schema lives in [docs/internal/WIKI_CANONICALITY.md](../../../docs/internal/WIKI_CANONICALITY.md). Use it for concrete note names and current role mapping.
 - Runtime `facts.md` extraction policy currently lives in [facts_policy.rs](../../../crates/vfs_cli_app/src/facts_policy.rs). Keep skill guidance aligned with that rule, not with benchmark-specific phrasing.
 - Treat local `Wiki/` content as the human review surface.
 - Prefer fewer stronger pages over many shallow stubs.
+- For conversation sources, prefer one titled page over a directory of shallow role files unless the source size or retrieval need justifies the split.
 - Reuse existing pages when possible instead of minting near-duplicates.
 - Preserve note-role boundaries from `WIKI_CANONICALITY.md` before adding new lines to any structured note.
 - Put settled stable attributes, exact resolved values, current values, selected options, and stable relationship-duration in `facts.md`.
@@ -87,6 +102,7 @@ Use this workflow when creating a new scope, repairing a thin benchmark import, 
 
 - Raw source write path: `/Sources/raw/<source_id>/<source_id>.md`
 - Raw source append path: `/Sources/raw/<source_id>/<source_id>.md`
+- Default conversation wiki path: `/Wiki/conversations/<llm-generated-title>.md`
 - Wiki target root: `/Wiki/...`
 - Preferred primitives:
   - CLI commands: `read-node-context`, `read-node`, `write-node`, `append-node`, `edit-node`, `delete-node`, `delete-tree`, `list-nodes`, `glob-nodes`, `recent-nodes`, `search-remote`, `search-path-remote`, `graph-neighborhood`, `incoming-links`, `outgoing-links`, `rebuild-scope-index`, `rebuild-index`

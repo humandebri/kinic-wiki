@@ -3,7 +3,7 @@
 // Why: The app-facing CLI package should reuse these shared command shapes without owning the VFS surface.
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use vfs_types::{GlobNodeType, NodeKind, SearchPreviewMode};
+use vfs_types::{DatabaseRole, GlobNodeType, NodeKind, SearchPreviewMode};
 
 pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
 
@@ -25,10 +25,17 @@ pub struct ConnectionArgs {
 
     #[arg(long, help = "Override VFS_CANISTER_ID or user config")]
     pub canister_id: Option<String>,
+
+    #[arg(long, help = "Target database id for DB-backed VFS operations")]
+    pub database_id: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum VfsCommand {
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
     ReadNode {
         #[arg(long)]
         path: String,
@@ -218,6 +225,30 @@ pub enum VfsCommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum DatabaseCommand {
+    Create,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Grant {
+        database_id: String,
+        principal: String,
+        #[arg(value_enum)]
+        role: DatabaseRoleArg,
+    },
+    Revoke {
+        database_id: String,
+        principal: String,
+    },
+    Members {
+        database_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKindArg {
     File,
@@ -236,6 +267,13 @@ pub enum SearchPreviewModeArg {
     None,
     Light,
     ContentStart,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseRoleArg {
+    Owner,
+    Writer,
+    Reader,
 }
 
 impl NodeKindArg {
@@ -263,6 +301,16 @@ impl SearchPreviewModeArg {
             Self::None => SearchPreviewMode::None,
             Self::Light => SearchPreviewMode::Light,
             Self::ContentStart => SearchPreviewMode::ContentStart,
+        }
+    }
+}
+
+impl DatabaseRoleArg {
+    pub fn to_database_role(self) -> DatabaseRole {
+        match self {
+            Self::Owner => DatabaseRole::Owner,
+            Self::Writer => DatabaseRole::Writer,
+            Self::Reader => DatabaseRole::Reader,
         }
     }
 }

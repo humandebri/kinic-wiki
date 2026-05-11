@@ -1,11 +1,12 @@
 // Where: crates/vfs_canister/src/tests.rs
 // What: Entry-point level tests for the FS-first canister surface.
 // Why: Phase 3 replaces the public canister contract, so tests must assert the wrapper behavior directly.
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
+    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, EditNodeRequest,
+    ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType, GlobNodesRequest, GraphLinksRequest,
     GraphNeighborhoodRequest, IncomingLinksRequest, ListChildrenRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
     NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
@@ -14,28 +15,216 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, append_node, delete_node, edit_node, export_snapshot, fetch_updates, glob_nodes,
-    graph_links, graph_neighborhood, incoming_links, list_children, list_nodes, memory_manifest,
-    mkdir_node, move_node, multi_edit_node, outgoing_links, query_context, read_node,
-    read_node_context, recent_nodes, search_node_paths, search_nodes, source_evidence, status,
+    SERVICE, append_node, begin_database_archive, begin_database_restore, cancel_database_archive,
+    create_database, delete_node, edit_node, export_snapshot,
+    fail_next_mount_database_file_for_test, fetch_updates, finalize_database_archive, glob_nodes,
+    grant_database_access, graph_links, graph_neighborhood, incoming_links, list_children,
+    list_databases, list_nodes, memory_manifest, mkdir_node, move_node, multi_edit_node,
+    outgoing_links, query_context, read_database_archive_chunk, read_node, read_node_context,
+    recent_nodes, revoke_database_access, search_node_paths, search_nodes, source_evidence, status,
     write_node,
 };
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
-    let db_path = dir.keep().join("wiki.sqlite3");
-    let service = VfsService::new(db_path);
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
     service
-        .run_fs_migrations()
-        .expect("fs migrations should run");
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("default", "2vxsx-fae", 1_700_000_000_000)
+        .expect("default database should create");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+}
+
+fn install_empty_test_service() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+}
+
+fn usage_event_count() -> u64 {
+    SERVICE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("service should be installed")
+            .usage_event_count()
+            .expect("usage count should load")
+    })
+}
+
+fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
+}
+
+#[test]
+fn empty_index_does_not_create_default_database() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+
+    let databases = service
+        .list_databases()
+        .expect("empty index should be readable");
+    assert!(databases.is_empty());
+}
+
+#[test]
+fn existing_database_index_is_loaded_without_implicit_default() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("existing database should create");
+
+    let databases = service
+        .list_databases()
+        .expect("existing index should load");
+
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].database_id, "alpha");
+}
+
+#[test]
+fn canister_list_databases_returns_caller_membership_summaries() {
+    install_test_service();
+
+    let summaries = list_databases().expect("database summaries should load");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].database_id, "default");
+    assert_eq!(summaries[0].role, DatabaseRole::Owner);
+    assert_eq!(summaries[0].status, DatabaseStatus::Hot);
+}
+
+#[test]
+fn update_entrypoints_record_usage_events() {
+    install_empty_test_service();
+
+    let database_id = create_database().expect("database should create");
+    assert_eq!(usage_event_count(), 1);
+
+    let failed = write_node(WriteNodeRequest {
+        database_id,
+        path: "/Sources/not-raw.md".to_string(),
+        kind: NodeKind::Source,
+        content: "invalid source path".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    });
+    assert!(failed.is_err());
+    assert_eq!(usage_event_count(), 2);
+}
+
+#[test]
+fn canister_create_database_returns_generated_id_for_followup_reads() {
+    install_empty_test_service();
+
+    let database_id = create_database().expect("database should create");
+    assert!(database_id.starts_with("db_"));
+    assert_eq!(database_id.len(), 15);
+
+    let status = status(database_id.clone());
+    assert_eq!(status.file_count, 0);
+    assert_eq!(status.source_count, 0);
+    let children = list_children(ListChildrenRequest {
+        database_id,
+        path: "/Wiki".to_string(),
+    })
+    .expect("generated database should list");
+    assert!(children.is_empty());
+}
+
+#[test]
+fn query_entrypoints_do_not_record_usage_events() {
+    install_test_service();
+
+    let current = status("default".to_string());
+    assert_eq!(current.file_count, 0);
+    let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
+        prefix: Some("/Wiki".to_string()),
+        limit: 100,
+        cursor: None,
+        snapshot_revision: None,
+        snapshot_session_id: None,
+    })
+    .expect("snapshot query should succeed");
+    assert_eq!(snapshot.snapshot_session_id, None);
+    assert_eq!(usage_event_count(), 0);
+}
+
+#[test]
+fn grant_database_access_rejects_invalid_principal() {
+    install_test_service();
+
+    let error = grant_database_access(
+        "default".to_string(),
+        "not a principal".to_string(),
+        DatabaseRole::Reader,
+    )
+    .expect_err("invalid principal should fail");
+
+    assert!(error.contains("invalid principal"));
+}
+
+#[test]
+fn revoke_database_access_validates_and_canonicalizes_principal() {
+    install_test_service();
+
+    let invalid = revoke_database_access("default".to_string(), "not a principal".to_string())
+        .expect_err("invalid principal should fail");
+    assert!(invalid.contains("invalid principal"));
+
+    grant_database_access(
+        "default".to_string(),
+        "aaaaa-aa".to_string(),
+        DatabaseRole::Reader,
+    )
+    .expect("valid principal should grant");
+    revoke_database_access("default".to_string(), "aaaaa-aa".to_string())
+        .expect("valid principal should revoke");
+}
+
+#[test]
+fn anonymous_reader_grant_allows_public_read() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("public", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("public", "owner", "2vxsx-fae", DatabaseRole::Reader, 2)
+        .expect("anonymous reader should grant");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+
+    let node = read_node("public".to_string(), "/Wiki/missing.md".to_string())
+        .expect("anonymous reader query should pass role check");
+
+    assert_eq!(node, None);
 }
 
 #[test]
 fn status_stays_available_after_fs_migrations() {
     install_test_service();
 
-    let current = status();
+    let current = status("default".to_string());
 
     assert_eq!(current.file_count, 0);
     assert_eq!(current.source_count, 0);
@@ -66,6 +255,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
         ("/Sources/raw/a/a.md", "raw source"),
     ] {
         write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
             path: path.to_string(),
             kind: if path.starts_with("/Sources/") {
                 NodeKind::Source
@@ -80,6 +270,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
     }
 
     let context = query_context(QueryContextRequest {
+        database_id: "default".to_string(),
         task: "beam memory".to_string(),
         entities: Vec::new(),
         namespace: Some("/Wiki/scope".to_string()),
@@ -97,6 +288,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
     assert!(!context.evidence.is_empty());
 
     let evidence = source_evidence(SourceEvidenceRequest {
+        database_id: "default".to_string(),
         node_path: "/Wiki/scope/overview.md".to_string(),
     })
     .expect("evidence should load");
@@ -113,6 +305,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         kind: NodeKind::File,
         content: "# Foo\n\nalpha body".to_string(),
@@ -123,6 +316,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(created.created);
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
         kind: NodeKind::File,
         content: "# Bar\n\nbeta body".to_string(),
@@ -131,12 +325,13 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     })
     .expect("nested write should succeed");
 
-    let node = read_node("/Wiki/foo.md".to_string())
+    let node = read_node("default".to_string(), "/Wiki/foo.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(node.kind, NodeKind::File);
 
     let stale_write = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         kind: NodeKind::File,
         content: "# Foo\n\nrewrite".to_string(),
@@ -146,6 +341,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(stale_write.is_err());
 
     let entries = list_nodes(ListNodesRequest {
+        database_id: "default".to_string(),
         prefix: "/Wiki".to_string(),
         recursive: false,
     })
@@ -157,6 +353,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     );
 
     let children = list_children(ListChildrenRequest {
+        database_id: "default".to_string(),
         path: "/Wiki".to_string(),
     })
     .expect("children should list");
@@ -170,6 +367,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     }));
 
     let hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "alpha".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
@@ -180,6 +378,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(hits[0].path, "/Wiki/foo.md");
 
     let path_hits = search_node_paths(SearchNodePathsRequest {
+        database_id: "default".to_string(),
         query_text: "NeStEd".to_string(),
         prefix: Some("/Wiki".to_string()),
         top_k: 5,
@@ -190,6 +389,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(path_hits[0].path, "/Wiki/nested/bar.md");
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
+        database_id: "default".to_string(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
         cursor: None,
@@ -200,6 +400,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert_eq!(snapshot.nodes.len(), 2);
 
     let empty_delta = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: snapshot.snapshot_revision.clone(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -211,6 +412,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     assert!(empty_delta.removed_paths.is_empty());
 
     let invalid_delta = fetch_updates(FetchUpdatesRequest {
+        database_id: "default".to_string(),
         known_snapshot_revision: "missing".to_string(),
         prefix: Some("/Wiki".to_string()),
         limit: 100,
@@ -223,16 +425,19 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     );
 
     let deleted = delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         expected_etag: Some(created.node.etag.clone()),
     })
     .expect("delete should succeed");
     assert_eq!(deleted.path, "/Wiki/foo.md");
 
-    let deleted_read = read_node("/Wiki/foo.md".to_string()).expect("read should succeed");
+    let deleted_read =
+        read_node("default".to_string(), "/Wiki/foo.md".to_string()).expect("read should succeed");
     assert!(deleted_read.is_none());
 
     let stale_delete = delete_node(DeleteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
         expected_etag: Some("stale".to_string()),
     });
@@ -244,6 +449,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     install_test_service();
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         kind: NodeKind::File,
         content: "[Target](../target.md) and [[/Wiki/target.md]]".to_string(),
@@ -253,6 +459,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     .expect("source write should succeed");
 
     let incoming = incoming_links(IncomingLinksRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/target.md".to_string(),
         limit: 10,
     })
@@ -265,6 +472,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     );
 
     let outgoing = outgoing_links(OutgoingLinksRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         limit: 10,
     })
@@ -272,6 +480,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(outgoing.len(), 2);
 
     let graph = graph_links(GraphLinksRequest {
+        database_id: "default".to_string(),
         prefix: "/Wiki/topic".to_string(),
         limit: 10,
     })
@@ -279,6 +488,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(graph.len(), 2);
 
     let context = read_node_context(NodeContextRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
         link_limit: 10,
     })
@@ -288,6 +498,7 @@ fn fs_entrypoints_cover_backlink_queries() {
     assert_eq!(context.outgoing_links.len(), 2);
 
     let neighborhood = graph_neighborhood(GraphNeighborhoodRequest {
+        database_id: "default".to_string(),
         center_path: "/Wiki/target.md".to_string(),
         depth: 1,
         limit: 10,
@@ -301,6 +512,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     install_test_service();
 
     let mkdir = mkdir_node(MkdirNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work".to_string(),
     })
     .expect("mkdir should succeed");
@@ -308,6 +520,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     assert_eq!(mkdir.path, "/Wiki/work");
 
     let appended = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         content: "alpha".to_string(),
         expected_etag: None,
@@ -319,6 +532,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     assert!(appended.created);
 
     let appended_again = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         content: "beta".to_string(),
         expected_etag: Some(appended.node.etag.clone()),
@@ -327,12 +541,13 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
         kind: None,
     })
     .expect("append update should succeed");
-    let appended_node = read_node("/Wiki/work/log.md".to_string())
+    let appended_node = read_node("default".to_string(), "/Wiki/work/log.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(appended_node.content, "alpha\nbeta");
 
     let edited = edit_node(EditNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/log.md".to_string(),
         old_text: "beta".to_string(),
         new_text: "gamma".to_string(),
@@ -341,7 +556,7 @@ fn fs_entrypoints_cover_append_edit_and_mkdir() {
     })
     .expect("edit should succeed");
     assert_eq!(edited.replacement_count, 1);
-    let edited_node = read_node("/Wiki/work/log.md".to_string())
+    let edited_node = read_node("default".to_string(), "/Wiki/work/log.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(edited_node.content, "alpha\ngamma");
@@ -352,6 +567,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     install_test_service();
 
     let write_error = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/source.md".to_string(),
         kind: NodeKind::Source,
         content: "source".to_string(),
@@ -362,6 +578,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     assert!(write_error.contains("source path must"));
 
     write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/source/source.md".to_string(),
         kind: NodeKind::Source,
         content: "source".to_string(),
@@ -371,6 +588,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect("canonical source write should succeed");
 
     let append_error = append_node(AppendNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/topic.md".to_string(),
         content: "next".to_string(),
         expected_etag: None,
@@ -382,6 +600,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     assert!(append_error.contains("source path must"));
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Sources/raw/keep/keep.md".to_string(),
         kind: NodeKind::Source,
         content: "keep".to_string(),
@@ -391,6 +610,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect("canonical source write should succeed");
 
     let move_error = move_node(MoveNodeRequest {
+        database_id: "default".to_string(),
         from_path: "/Sources/raw/keep/keep.md".to_string(),
         to_path: "/Sources/raw/renamed/wrong.md".to_string(),
         expected_etag: Some(created.node.etag),
@@ -407,6 +627,7 @@ fn fs_entrypoints_search_large_hits_without_trap() {
     let payload = format!("shared-bench-search {}", "x".repeat(1024 * 1024 - 20));
     for index in 0..10 {
         write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
             path: format!("/Wiki/large/node-{index:03}.md"),
             kind: NodeKind::File,
             content: payload.clone(),
@@ -417,6 +638,7 @@ fn fs_entrypoints_search_large_hits_without_trap() {
     }
 
     let hits = search_nodes(SearchNodesRequest {
+        database_id: "default".to_string(),
         query_text: "shared-bench-search".to_string(),
         prefix: Some("/Wiki/large".to_string()),
         top_k: 10,
@@ -440,6 +662,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     install_test_service();
 
     let created = write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/work/item.md".to_string(),
         kind: NodeKind::File,
         content: "alpha beta".to_string(),
@@ -449,6 +672,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     .expect("write should succeed");
 
     let moved = move_node(MoveNodeRequest {
+        database_id: "default".to_string(),
         from_path: "/Wiki/work/item.md".to_string(),
         to_path: "/Wiki/archive/item.md".to_string(),
         expected_etag: Some(created.node.etag.clone()),
@@ -459,6 +683,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     assert_eq!(moved.node.path, "/Wiki/archive/item.md");
 
     let globbed = glob_nodes(GlobNodesRequest {
+        database_id: "default".to_string(),
         pattern: "**".to_string(),
         path: Some("/Wiki".to_string()),
         node_type: Some(GlobNodeType::Directory),
@@ -471,6 +696,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     );
 
     let recent = recent_nodes(RecentNodesRequest {
+        database_id: "default".to_string(),
         limit: 5,
         path: Some("/Wiki".to_string()),
     })
@@ -478,6 +704,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     assert_eq!(recent[0].path, "/Wiki/archive/item.md");
 
     let edited = multi_edit_node(MultiEditNodeRequest {
+        database_id: "default".to_string(),
         path: "/Wiki/archive/item.md".to_string(),
         edits: vec![
             MultiEdit {
@@ -493,8 +720,188 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     })
     .expect("multi edit should succeed");
     assert_eq!(edited.replacement_count, 2);
-    let edited_node = read_node("/Wiki/archive/item.md".to_string())
+    let edited_node = read_node("default".to_string(), "/Wiki/archive/item.md".to_string())
         .expect("read should succeed")
         .expect("node should exist");
     assert_eq!(edited_node.content, "one two");
+}
+
+#[test]
+fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
+    install_test_service();
+
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/archive-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "# Archive Smoke\n\nalpha body [raw](/Sources/raw/smoke/smoke.md)".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Sources/raw/smoke/smoke.md".to_string(),
+        kind: NodeKind::Source,
+        content: "raw alpha body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("source write should succeed");
+
+    let outgoing = outgoing_links(OutgoingLinksRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/archive-smoke.md".to_string(),
+        limit: 10,
+    })
+    .expect("outgoing should load");
+    assert_eq!(outgoing[0].target_path, "/Sources/raw/smoke/smoke.md");
+
+    let archive = begin_database_archive("default".to_string()).expect("archive should begin");
+    assert!(archive.size_bytes > 0);
+    let mut offset = 0_u64;
+    let mut bytes = Vec::new();
+    while offset < archive.size_bytes {
+        let chunk = read_database_archive_chunk("default".to_string(), offset, 17)
+            .expect("archive chunk should read")
+            .bytes;
+        assert!(!chunk.is_empty());
+        offset += chunk.len() as u64;
+        bytes.extend(chunk);
+    }
+    assert_eq!(bytes.len() as u64, archive.size_bytes);
+
+    let snapshot_hash = sha256_bytes(&bytes);
+    finalize_database_archive("default".to_string(), snapshot_hash.clone())
+        .expect("archive should finalize");
+    assert!(
+        read_node("default".to_string(), "/Wiki/archive-smoke.md".to_string())
+            .expect_err("archived DB should reject normal reads")
+            .contains("database is archived")
+    );
+
+    let info = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(info.status, DatabaseStatus::Archived);
+    assert_eq!(info.role, DatabaseRole::Owner);
+}
+
+#[test]
+fn begin_database_restore_rolls_back_when_mount_fails() {
+    install_test_service();
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/restore-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "restore body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+
+    let archive = begin_database_archive("default".to_string()).expect("archive should begin");
+    let bytes = read_database_archive_chunk("default".to_string(), 0, archive.size_bytes as u32)
+        .expect("archive chunk should read")
+        .bytes;
+    let snapshot_hash = sha256_bytes(&bytes);
+    finalize_database_archive("default".to_string(), snapshot_hash.clone())
+        .expect("archive should finalize");
+
+    fail_next_mount_database_file_for_test();
+    let error = begin_database_restore(
+        "default".to_string(),
+        snapshot_hash.clone(),
+        archive.size_bytes,
+    )
+    .expect_err("mount failure should fail restore begin");
+    assert!(error.contains("test mount failure"));
+    let rolled_back = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(rolled_back.status, DatabaseStatus::Archived);
+    assert_eq!(rolled_back.role, DatabaseRole::Owner);
+
+    begin_database_restore("default".to_string(), snapshot_hash, archive.size_bytes)
+        .expect("restore begin should retry after rollback");
+    let restoring = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(restoring.status, DatabaseStatus::Restoring);
+    assert_eq!(restoring.role, DatabaseRole::Owner);
+}
+
+#[test]
+fn cancel_database_archive_entrypoint_returns_database_to_hot() {
+    install_test_service();
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/cancel-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "cancel body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+
+    begin_database_archive("default".to_string()).expect("archive should begin");
+    assert!(
+        write_node(WriteNodeRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/blocked.md".to_string(),
+            kind: NodeKind::File,
+            content: "blocked".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .expect_err("archiving DB should reject writes")
+        .contains("database is archiving")
+    );
+
+    cancel_database_archive("default".to_string()).expect("archive cancel should succeed");
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/after-cancel.md".to_string(),
+        kind: NodeKind::File,
+        content: "after cancel".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("write should succeed after cancel");
+    let info = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(info.status, DatabaseStatus::Hot);
+    assert_eq!(info.role, DatabaseRole::Owner);
+}
+
+#[test]
+fn cancel_database_archive_entrypoint_rejects_non_owner() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("default", "owner", 1_700_000_000_000)
+        .expect("default database should create");
+    service
+        .begin_database_archive("default", "owner", 1_700_000_000_001)
+        .expect("archive should begin");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+
+    assert!(
+        cancel_database_archive("default".to_string())
+            .expect_err("non-owner cancel should fail")
+            .contains("principal has no access")
+    );
 }

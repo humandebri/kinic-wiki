@@ -1,7 +1,11 @@
 {
   "rewrites": [
     {
-      "source": "/w/:segments*",
+      "source": "/:databaseId",
+      "destination": "/w"
+    },
+    {
+      "source": "/:databaseId/:segments*",
       "destination": "/w"
     }
   ]
