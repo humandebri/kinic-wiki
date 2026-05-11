@@ -1,6 +1,9 @@
 .next/
+.open-next/
 out/
 node_modules/
 tsconfig.tsbuildinfo
 .env.local
+.dev.vars
+cloudflare-env.d.ts
 next-env.d.ts

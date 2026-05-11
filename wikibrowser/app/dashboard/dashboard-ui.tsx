@@ -6,6 +6,15 @@ import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types"
 
 const ANONYMOUS_PRINCIPAL = "2vxsx-fae";
 
+type PendingAclAction = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  principalText: string;
+  role?: DatabaseRole;
+  kind: "grant" | "revoke";
+};
+
 export function AuthControls(props: { authReady: boolean; loading: boolean; principal: string | null; onLogin: () => void; onLogout: () => void }) {
   if (!props.principal) {
     return (
@@ -43,7 +52,65 @@ export function OwnerPanel(props: {
   onGrant: (principalText: string, role: DatabaseRole) => void;
   onRevoke: (principalText: string) => void;
 }) {
+  const [pendingAction, setPendingAction] = useState<PendingAclAction | null>(null);
   const publicEnabled = props.members.some((member) => member.principal === ANONYMOUS_PRINCIPAL);
+  function requestGrant(principalText: string, role: DatabaseRole) {
+    if (principalText === ANONYMOUS_PRINCIPAL) {
+      setPendingAction({
+        title: "Enable public access",
+        message: `Grant reader access to anonymous principal ${ANONYMOUS_PRINCIPAL}. Anyone can read this database through the public browser.`,
+        confirmLabel: "Enable public",
+        principalText,
+        role,
+        kind: "grant"
+      });
+      return;
+    }
+    if (role === "owner") {
+      setPendingAction({
+        title: "Grant owner access",
+        message: `Grant owner access to ${principalText}. Owners can grant and revoke database access.`,
+        confirmLabel: "Grant owner",
+        principalText,
+        role,
+        kind: "grant"
+      });
+      return;
+    }
+    props.onGrant(principalText, role);
+  }
+  function requestRevoke(member: DatabaseMember) {
+    if (member.principal === ANONYMOUS_PRINCIPAL) {
+      setPendingAction({
+        title: "Disable public access",
+        message: `Revoke anonymous reader access from ${ANONYMOUS_PRINCIPAL}. Public browser reads will stop working for this database.`,
+        confirmLabel: "Disable public",
+        principalText: member.principal,
+        kind: "revoke"
+      });
+      return;
+    }
+    if (member.role === "owner") {
+      setPendingAction({
+        title: "Revoke owner access",
+        message: `Revoke owner access from ${member.principal}. This principal will lose database management access.`,
+        confirmLabel: "Revoke owner",
+        principalText: member.principal,
+        kind: "revoke"
+      });
+      return;
+    }
+    props.onRevoke(member.principal);
+  }
+  function confirmPendingAction() {
+    if (!pendingAction) return;
+    if (pendingAction.kind === "grant" && pendingAction.role) {
+      props.onGrant(pendingAction.principalText, pendingAction.role);
+    } else {
+      props.onRevoke(pendingAction.principalText);
+    }
+    setPendingAction(null);
+  }
   return (
     <section className="rounded-lg border border-line bg-paper shadow-sm">
       <div className="flex flex-col gap-3 border-b border-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -52,17 +119,26 @@ export function OwnerPanel(props: {
           <p className="mt-1 text-sm text-muted">Public: {publicEnabled ? "enabled" : "disabled"}</p>
         </div>
         {publicEnabled ? (
-          <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" disabled={props.busy} type="button" onClick={() => props.onRevoke(ANONYMOUS_PRINCIPAL)}>
+          <button
+            className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink"
+            disabled={props.busy}
+            type="button"
+            onClick={() => {
+              const publicMember = props.members.find((member) => member.principal === ANONYMOUS_PRINCIPAL);
+              if (publicMember) requestRevoke(publicMember);
+            }}
+          >
             Disable public
           </button>
         ) : (
-          <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white" disabled={props.busy} type="button" onClick={() => props.onGrant(ANONYMOUS_PRINCIPAL, "reader")}>
+          <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white" disabled={props.busy} type="button" onClick={() => requestGrant(ANONYMOUS_PRINCIPAL, "reader")}>
             Enable public
           </button>
         )}
       </div>
-      <GrantForm busy={props.busy} onGrant={props.onGrant} />
-      <MemberTable busy={props.busy} members={props.members} principal={props.principal} onRevoke={props.onRevoke} />
+      <GrantForm busy={props.busy} onGrant={requestGrant} />
+      <MemberTable busy={props.busy} members={props.members} principal={props.principal} onRevoke={requestRevoke} />
+      {pendingAction ? <ConfirmAclDialog action={pendingAction} busy={props.busy} onCancel={() => setPendingAction(null)} onConfirm={confirmPendingAction} /> : null}
     </section>
   );
 }
@@ -82,22 +158,26 @@ function GrantForm({ busy, onGrant }: { busy: boolean; onGrant: (principalText: 
     onGrant(trimmed, role);
     setPrincipalText("");
   }
+  const trimmedPrincipal = principalText.trim();
   return (
-    <form className="grid gap-3 border-b border-line p-4 sm:grid-cols-[1fr_160px_auto]" onSubmit={submit}>
-      <input className="rounded-lg border border-line px-3 py-2 font-mono text-sm" value={principalText} onChange={(event) => setPrincipalText(event.target.value)} placeholder="principal" />
-      <select className="rounded-lg border border-line px-3 py-2 text-sm" value={role} onChange={(event) => setRole(databaseRoleFromValue(event.target.value))}>
-        <option value="reader">reader</option>
-        <option value="writer">writer</option>
-        <option value="owner">owner</option>
-      </select>
-      <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white" disabled={busy} type="submit">
-        Grant
-      </button>
+    <form className="grid gap-3 border-b border-line p-4" onSubmit={submit}>
+      <div className="grid gap-3 sm:grid-cols-[1fr_160px_auto]">
+        <input className="rounded-lg border border-line px-3 py-2 font-mono text-sm" value={principalText} onChange={(event) => setPrincipalText(event.target.value)} placeholder="principal" />
+        <select className="rounded-lg border border-line px-3 py-2 text-sm" value={role} onChange={(event) => setRole(databaseRoleFromValue(event.target.value))}>
+          <option value="reader">reader</option>
+          <option value="writer">writer</option>
+          <option value="owner">owner</option>
+        </select>
+        <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white" disabled={busy} type="submit">
+          Grant
+        </button>
+      </div>
+      <p className="text-xs text-muted">{trimmedPrincipal ? `This will grant ${role} access to principal ${trimmedPrincipal}.` : `Enter a principal to grant ${role} access.`}</p>
     </form>
   );
 }
 
-function MemberTable(props: { busy: boolean; members: DatabaseMember[]; principal: string; onRevoke: (principalText: string) => void }) {
+function MemberTable(props: { busy: boolean; members: DatabaseMember[]; principal: string; onRevoke: (member: DatabaseMember) => void }) {
   if (props.members.length === 0) {
     return <div className="p-6 text-sm text-muted">No members.</div>;
   }
@@ -119,7 +199,7 @@ function MemberTable(props: { busy: boolean; members: DatabaseMember[]; principa
               <td className="px-4 py-3 text-ink">{member.role}</td>
               <td className="px-4 py-3 text-muted">{formatTimestamp(member.createdAtMs)}</td>
               <td className="px-4 py-3">
-                <button className="rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink disabled:opacity-50" disabled={props.busy || member.principal === props.principal} type="button" onClick={() => props.onRevoke(member.principal)}>
+                <button className="rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink disabled:opacity-50" disabled={props.busy || member.principal === props.principal} type="button" onClick={() => props.onRevoke(member)}>
                   Revoke
                 </button>
               </td>
@@ -127,6 +207,26 @@ function MemberTable(props: { busy: boolean; members: DatabaseMember[]; principa
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ConfirmAclDialog(props: { action: PendingAclAction; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 px-4">
+      <div className="w-full max-w-md rounded-lg border border-line bg-paper p-5 shadow-lg">
+        <h3 className="text-lg font-semibold text-ink">{props.action.title}</h3>
+        <p className="mt-3 text-sm leading-6 text-muted">{props.action.message}</p>
+        <p className="mt-3 break-all rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs text-ink">{props.action.principalText}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" disabled={props.busy} type="button" onClick={props.onCancel}>
+            Cancel
+          </button>
+          <button className="rounded-lg border border-red-700 bg-red-700 px-3 py-2 text-sm font-medium text-white" disabled={props.busy} type="button" onClick={props.onConfirm}>
+            {props.action.confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

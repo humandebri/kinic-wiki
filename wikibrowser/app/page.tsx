@@ -2,7 +2,7 @@
 
 import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DatabaseSummary } from "@/lib/types";
 import { createDatabaseAuthenticated, listDatabasesAuthenticated } from "@/lib/vfs-client";
 
@@ -12,6 +12,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 
 export default function HomePage() {
   const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
+  const refreshSeqRef = useRef(0);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [principal, setPrincipal] = useState<string | null>(null);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
@@ -22,6 +23,8 @@ export default function HomePage() {
 
   const refreshDatabases = useCallback(
     async (client: AuthClient) => {
+      const refreshSeq = (refreshSeqRef.current += 1);
+      const isCurrentRefresh = () => refreshSeq === refreshSeqRef.current;
       if (!canisterId) {
         setError("KINIC_WIKI_CANISTER_ID is not configured.");
         setLoadState("error");
@@ -32,10 +35,12 @@ export default function HomePage() {
       try {
         const identity = client.getIdentity();
         const nextDatabases = await listDatabasesAuthenticated(canisterId, identity);
+        if (!isCurrentRefresh()) return;
         setDatabases(nextDatabases);
         setPrincipal(identity.getPrincipal().toText());
         setLoadState("ready");
       } catch (cause) {
+        if (!isCurrentRefresh()) return;
         setError(errorMessage(cause));
         setLoadState("error");
       }
@@ -83,6 +88,7 @@ export default function HomePage() {
 
   async function logout() {
     if (!authClient) return;
+    refreshSeqRef.current += 1;
     await authClient.logout();
     setPrincipal(null);
     setDatabases([]);

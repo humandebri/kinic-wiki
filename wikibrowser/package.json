@@ -9,12 +9,16 @@
     "smoke": "node scripts/smoke-ui.mjs",
     "smoke:errors": "node scripts/smoke-errors.mjs",
     "smoke:public": "node scripts/smoke-public.mjs",
-    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs",
-    "typecheck": "next typegen && tsc --noEmit"
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs && node scripts/check-dashboard.mjs",
+    "typecheck": "next typegen && tsc --noEmit",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
     "@icp-sdk/auth": "5.0.0",
     "@icp-sdk/core": "^5.4.0",
+    "@opennextjs/cloudflare": "^1.19.8",
     "lucide-react": "0.555.0",
     "next": "16.2.4",
     "react": "19.2.5",
@@ -31,7 +35,8 @@
     "eslint-config-next": "16.2.4",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.18",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "^4.90.0"
   },
   "pnpm": {
     "overrides": {

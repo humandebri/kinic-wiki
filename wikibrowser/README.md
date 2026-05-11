@@ -112,10 +112,10 @@ Covered methods:
 
 ## Public MVP
 
-Initial deployment target is Vercel with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>`.
+Initial deployment target is Cloudflare Workers with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>`.
 The app is public read-only and accepts database IDs for the fixed canister. The target DB must grant reader access to anonymous principal `2vxsx-fae`.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
-The `/<database-id>/...` URLs are served by the `/w` browser shell through `vercel.json` rewrites; read queries go directly from the browser to the configured IC gateway.
+The `/<database-id>/...` URL is an App Router dynamic route. The access management page uses `/dashboard?databaseId=<database-id>`. Read and authenticated calls go directly from the browser to the configured IC gateway.
 
 ## Troubleshooting
 
@@ -124,25 +124,24 @@ The `/<database-id>/...` URLs are served by the `/w` browser shell through `verc
 - Method missing / wrong canister: use a Kinic Wiki canister that exposes the VFS, health, and Agent Memory methods covered by `lib/vfs-idl.ts`.
 - Host unreachable: confirm `NEXT_PUBLIC_WIKI_IC_HOST` and network access to the local replica or IC gateway.
 
-## Vercel Deploy
+## Cloudflare Workers Deploy
 
-Use this repository as a monorepo project and set the Vercel project root to `wikibrowser`.
+Use this repository as a monorepo project and set the Workers build root to `wikibrowser`.
 
-Dashboard settings:
+Cloudflare settings:
 
 - Framework Preset: Next.js
 - Root Directory: `wikibrowser`
-- Install Command: `pnpm install`
-- Build Command: `pnpm build`
-- Output Directory: Vercel default
+- Install Command: `pnpm install --frozen-lockfile`
+- Build Command: `pnpm deploy`
 - Environment Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>` for Preview and Production
-- Routing: keep `vercel.json` so `/:databaseId/:segments*` rewrites to the `/w` browser shell. Static export does not apply Next.js `rewrites()` from `next.config.ts`, so Vercel routing is the source of truth. Non-Vercel static hosts need an equivalent host-level rewrite.
+- Runtime: Cloudflare Workers via `@opennextjs/cloudflare`
 
 CLI deploy from this directory:
 
 ```bash
-vercel
-vercel --prod
+pnpm wrangler whoami
+pnpm deploy
 ```
 
 Pre-deploy checklist:
@@ -152,12 +151,13 @@ pnpm test
 pnpm lint
 pnpm typecheck
 pnpm build
+pnpm preview
 ```
 
 Post-deploy public smoke:
 
 ```bash
-pnpm smoke:public -- --base-url https://<deployment>.vercel.app --database-id <database-id> --path /Wiki/<existing-file>.md
+pnpm smoke:public -- --base-url https://<deployment>.workers.dev --database-id <database-id> --path /Wiki/<existing-file>.md
 ```
 
 `--path` must point to an existing file node on the mainnet canister.
