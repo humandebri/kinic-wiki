@@ -15,16 +15,16 @@ use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DatabaseArchiveChunk,
-    DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
-    DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
-    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
-    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
-    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
-    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    DatabaseArchiveInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
+    DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
+    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MemoryCapability,
+    MemoryManifest, MemoryRoot, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
@@ -162,8 +162,8 @@ fn list_database_members(database_id: String) -> Result<Vec<DatabaseMember>, Str
 }
 
 #[query]
-fn list_databases() -> Result<Vec<DatabaseInfo>, String> {
-    with_service(|service| service.list_database_infos_for_caller(&caller_text()))
+fn list_databases() -> Result<Vec<DatabaseSummary>, String> {
+    with_service(|service| service.list_database_summaries_for_caller(&caller_text()))
 }
 
 #[update]

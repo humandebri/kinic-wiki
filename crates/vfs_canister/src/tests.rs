@@ -98,6 +98,18 @@ fn existing_database_index_is_loaded_without_implicit_default() {
 }
 
 #[test]
+fn canister_list_databases_returns_caller_membership_summaries() {
+    install_test_service();
+
+    let summaries = list_databases().expect("database summaries should load");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].database_id, "default");
+    assert_eq!(summaries[0].role, DatabaseRole::Owner);
+    assert_eq!(summaries[0].status, DatabaseStatus::Hot);
+}
+
+#[test]
 fn update_entrypoints_record_usage_events() {
     install_empty_test_service();
 
@@ -769,13 +781,12 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
     );
 
     let info = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(info.status, DatabaseStatus::Archived);
-    assert_eq!(info.snapshot_hash, Some(snapshot_hash));
-    assert!(info.mount_id.is_none());
+    assert_eq!(info.role, DatabaseRole::Owner);
 }
 
 #[test]
@@ -808,22 +819,22 @@ fn begin_database_restore_rolls_back_when_mount_fails() {
     .expect_err("mount failure should fail restore begin");
     assert!(error.contains("test mount failure"));
     let rolled_back = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(rolled_back.status, DatabaseStatus::Archived);
-    assert!(rolled_back.mount_id.is_none());
+    assert_eq!(rolled_back.role, DatabaseRole::Owner);
 
     begin_database_restore("default".to_string(), snapshot_hash, archive.size_bytes)
         .expect("restore begin should retry after rollback");
     let restoring = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(restoring.status, DatabaseStatus::Restoring);
-    assert!(restoring.mount_id.is_some());
+    assert_eq!(restoring.role, DatabaseRole::Owner);
 }
 
 #[test]
@@ -864,12 +875,12 @@ fn cancel_database_archive_entrypoint_returns_database_to_hot() {
     })
     .expect("write should succeed after cancel");
     let info = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(info.status, DatabaseStatus::Hot);
-    assert!(info.mount_id.is_some());
+    assert_eq!(info.role, DatabaseRole::Owner);
 }
 
 #[test]

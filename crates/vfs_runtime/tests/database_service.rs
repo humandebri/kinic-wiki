@@ -395,7 +395,7 @@ fn creates_databases_with_unique_mount_ids() {
 }
 
 #[test]
-fn lists_database_infos_for_caller_memberships_only() {
+fn lists_database_summaries_for_caller_memberships_only() {
     let service = service();
     service
         .create_database("alpha", "owner_a", 1)
@@ -407,24 +407,35 @@ fn lists_database_infos_for_caller_memberships_only() {
         .grant_database_access("alpha", "owner_a", "owner_b", DatabaseRole::Reader, 3)
         .expect("shared grant should succeed");
 
-    let owner_a_infos = service
-        .list_database_infos_for_caller("owner_a")
-        .expect("owner_a infos should load");
-    assert_eq!(owner_a_infos.len(), 1);
-    assert_eq!(owner_a_infos[0].database_id, "alpha");
+    let owner_a_summaries = service
+        .list_database_summaries_for_caller("owner_a")
+        .expect("owner_a summaries should load");
+    assert_eq!(owner_a_summaries.len(), 1);
+    assert_eq!(owner_a_summaries[0].database_id, "alpha");
+    assert_eq!(owner_a_summaries[0].role, DatabaseRole::Owner);
+    assert_eq!(owner_a_summaries[0].status, DatabaseStatus::Hot);
 
-    let owner_b_ids = service
-        .list_database_infos_for_caller("owner_b")
-        .expect("owner_b infos should load")
+    let owner_b_summaries = service
+        .list_database_summaries_for_caller("owner_b")
+        .expect("owner_b summaries should load");
+    let owner_b_ids = owner_b_summaries
+        .iter()
+        .map(|summary| summary.database_id.clone())
+        .collect::<Vec<_>>();
+    let owner_b_roles = owner_b_summaries
         .into_iter()
-        .map(|info| info.database_id)
+        .map(|summary| summary.role)
         .collect::<Vec<_>>();
     assert_eq!(owner_b_ids, vec!["alpha".to_string(), "beta".to_string()]);
+    assert_eq!(
+        owner_b_roles,
+        vec![DatabaseRole::Reader, DatabaseRole::Owner]
+    );
 
-    let outsider_infos = service
-        .list_database_infos_for_caller("outsider")
-        .expect("outsider infos should load");
-    assert!(outsider_infos.is_empty());
+    let outsider_summaries = service
+        .list_database_summaries_for_caller("outsider")
+        .expect("outsider summaries should load");
+    assert!(outsider_summaries.is_empty());
 }
 
 #[test]

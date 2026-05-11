@@ -10,15 +10,15 @@ use sha2::{Digest, Sha256};
 use vfs_store::FsStore;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRole,
-    DatabaseStatus, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
-    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MkdirNodeRequest,
-    MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult,
-    Node, NodeContext, NodeContextRequest, NodeEntry, NodeKind, OutgoingLinksRequest, QueryContext,
-    QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
-    SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    DatabaseStatus, DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
+    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -111,12 +111,12 @@ impl VfsService {
         load_database_infos(&conn)
     }
 
-    pub fn list_database_infos_for_caller(
+    pub fn list_database_summaries_for_caller(
         &self,
         caller: &str,
-    ) -> Result<Vec<DatabaseInfo>, String> {
+    ) -> Result<Vec<DatabaseSummary>, String> {
         let conn = self.open_index()?;
-        load_database_infos_for_caller(&conn, caller)
+        load_database_summaries_for_caller(&conn, caller)
     }
 
     pub fn record_usage_event(&self, event: UsageEvent<'_>) -> Result<(), String> {
@@ -1634,13 +1634,13 @@ fn load_database_infos(conn: &Connection) -> Result<Vec<DatabaseInfo>, String> {
     .map_err(|error| error.to_string())
 }
 
-fn load_database_infos_for_caller(
+fn load_database_summaries_for_caller(
     conn: &Connection,
     caller: &str,
-) -> Result<Vec<DatabaseInfo>, String> {
+) -> Result<Vec<DatabaseSummary>, String> {
     conn.prepare(
-        "SELECT d.database_id, d.status, d.active_mount_id, d.schema_version, d.logical_size_bytes,
-                d.snapshot_hash, d.archived_at_ms, d.deleted_at_ms
+        "SELECT d.database_id, d.status, m.role, d.logical_size_bytes,
+                d.archived_at_ms, d.deleted_at_ms
          FROM databases d
          INNER JOIN database_members m ON m.database_id = d.database_id
          WHERE m.principal = ?1
@@ -1648,17 +1648,14 @@ fn load_database_infos_for_caller(
     )
     .map_err(|error| error.to_string())?
     .query_map(params![caller], |row| {
-        let mount_id: Option<i64> = row.get(2)?;
-        let logical_size_bytes: i64 = row.get(4)?;
-        Ok(DatabaseInfo {
+        let logical_size_bytes: i64 = row.get(3)?;
+        Ok(DatabaseSummary {
             database_id: row.get(0)?,
             status: status_from_db(&row.get::<_, String>(1)?)?,
-            mount_id: mount_id.map(mount_id_from_db).transpose()?,
-            schema_version: row.get(3)?,
+            role: role_from_db(&row.get::<_, String>(2)?)?,
             logical_size_bytes: logical_size_bytes.max(0) as u64,
-            snapshot_hash: row.get(5)?,
-            archived_at_ms: row.get(6)?,
-            deleted_at_ms: row.get(7)?,
+            archived_at_ms: row.get(4)?,
+            deleted_at_ms: row.get(5)?,
         })
     })
     .map_err(|error| error.to_string())?

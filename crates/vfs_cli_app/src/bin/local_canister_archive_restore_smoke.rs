@@ -186,11 +186,6 @@ async fn main() -> Result<()> {
         info.status == DatabaseStatus::Hot,
         "smoke database should be hot",
     )?;
-    ensure(
-        info.snapshot_hash == Some(snapshot_hash),
-        "snapshot hash metadata should survive restore",
-    )?;
-
     println!("local_canister_archive_restore_smoke ok");
     println!("canister_id={canister_id}");
     println!("database_id={database_id}");
