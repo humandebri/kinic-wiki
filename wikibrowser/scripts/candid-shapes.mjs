@@ -54,6 +54,21 @@ export const expectedTypes = {
   },
   NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null" } },
   NodeKind: { kind: "variant", cases: { File: "null", Source: "null" } },
+  WriteNodeRequest: {
+    kind: "record",
+    fields: {
+      content: "text",
+      kind: "NodeKind",
+      path: "text",
+      expected_etag: "opt text",
+      metadata_json: "text",
+      database_id: "text"
+    }
+  },
+  WriteNodeResult: {
+    kind: "record",
+    fields: { created: "bool", node: "RecentNodeHit" }
+  },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
     kind: "record",
@@ -125,6 +140,7 @@ export const expectedTypes = {
   ResultDatabases: { kind: "variant", cases: { Ok: "vec DatabaseSummary", Err: "text" } },
   ResultMembers: { kind: "variant", cases: { Ok: "vec DatabaseMember", Err: "text" } },
   ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
+  ResultWriteNode: { kind: "variant", cases: { Ok: "WriteNodeResult", Err: "text" } },
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
@@ -196,6 +212,7 @@ export const didTypeAliases = {
   ResultDatabases: "Result_12",
   ResultMembers: "Result_11",
   ResultUnit: "Result_2",
+  ResultWriteNode: "Result",
   ResultLinks: "Result_9",
   ResultNode: "Result_18",
   ResultNodeContext: "Result_19",
@@ -224,5 +241,6 @@ export const expectedMethods = {
   revoke_database_access: { input: ["text", "text"], output: "ResultUnit", mode: "update" },
   search_node_paths: { input: ["SearchNodePathsRequest"], output: "ResultSearch", mode: "query" },
   search_nodes: { input: ["SearchNodesRequest"], output: "ResultSearch", mode: "query" },
-  source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" }
+  source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" },
+  write_node: { input: ["WriteNodeRequest"], output: "ResultWriteNode", mode: "update" }
 };

@@ -3,15 +3,14 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import type { DatabaseSummary } from "@/lib/types";
 import { createDatabaseAuthenticated, listDatabasesAuthenticated } from "@/lib/vfs-client";
-
-const DELEGATION_TTL_NS = BigInt(8) * BigInt(3_600_000_000_000);
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
 export default function HomePage() {
-  const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
+  const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const refreshSeqRef = useRef(0);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [principal, setPrincipal] = useState<string | null>(null);
@@ -26,7 +25,7 @@ export default function HomePage() {
       const refreshSeq = (refreshSeqRef.current += 1);
       const isCurrentRefresh = () => refreshSeq === refreshSeqRef.current;
       if (!canisterId) {
-        setError("KINIC_WIKI_CANISTER_ID is not configured.");
+        setError("NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID is not configured.");
         setLoadState("error");
         return;
       }
@@ -186,6 +185,7 @@ function AuthControls({
       <button
         className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
         disabled={!authReady}
+        data-tid="login-button"
         type="button"
         onClick={onLogin}
       >
@@ -267,14 +267,6 @@ function CreatedDatabasePanel({ databaseId }: { databaseId: string }) {
       </Link>
     </div>
   );
-}
-
-function identityProviderUrl(): string {
-  const host = window.location.hostname;
-  if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".localhost")) {
-    return "http://id.ai.localhost:8000";
-  }
-  return "https://id.ai";
 }
 
 function formatBytes(value: string): string {

@@ -88,7 +88,7 @@ function assertSnapshotIncludes(text) {
 
 async function readTargetContext(databaseId, nodePath) {
   const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
-  const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
+  const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const agent = HttpAgent.createSync({ host });
   if (isLocalHost(host)) {
     await agent.fetchRootKey();

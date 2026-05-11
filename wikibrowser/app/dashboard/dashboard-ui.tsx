@@ -18,7 +18,7 @@ type PendingAclAction = {
 export function AuthControls(props: { authReady: boolean; loading: boolean; principal: string | null; onLogin: () => void; onLogout: () => void }) {
   if (!props.principal) {
     return (
-      <button className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white" disabled={!props.authReady} type="button" onClick={props.onLogin}>
+      <button className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white" disabled={!props.authReady} data-tid="login-button" type="button" onClick={props.onLogin}>
         Login with Internet Identity
       </button>
     );

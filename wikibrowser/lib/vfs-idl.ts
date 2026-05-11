@@ -132,6 +132,14 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const GraphLinksRequest = idl.Record({ prefix: idl.Text, limit: idl.Nat32, database_id: idl.Text });
   const GraphNeighborhoodRequest = idl.Record({ center_path: idl.Text, depth: idl.Nat32, limit: idl.Nat32, database_id: idl.Text });
   const NodeContextRequest = idl.Record({ path: idl.Text, link_limit: idl.Nat32, database_id: idl.Text });
+  const WriteNodeRequest = idl.Record({
+    content: idl.Text,
+    kind: NodeKind,
+    path: idl.Text,
+    expected_etag: idl.Opt(idl.Text),
+    metadata_json: idl.Text,
+    database_id: idl.Text
+  });
   const SearchNodePathsRequest = idl.Record({
     database_id: idl.Text,
     query_text: idl.Text,
@@ -167,6 +175,8 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultCreateDatabase = idl.Variant({ Ok: idl.Text, Err: idl.Text });
   const ResultDatabases = idl.Variant({ Ok: idl.Vec(DatabaseSummary), Err: idl.Text });
   const ResultMembers = idl.Variant({ Ok: idl.Vec(DatabaseMember), Err: idl.Text });
+  const WriteNodeResult = idl.Record({ created: idl.Bool, node: RecentNodeHit });
+  const ResultWriteNode = idl.Variant({ Ok: WriteNodeResult, Err: idl.Text });
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
 
   return idl.Service({
@@ -188,6 +198,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     revoke_database_access: idl.Func([idl.Text, idl.Text], [ResultUnit], []),
     search_node_paths: idl.Func([SearchNodePathsRequest], [ResultSearch], ["query"]),
     search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"]),
-    source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"])
+    source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"]),
+    write_node: idl.Func([WriteNodeRequest], [ResultWriteNode], [])
   });
 };

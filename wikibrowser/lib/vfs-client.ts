@@ -17,7 +17,9 @@ import type {
   NodeKind,
   RecentNode,
   SearchNodeHit,
-  WikiNode
+  WikiNode,
+  WriteNodeRequest,
+  WriteNodeResult
 } from "@/lib/types";
 import { ApiError } from "@/lib/wiki-helpers";
 
@@ -71,6 +73,20 @@ type RawRecent = {
   etag: string;
 };
 
+type RawWriteNodeRequest = {
+  database_id: string;
+  path: string;
+  kind: Variant;
+  content: string;
+  metadata_json: string;
+  expected_etag: [] | [string];
+};
+
+type RawWriteNodeResult = {
+  created: boolean;
+  node: RawRecent;
+};
+
 type RawLinkEdge = {
   source_path: string;
   target_path: string;
@@ -117,6 +133,7 @@ type VfsActor = {
     top_k: number;
     preview_mode: [] | [Variant];
   }) => Promise<{ Ok: RawSearchHit[] } | { Err: string }>;
+  write_node: (request: RawWriteNodeRequest) => Promise<{ Ok: RawWriteNodeResult } | { Err: string }>;
 };
 
 export function validateCanisterId(canisterId: string): Principal | string {
@@ -174,6 +191,10 @@ async function createAuthenticatedActor(canisterId: string, identity: Identity):
   });
 }
 
+async function createReadActor(canisterId: string, identity?: Identity): Promise<VfsActor> {
+  return identity ? createAuthenticatedActor(canisterId, identity) : createVfsActor(canisterId);
+}
+
 async function callVfs<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
@@ -187,12 +208,16 @@ async function callVfs<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function readNode(canisterId: string, databaseId: string, path: string): Promise<WikiNode | null> {
+function throwCanisterError(message: string): never {
+  throw new ApiError(message, 400);
+}
+
+export async function readNode(canisterId: string, databaseId: string, path: string, identity?: Identity): Promise<WikiNode | null> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.read_node(databaseId, path);
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     const raw = result.Ok[0];
     return raw ? normalizeNode(raw) : null;
@@ -234,6 +259,27 @@ export async function createDatabaseAuthenticated(canisterId: string, identity: 
       throw new Error(result.Err);
     }
     return result.Ok;
+  });
+}
+
+export async function writeNodeAuthenticated(canisterId: string, identity: Identity, request: WriteNodeRequest): Promise<WriteNodeResult> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.write_node({
+      database_id: request.databaseId,
+      path: request.path,
+      kind: nodeKindVariant(request.kind),
+      content: request.content,
+      metadata_json: request.metadataJson,
+      expected_etag: request.expectedEtag ? [request.expectedEtag] : []
+    });
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return {
+      created: result.Ok.created,
+      node: normalizeRecentNode(result.Ok.node)
+    };
   });
 }
 
@@ -279,84 +325,81 @@ export async function revokeDatabaseAccessAuthenticated(
   });
 }
 
-export async function readNodeContext(canisterId: string, databaseId: string, path: string, linkLimit: number): Promise<NodeContext | null> {
+export async function readNodeContext(canisterId: string, databaseId: string, path: string, linkLimit: number, identity?: Identity): Promise<NodeContext | null> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.read_node_context({ database_id: databaseId, path, link_limit: linkLimit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     const raw = result.Ok[0];
     return raw ? normalizeNodeContext(raw) : null;
   });
 }
 
-export async function listChildren(canisterId: string, databaseId: string, path: string): Promise<ChildNode[]> {
+export async function listChildren(canisterId: string, databaseId: string, path: string, identity?: Identity): Promise<ChildNode[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.list_children({ database_id: databaseId, path });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return sortChildNodes(result.Ok.map(normalizeChild));
   });
 }
 
-export async function recentNodes(canisterId: string, databaseId: string, limit: number): Promise<RecentNode[]> {
+export async function recentNodes(canisterId: string, databaseId: string, limit: number, identity?: Identity): Promise<RecentNode[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.recent_nodes({ database_id: databaseId, path: [], limit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map((node) => ({
-      path: node.path,
-      kind: normalizeNodeKind(node.kind),
-      updatedAt: node.updated_at.toString(),
-      etag: node.etag
+      ...normalizeRecentNode(node)
     }));
   });
 }
 
-export async function incomingLinks(canisterId: string, databaseId: string, path: string, limit: number): Promise<LinkEdge[]> {
+export async function incomingLinks(canisterId: string, databaseId: string, path: string, limit: number, identity?: Identity): Promise<LinkEdge[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.incoming_links({ database_id: databaseId, path, limit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeLinkEdge);
   });
 }
 
-export async function outgoingLinks(canisterId: string, databaseId: string, path: string, limit: number): Promise<LinkEdge[]> {
+export async function outgoingLinks(canisterId: string, databaseId: string, path: string, limit: number, identity?: Identity): Promise<LinkEdge[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.outgoing_links({ database_id: databaseId, path, limit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeLinkEdge);
   });
 }
 
-export async function graphLinks(canisterId: string, databaseId: string, prefix: string, limit: number): Promise<LinkEdge[]> {
+export async function graphLinks(canisterId: string, databaseId: string, prefix: string, limit: number, identity?: Identity): Promise<LinkEdge[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.graph_links({ database_id: databaseId, prefix, limit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeLinkEdge);
   });
 }
 
-export async function graphNeighborhood(canisterId: string, databaseId: string, centerPath: string, depth: number, limit: number): Promise<LinkEdge[]> {
+export async function graphNeighborhood(canisterId: string, databaseId: string, centerPath: string, depth: number, limit: number, identity?: Identity): Promise<LinkEdge[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.graph_neighborhood({ database_id: databaseId, center_path: centerPath, depth, limit });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeLinkEdge);
   });
@@ -367,10 +410,11 @@ export async function searchNodePaths(
   databaseId: string,
   queryText: string,
   limit: number,
-  prefix: string | null
+  prefix: string | null,
+  identity?: Identity
 ): Promise<SearchNodeHit[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.search_node_paths({
       database_id: databaseId,
       query_text: queryText,
@@ -379,7 +423,7 @@ export async function searchNodePaths(
       preview_mode: [{ ContentStart: null }]
     });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeSearchHit);
   });
@@ -390,10 +434,11 @@ export async function searchNodes(
   databaseId: string,
   queryText: string,
   limit: number,
-  prefix: string | null
+  prefix: string | null,
+  identity?: Identity
 ): Promise<SearchNodeHit[]> {
   return callVfs(async () => {
-    const actor = await createVfsActor(canisterId);
+    const actor = await createReadActor(canisterId, identity);
     const result = await actor.search_nodes({
       database_id: databaseId,
       query_text: queryText,
@@ -402,7 +447,7 @@ export async function searchNodes(
       preview_mode: [{ ContentStart: null }]
     });
     if ("Err" in result) {
-      throw new Error(result.Err);
+      throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeSearchHit);
   });
@@ -443,6 +488,15 @@ function normalizeDatabaseMember(raw: RawDatabaseMember): DatabaseMember {
     principal: raw.principal,
     role: normalizeDatabaseRole(raw.role),
     createdAtMs: raw.created_at_ms.toString()
+  };
+}
+
+function normalizeRecentNode(raw: RawRecent): RecentNode {
+  return {
+    path: raw.path,
+    kind: normalizeNodeKind(raw.kind),
+    updatedAt: raw.updated_at.toString(),
+    etag: raw.etag
   };
 }
 
@@ -507,6 +561,11 @@ function databaseRoleVariant(role: DatabaseRole): Variant {
     return { Writer: null };
   }
   return { Reader: null };
+}
+
+function nodeKindVariant(kind: NodeKind): Variant {
+  if (kind === "source") return { Source: null };
+  return { File: null };
 }
 
 function normalizeDatabaseStatus(status: Variant): DatabaseStatus {

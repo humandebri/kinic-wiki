@@ -11,6 +11,20 @@ export type WikiNode = {
   metadataJson: string;
 };
 
+export type WriteNodeRequest = {
+  databaseId: string;
+  path: string;
+  kind: NodeKind;
+  content: string;
+  metadataJson: string;
+  expectedEtag: string | null;
+};
+
+export type WriteNodeResult = {
+  created: boolean;
+  node: RecentNode;
+};
+
 export type CanisterHealth = {
   cyclesBalance: bigint;
 };

@@ -1,5 +1,6 @@
 "use client";
 
+import type { Identity } from "@icp-sdk/core/agent";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
@@ -11,17 +12,20 @@ export function ExplorerTree({
   canisterId,
   databaseId,
   selectedPath,
-  autoExpandSelected = true
+  autoExpandSelected = true,
+  readIdentity
 }: {
   canisterId: string;
   databaseId: string;
   selectedPath: string;
   autoExpandSelected?: boolean;
+  readIdentity: Identity | null;
 }) {
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   return (
     <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
-      <TreeNode canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
-      <TreeNode canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} />
+      <TreeNode key={`/Wiki:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} />
+      <TreeNode key={`/Sources:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} />
     </div>
   );
 }
@@ -32,7 +36,8 @@ function TreeNode({
   node,
   selectedPath,
   depth,
-  autoExpandSelected
+  autoExpandSelected,
+  readIdentity
 }: {
   canisterId: string;
   databaseId: string;
@@ -40,6 +45,7 @@ function TreeNode({
   selectedPath: string;
   depth: number;
   autoExpandSelected: boolean;
+  readIdentity: Identity | null;
 }) {
   const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
   const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
@@ -63,7 +69,7 @@ function TreeNode({
     let cancelled = false;
     requestedPath.current = node.path;
     import("@/lib/vfs-client")
-      .then(({ listChildren }) => listChildren(canisterId, databaseId, node.path))
+      .then(({ listChildren }) => listChildren(canisterId, databaseId, node.path, readIdentity ?? undefined))
       .then((data) => {
         if (!cancelled) setChildren({ data, error: null, loading: false });
       })
@@ -77,7 +83,7 @@ function TreeNode({
       cancelled = true;
       if (requestedPath.current === node.path) requestedPath.current = null;
     };
-  }, [canisterId, databaseId, canExpand, children.data, children.error, expanded, node.path]);
+  }, [canisterId, databaseId, canExpand, children.data, children.error, expanded, node.path, readIdentity]);
 
   return (
     <div>
@@ -104,6 +110,7 @@ function TreeNode({
           depth={depth}
           selectedPath={selectedPath}
           autoExpandSelected={autoExpandSelected}
+          readIdentity={readIdentity}
         />
       ) : null}
     </div>
@@ -129,7 +136,8 @@ function ChildrenList({
   childrenState,
   depth,
   selectedPath,
-  autoExpandSelected
+  autoExpandSelected,
+  readIdentity
 }: {
   canisterId: string;
   databaseId: string;
@@ -137,6 +145,7 @@ function ChildrenList({
   depth: number;
   selectedPath: string;
   autoExpandSelected: boolean;
+  readIdentity: Identity | null;
 }) {
   return (
     <div>
@@ -151,6 +160,7 @@ function ChildrenList({
           selectedPath={selectedPath}
           depth={depth + 1}
           autoExpandSelected={autoExpandSelected}
+          readIdentity={readIdentity}
         />
       ))}
     </div>

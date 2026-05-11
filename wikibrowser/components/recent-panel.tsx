@@ -1,15 +1,20 @@
 "use client";
 
+import type { Identity } from "@icp-sdk/core/agent";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Clock } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
+import { authRequestKey } from "@/lib/request-keys";
 import type { RecentNode } from "@/lib/types";
 import { errorHint, errorMessage, type LoadState } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
 
-export function RecentPanel({ canisterId, databaseId }: { canisterId: string; databaseId: string }) {
-  const [recent, setRecent] = useState<LoadState<RecentNode[]>>({
+export function RecentPanel({ canisterId, databaseId, readIdentity }: { canisterId: string; databaseId: string; readIdentity: Identity | null }) {
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const requestKey = `${canisterId}\n${databaseId}\n${authRequestKey(readPrincipal)}`;
+  const [recent, setRecent] = useState<LoadState<RecentNode[]> & { requestKey: string | null }>({
+    requestKey: null,
     data: null,
     error: null,
     loading: true
@@ -18,23 +23,25 @@ export function RecentPanel({ canisterId, databaseId }: { canisterId: string; da
   useEffect(() => {
     let cancelled = false;
     import("@/lib/vfs-client")
-      .then(({ recentNodes }) => recentNodes(canisterId, databaseId, 30))
+      .then(({ recentNodes }) => recentNodes(canisterId, databaseId, 30, readIdentity ?? undefined))
       .then((data) => {
-        if (!cancelled) setRecent({ data, error: null, loading: false });
+        if (!cancelled) setRecent({ requestKey, data, error: null, loading: false });
       })
       .catch((error: Error) => {
-        if (!cancelled) setRecent({ data: null, error: errorMessage(error), hint: errorHint(error), loading: false });
+        if (!cancelled) setRecent({ requestKey, data: null, error: errorMessage(error), hint: errorHint(error), loading: false });
       });
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId]);
+  }, [canisterId, databaseId, readIdentity, requestKey]);
 
-  if (recent.error) return <div className="min-h-0 flex-1 p-3"><ErrorBox message={recent.error} hint={recent.hint} /></div>;
-  if (recent.loading) return <p className="min-h-0 flex-1 p-4 text-sm text-muted">Loading recent nodes</p>;
+  const currentRecent: LoadState<RecentNode[]> = recent.requestKey === requestKey ? recent : { data: null, error: null, loading: true };
+
+  if (currentRecent.error) return <div className="min-h-0 flex-1 p-3"><ErrorBox message={currentRecent.error} hint={currentRecent.hint} /></div>;
+  if (currentRecent.loading) return <p className="min-h-0 flex-1 p-4 text-sm text-muted">Loading recent nodes</p>;
   return (
     <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
-      {recent.data?.map((node) => (
+      {currentRecent.data?.map((node) => (
         <Link
           key={node.path}
           href={hrefForPath(canisterId, databaseId, node.path)}

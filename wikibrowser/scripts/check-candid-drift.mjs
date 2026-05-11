@@ -195,6 +195,7 @@ function normalizeResultAlias(value) {
   if (normalized === "Result_20") return "ResultRecent";
   if (normalized === "Result_21") return "ResultSearch";
   if (normalized === "Result_22") return "ResultSourceEvidence";
+  if (normalized === "Result") return "ResultWriteNode";
   return normalized;
 }
 

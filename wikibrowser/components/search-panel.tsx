@@ -1,5 +1,6 @@
 "use client";
 
+import type { Identity } from "@icp-sdk/core/agent";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { hrefForPath } from "@/lib/paths";
@@ -23,17 +24,20 @@ export function SearchPanel({
   canisterId,
   databaseId,
   query,
-  initialKind
+  initialKind,
+  readIdentity
 }: {
   canisterId: string;
   databaseId: string;
   query: string;
   initialKind: SearchKind;
+  readIdentity: Identity | null;
 }) {
   const latestRequest = useRef(0);
   const lastRequestedKey = useRef<string | null>(null);
   const urlQuery = query.trim();
-  const urlSearchKey = searchRequestKey(canisterId, databaseId, initialKind, urlQuery);
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const urlSearchKey = searchRequestKey(canisterId, databaseId, initialKind, urlQuery, readPrincipal);
   const [searchState, setSearchState] = useState<SearchState>({
     key: null,
     results: [],
@@ -56,7 +60,7 @@ export function SearchPanel({
     if (syncState) {
       setSearchState({ key: requestKey, results: [], error: null, hint: null, loading: true, hasSearched: true });
     }
-    request(canisterId, databaseId, searchText, 20, "/Wiki")
+    request(canisterId, databaseId, searchText, 20, "/Wiki", readIdentity ?? undefined)
       .then((data) => {
         if (latestRequest.current === requestId) {
           setSearchState({ key: requestKey, results: data, error: null, hint: null, loading: false, hasSearched: true });
@@ -74,7 +78,7 @@ export function SearchPanel({
           });
         }
       });
-  }, [canisterId, databaseId]);
+  }, [canisterId, databaseId, readIdentity]);
 
   useEffect(() => {
     if (!urlQuery) {

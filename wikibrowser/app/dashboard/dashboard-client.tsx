@@ -4,6 +4,7 @@ import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthControls, OwnerPanel, StatusPanel, SummaryPanel } from "./dashboard-ui";
+import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types";
 import {
   grantDatabaseAccessAuthenticated,
@@ -12,12 +13,10 @@ import {
   revokeDatabaseAccessAuthenticated
 } from "@/lib/vfs-client";
 
-const DELEGATION_TTL_NS = BigInt(8) * BigInt(3_600_000_000_000);
-
 type LoadState = "idle" | "loading" | "ready" | "error";
 
 export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) {
-  const canisterId = process.env.KINIC_WIKI_CANISTER_ID ?? "";
+  const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const refreshSeqRef = useRef(0);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [principal, setPrincipal] = useState<string | null>(null);
@@ -38,7 +37,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
       const refreshSeq = (refreshSeqRef.current += 1);
       const isCurrentRefresh = () => refreshSeq === refreshSeqRef.current;
       if (!canisterId) {
-        setError("KINIC_WIKI_CANISTER_ID is not configured.");
+        setError("NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID is not configured.");
         setLoadState("error");
         return;
       }
@@ -199,11 +198,6 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
       </section>
     </main>
   );
-}
-
-function identityProviderUrl(): string {
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1" || host.endsWith(".localhost") ? "http://id.ai.localhost:8000" : "https://id.ai";
 }
 
 function errorMessage(cause: unknown): string {

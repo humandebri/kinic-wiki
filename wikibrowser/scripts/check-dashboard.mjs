@@ -31,8 +31,18 @@ assert.match(wranglerConfig, /"global_fetch_strictly_public"/);
 assert.match(wranglerConfig, /"WORKER_SELF_REFERENCE"/);
 
 assert.equal(packageJson.scripts.preview, "opennextjs-cloudflare build && opennextjs-cloudflare preview");
+assert.equal(packageJson.scripts["build:worker"], "opennextjs-cloudflare build");
 assert.equal(packageJson.scripts.deploy, "opennextjs-cloudflare build && opennextjs-cloudflare deploy");
 assert.equal(packageJson.scripts["cf-typegen"], "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts");
+assert.equal(packageJson.scripts["e2e:ii"], "scripts/run-ii-e2e.sh");
+assert.equal(packageJson.scripts["e2e:ii:headed"], "scripts/run-ii-e2e.sh --headed");
+assert.equal(packageJson.scripts["e2e:ii:setup"], "../scripts/setup-wikibrowser-ii-e2e.sh");
+assert.match(nextConfig, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
+assert.match(nextConfig, /NEXT_PUBLIC_II_PROVIDER_URL/);
+assert.match(homePage, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
+assert.match(dashboardClient, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
+assert.doesNotMatch(homePage, /process\.env\.KINIC_WIKI_CANISTER_ID/);
+assert.doesNotMatch(dashboardClient, /process\.env\.KINIC_WIKI_CANISTER_ID/);
 
 assert.match(dashboardUi, /type PendingAclAction/);
 assert.match(dashboardUi, /Enable public access/);

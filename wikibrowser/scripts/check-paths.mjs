@@ -49,7 +49,7 @@ assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/demo/index.md", "https://example.com"),
   null
 );
-assert.match(browserSource, /KINIC_WIKI_CANISTER_ID/);
+assert.match(browserSource, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.match(browserSource, /pathname === `\/\$\{encodeURIComponent\(databaseId\)\}\/search`/);
 
 console.log(`Path helpers OK: ${pathToFileURL(sourcePath.pathname).pathname}`);
