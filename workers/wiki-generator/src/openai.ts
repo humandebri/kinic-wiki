@@ -1,45 +1,36 @@
 // Where: workers/wiki-generator/src/openai.ts
-// What: OpenAI Responses API integration and draft schema validation.
+// What: DeepSeek Chat Completions integration and draft schema validation.
 // Why: The model only produces structured JSON; worker code performs all writes.
 import { buildWikiDraftSystemPrompt } from "./wiki-skill.js";
 import type { SearchNodeHit, WikiDraft, WikiDraftItem, WikiNode, WorkerConfig } from "./types.js";
 
-type OpenAITextContent = {
-  type?: string;
-  text?: string;
+type DeepSeekChatCompletion = {
+  choices?: DeepSeekChoice[];
 };
 
-type OpenAIOutputItem = {
-  content?: OpenAITextContent[];
+type DeepSeekChoice = {
+  message?: {
+    content?: string | null;
+  };
 };
 
-type OpenAIResponse = {
-  output_text?: string;
-  output?: OpenAIOutputItem[];
-};
+const DEEPSEEK_CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions";
 
-export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit[], config: WorkerConfig, apiKey: string): Promise<WikiDraft> {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit[], config: WorkerConfig, deepSeekApiKey: string): Promise<WikiDraft> {
+  const response = await fetch(DEEPSEEK_CHAT_COMPLETIONS_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${deepSeekApiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: config.model,
-      max_output_tokens: config.maxOutputTokens,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "wiki_draft",
-          strict: true,
-          schema: wikiDraftSchema()
-        }
-      },
-      input: [
+      max_tokens: config.maxOutputTokens,
+      response_format: { type: "json_object" },
+      messages: [
         {
           role: "system",
-          content: buildWikiDraftSystemPrompt()
+          content: `${buildWikiDraftSystemPrompt()}\nReturn only a JSON object that matches this schema: ${JSON.stringify(wikiDraftSchema())}`
         },
         {
           role: "user",
@@ -57,13 +48,13 @@ export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit
   });
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(openAIErrorMessage(body));
+    throw new Error(deepSeekErrorMessage(body));
   }
   return parseDraftResponse(body);
 }
 
 export function parseDraftResponse(body: unknown): WikiDraft {
-  return parseDraftText(extractResponseText(body));
+  return parseDraftText(extractDeepSeekResponseText(body));
 }
 
 export function parseDraftText(text: string): WikiDraft {
@@ -110,47 +101,41 @@ function wikiDraftSchema(): object {
   };
 }
 
-function openAIErrorMessage(body: unknown): string {
+export function deepSeekErrorMessage(body: unknown): string {
   if (isObject(body)) {
     const error = body.error;
     if (isObject(error) && typeof error.message === "string") {
       return error.message;
     }
   }
-  return "OpenAI request failed";
+  return "DeepSeek request failed";
 }
 
-function extractResponseText(body: unknown): string {
-  if (!isOpenAIResponse(body)) {
-    throw new Error("OpenAI response shape is invalid");
+function extractDeepSeekResponseText(body: unknown): string {
+  if (!isDeepSeekChatCompletion(body)) {
+    throw new Error("DeepSeek response shape is invalid");
   }
-  if (body.output_text) {
-    return body.output_text;
-  }
-  for (const item of body.output ?? []) {
-    for (const content of item.content ?? []) {
-      if (typeof content.text === "string" && content.text) {
-        return content.text;
-      }
+  for (const choice of body.choices ?? []) {
+    const content = choice.message?.content;
+    if (typeof content === "string" && content) {
+      return content;
     }
   }
-  throw new Error("OpenAI response did not include text");
+  throw new Error("DeepSeek response did not include text");
 }
 
-function isOpenAIResponse(value: unknown): value is OpenAIResponse {
+function isDeepSeekChatCompletion(value: unknown): value is DeepSeekChatCompletion {
   if (!isObject(value)) return false;
-  if ("output_text" in value && typeof value.output_text !== "string") return false;
-  if (!("output" in value) || value.output === undefined) return true;
-  if (!Array.isArray(value.output)) return false;
-  return value.output.every((item) => {
-    if (!isObject(item)) return false;
-    if (!("content" in item) || item.content === undefined) return true;
-    return Array.isArray(item.content) && item.content.every(isOpenAITextContent);
-  });
+  if (!("choices" in value) || value.choices === undefined) return true;
+  return Array.isArray(value.choices) && value.choices.every(isDeepSeekChoice);
 }
 
-function isOpenAITextContent(value: unknown): value is OpenAITextContent {
-  return isObject(value) && (!("text" in value) || value.text === undefined || typeof value.text === "string");
+function isDeepSeekChoice(value: unknown): value is DeepSeekChoice {
+  if (!isObject(value)) return false;
+  if (!("message" in value) || value.message === undefined) return true;
+  if (!isObject(value.message)) return false;
+  const content = value.message.content;
+  return content === undefined || content === null || typeof content === "string";
 }
 
 function isWikiDraft(value: unknown): value is WikiDraft {

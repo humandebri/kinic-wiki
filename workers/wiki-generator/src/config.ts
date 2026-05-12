@@ -4,7 +4,7 @@
 import type { WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
-const DEFAULT_MODEL = "gpt-5.4-mini";
+const DEFAULT_MODEL = "deepseek-v4-flash";
 const DEFAULT_TARGET_ROOT = "/Wiki/conversations";
 const DEFAULT_SOURCE_PREFIX = "/Sources/raw";
 const DEFAULT_INGEST_REQUEST_PREFIX = "/Sources/ingest-requests";

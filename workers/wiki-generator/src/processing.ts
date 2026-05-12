@@ -109,7 +109,7 @@ export function parseQueueMessage(value: unknown): QueueMessage | null {
 
 async function generateFromSource(env: RuntimeEnv, vfs: VfsClient, config: WorkerConfig, databaseId: string, source: WikiNode): Promise<GeneratedDraft> {
   const contextHits = await loadContext(vfs, databaseId, source, config);
-  const draft = await generateDraft(source, contextHits, config, env.OPENAI_API_KEY);
+  const draft = await generateDraft(source, contextHits, config, env.DEEPSEEK_API_KEY);
   validateDraftSources(draft, source.path);
   const targetPath = `${config.targetRoot}/${slugForDraft(draft)}.md`;
   return {

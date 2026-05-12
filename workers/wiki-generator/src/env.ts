@@ -2,7 +2,7 @@
 // What: Secret and optional tuning vars layered on Wrangler-generated bindings.
 // Why: `wrangler types` omits secrets, but source code must type-check their usage.
 export type RuntimeEnv = Env & {
-  OPENAI_API_KEY: string;
+  DEEPSEEK_API_KEY: string;
   KINIC_WIKI_WORKER_TOKEN: string;
   KINIC_WIKI_WORKER_IDENTITY_JSON: string;
   KINIC_WIKI_WORKER_INGEST_REQUEST_PREFIX?: string;

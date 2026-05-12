@@ -1,6 +1,6 @@
 // Where: workers/wiki-generator/src/types.ts
 // What: Shared worker contracts and normalized VFS types.
-// Why: Queue, D1, VFS, and OpenAI code need one small typed vocabulary.
+// Why: Queue, D1, VFS, and LLM code need one small typed vocabulary.
 export const SCHEMA_VERSION = 1;
 
 export type NodeKind = "file" | "source";
