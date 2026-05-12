@@ -9,5 +9,5 @@
     "outDir": ".tmp-test",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "tests/**/*.ts"]
 }
