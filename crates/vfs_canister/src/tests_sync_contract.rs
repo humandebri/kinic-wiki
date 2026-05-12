@@ -74,8 +74,13 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
         preview_mode: Some(SearchPreviewMode::None),
     })
     .expect("search should succeed");
-    assert_eq!(beta_hits.len(), 1);
-    assert_eq!(beta_hits[0].path, "/Wiki/project-beta/two.md");
+    #[cfg(feature = "bench-disable-fts")]
+    assert!(beta_hits.is_empty());
+    #[cfg(not(feature = "bench-disable-fts"))]
+    {
+        assert_eq!(beta_hits.len(), 1);
+        assert_eq!(beta_hits[0].path, "/Wiki/project-beta/two.md");
+    }
 
     let path_hits = search_node_paths(SearchNodePathsRequest {
         database_id: "default".to_string(),

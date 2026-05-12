@@ -374,8 +374,13 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         preview_mode: Some(SearchPreviewMode::None),
     })
     .expect("search should succeed");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].path, "/Wiki/foo.md");
+    #[cfg(feature = "bench-disable-fts")]
+    assert!(hits.is_empty());
+    #[cfg(not(feature = "bench-disable-fts"))]
+    {
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "/Wiki/foo.md");
+    }
 
     let path_hits = search_node_paths(SearchNodePathsRequest {
         database_id: "default".to_string(),
@@ -621,6 +626,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
 }
 
 #[test]
+#[cfg(not(feature = "bench-disable-fts"))]
 fn fs_entrypoints_search_large_hits_without_trap() {
     install_test_service();
 

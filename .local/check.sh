@@ -20,3 +20,18 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ICP_WASM_OUTPUT_PATH="${TMPDIR:-/tmp}/vfs_canister.wasm" \
   bash scripts/build-vfs-canister.sh
+
+(
+  cd wikibrowser
+  pnpm test
+  pnpm lint
+  pnpm typecheck
+  pnpm build
+  pnpm build:worker
+)
+
+(
+  cd extensions/conversation-capture
+  npm run build
+  npm test
+)
