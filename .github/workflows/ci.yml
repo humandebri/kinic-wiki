@@ -33,6 +33,8 @@ jobs:
         run: pnpm typecheck
       - name: Build static export
         run: pnpm build
+      - name: Build Cloudflare Worker
+        run: pnpm build:worker
 
   rust-check:
     runs-on: ubuntu-latest

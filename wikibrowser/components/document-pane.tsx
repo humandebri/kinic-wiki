@@ -53,13 +53,19 @@ export function DocumentPane({
   node,
   childrenState,
   view,
-  canisterId
+  canisterId,
+  authPrompt,
+  authReady,
+  onLogin
 }: {
   node: PathLoadState<WikiNode>;
   childrenState: PathLoadState<ChildNode[]>;
   view: ViewMode;
   canisterId: string;
   databaseId: string;
+  authPrompt?: boolean;
+  authReady?: boolean;
+  onLogin?: () => void;
 }) {
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
   if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
@@ -73,6 +79,9 @@ export function DocumentPane({
   if (isVfsNotFound(node.error, childrenState.error)) {
     return <PaneBody><NotFoundState path={node.path} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
   }
+  if (authPrompt && onLogin) {
+    return <PaneBody className="p-6"><PrivateDatabaseState authReady={Boolean(authReady)} onLogin={onLogin} /></PaneBody>;
+  }
   return (
     <PaneBody className="p-6">
       <ErrorBox
@@ -80,6 +89,29 @@ export function DocumentPane({
         hint={node.hint ?? childrenState.hint}
       />
     </PaneBody>
+  );
+}
+
+function PrivateDatabaseState({ authReady, onLogin }: { authReady: boolean; onLogin: () => void }) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <section className="max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Private database</p>
+        <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
+        <p className="mt-3 text-sm leading-6 text-muted">
+          This database is not public. Login with Internet Identity to read databases linked to your principal.
+        </p>
+        <button
+          className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={!authReady}
+          data-tid="login-button"
+          type="button"
+          onClick={onLogin}
+        >
+          Login with Internet Identity
+        </button>
+      </section>
+    </div>
   );
 }
 

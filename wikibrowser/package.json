@@ -9,11 +9,20 @@
     "smoke": "node scripts/smoke-ui.mjs",
     "smoke:errors": "node scripts/smoke-errors.mjs",
     "smoke:public": "node scripts/smoke-public.mjs",
-    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs",
-    "typecheck": "next typegen && tsc --noEmit"
+    "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-smoke-url.mjs && node scripts/check-dashboard.mjs",
+    "typecheck": "next typegen && tsc --noEmit",
+    "build:worker": "opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "e2e:ii": "scripts/run-ii-e2e.sh",
+    "e2e:ii:headed": "scripts/run-ii-e2e.sh --headed",
+    "e2e:ii:setup": "../scripts/setup-wikibrowser-ii-e2e.sh"
   },
   "dependencies": {
+    "@icp-sdk/auth": "5.0.0",
     "@icp-sdk/core": "^5.4.0",
+    "@opennextjs/cloudflare": "^1.19.8",
     "lucide-react": "0.555.0",
     "next": "16.2.4",
     "react": "19.2.5",
@@ -22,6 +31,8 @@
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {
+    "@dfinity/internet-identity-playwright": "^3.0.0",
+    "@playwright/test": "^1.59.1",
     "@types/node": "24.10.1",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
@@ -30,7 +41,8 @@
     "eslint-config-next": "16.2.4",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.18",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "^4.90.0"
   },
   "pnpm": {
     "overrides": {
