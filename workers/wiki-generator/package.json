@@ -1,0 +1,22 @@
+{
+  "name": "kinic-wiki-generator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cf-typegen": "wrangler types --env-interface Env worker-configuration.d.ts",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled",
+    "test": "tsc -p tsconfig.test.json && node --test .tmp-test/tests/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@icp-sdk/core": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "wrangler": "^4.90.0"
+  },
+  "packageManager": "pnpm@11.0.8"
+}

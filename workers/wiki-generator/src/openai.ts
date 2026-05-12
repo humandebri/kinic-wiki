@@ -1,8 +1,7 @@
-// Where: wikibrowser/lib/wiki-worker-openai.ts
-// What: OpenAI Responses API call and generated draft validation.
-// Why: API parsing stays isolated from VFS write and route concerns.
-import type { SearchNodeHit, WikiNode } from "@/lib/types";
-import type { WikiDraft, WikiDraftItem, WikiWorkerGenerationConfig } from "@/lib/wiki-worker-types";
+// Where: workers/wiki-generator/src/openai.ts
+// What: OpenAI Responses API integration and draft schema validation.
+// Why: The model only produces structured JSON; worker code performs all writes.
+import type { SearchNodeHit, WikiDraft, WikiDraftItem, WikiNode, WorkerConfig } from "./types.js";
 
 type OpenAITextContent = {
   type?: string;
@@ -18,11 +17,7 @@ type OpenAIResponse = {
   output?: OpenAIOutputItem[];
 };
 
-export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit[], config: WikiWorkerGenerationConfig): Promise<WikiDraft> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is required");
-  }
+export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit[], config: WorkerConfig, apiKey: string): Promise<WikiDraft> {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -31,7 +26,6 @@ export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit
     },
     body: JSON.stringify({
       model: config.model,
-      reasoning: { effort: config.reasoningEffort },
       max_output_tokens: config.maxOutputTokens,
       text: {
         format: {
@@ -54,7 +48,7 @@ export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit
             raw_content: source.content.slice(0, config.maxRawChars),
             context: contextHits.map((hit) => ({
               path: hit.path,
-              preview: hit.preview?.excerpt ?? hit.snippet ?? ""
+              preview: hit.previewExcerpt ?? hit.snippet ?? ""
             }))
           })
         }
@@ -65,7 +59,29 @@ export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit
   if (!response.ok) {
     throw new Error(openAIErrorMessage(body));
   }
-  return parseDraft(extractResponseText(body));
+  return parseDraftResponse(body);
+}
+
+export function parseDraftResponse(body: unknown): WikiDraft {
+  return parseDraftText(extractResponseText(body));
+}
+
+export function parseDraftText(text: string): WikiDraft {
+  const parsed = JSON.parse(text);
+  if (!isWikiDraft(parsed)) {
+    throw new Error("generated wiki draft does not match schema");
+  }
+  return parsed;
+}
+
+export function validateDraftSources(draft: WikiDraft, sourcePath: string): void {
+  for (const section of [draft.key_facts, draft.decisions, draft.open_questions, draft.follow_ups]) {
+    for (const item of section) {
+      if (item.source_path !== sourcePath) {
+        throw new Error(`generated item cites unsupported source: ${item.source_path}`);
+      }
+    }
+  }
 }
 
 function wikiDraftSchema(): object {
@@ -119,14 +135,6 @@ function extractResponseText(body: unknown): string {
     }
   }
   throw new Error("OpenAI response did not include text");
-}
-
-function parseDraft(text: string): WikiDraft {
-  const parsed = JSON.parse(text);
-  if (!isWikiDraft(parsed)) {
-    throw new Error("generated wiki draft does not match schema");
-  }
-  return parsed;
 }
 
 function isOpenAIResponse(value: unknown): value is OpenAIResponse {

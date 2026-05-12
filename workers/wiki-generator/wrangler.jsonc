@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "kinic-wiki-generator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    "KINIC_WIKI_CANISTER_ID": "",
+    "KINIC_WIKI_IC_HOST": "https://icp0.io",
+    "KINIC_WIKI_DATABASE_IDS": "",
+    "KINIC_WIKI_WORKER_MODEL": "gpt-5.4-mini",
+    "KINIC_WIKI_WORKER_TARGET_ROOT": "/Wiki/conversations",
+    "KINIC_WIKI_WORKER_SOURCE_PREFIX": "/Sources/raw",
+    "KINIC_WIKI_WORKER_CONTEXT_PREFIX": "/Wiki"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kinic-wiki-generator",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "WIKI_GENERATION_QUEUE",
+        "queue": "kinic-wiki-generation"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "kinic-wiki-generation",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30
+      }
+    ]
+  }
+}
