@@ -16,6 +16,10 @@
   ],
   "routes": [
     {
+      "pattern": "kinic.xyz",
+      "custom_domain": true
+    },
+    {
       "pattern": "wiki.kinic.xyz",
       "custom_domain": true
     }
