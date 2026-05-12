@@ -1,6 +1,7 @@
 // Where: crates/vfs_cli_app/src/lib.rs
 // What: Agent-facing CLI library for FS-first remote operations and local mirrors.
 // Why: The CLI now talks to the canister using node-oriented APIs and mirrors paths directly.
+pub mod aeo_generate;
 #[cfg(test)]
 mod agent_tools_tests;
 pub mod beam_bench;

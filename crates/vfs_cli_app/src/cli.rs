@@ -256,6 +256,14 @@ pub enum Command {
         #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
         mirror_root: String,
     },
+    AeoGenerate {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        project_name: String,
+    },
 }
 
 impl Command {
@@ -514,5 +522,30 @@ mod tests {
         assert_eq!(depth, 2);
         assert_eq!(limit, 9);
         assert!(!json);
+    }
+
+    #[test]
+    fn main_cli_parses_aeo_generate_command() {
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "aeo-generate",
+            "--repo",
+            ".",
+            "--out",
+            "/tmp/aeo",
+            "--project-name",
+            "Demo App",
+        ]);
+        let Command::AeoGenerate {
+            repo,
+            out,
+            project_name,
+        } = cli.command
+        else {
+            panic!("expected aeo-generate command");
+        };
+        assert_eq!(repo, std::path::PathBuf::from("."));
+        assert_eq!(out, std::path::PathBuf::from("/tmp/aeo"));
+        assert_eq!(project_name, "Demo App");
     }
 }

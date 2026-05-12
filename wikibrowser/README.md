@@ -128,6 +128,45 @@ The app is public read-only and accepts database IDs for the fixed canister. The
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
 The `/<database-id>/...` and `/dashboard/<database-id>` URLs are App Router dynamic routes. Read and authenticated calls go directly from the browser to the configured IC gateway.
 
+## AEO Publish MVP
+
+`/answers/<slug>` serves allowlisted AI-readable public memory pages. These pages run on the Next server with ISR and read Markdown from the configured Kinic Wiki canister.
+The published answer page is rendered from canonical Markdown so crawlers can read stable answer HTML.
+This MVP is Kinic's first AEO publish layer: question demand informs which allowlisted answer pages are added next, and the answer asset set expands without exposing arbitrary database browser routes.
+
+Environment:
+
+```bash
+KINIC_AEO_CANISTER_ID=<mainnet-wiki-canister-id>
+NEXT_PUBLIC_SITE_URL=https://kinic.xyz
+```
+
+Rules:
+
+- `/answers/*` is indexable and rendered with the page body in the initial HTML.
+- `/<database-id>/*` remains the arbitrary database browser and is marked `noindex`.
+- `sitemap.xml` only lists `/answers/*`.
+- `robots.txt` allows `OAI-SearchBot` and blocks arbitrary browser routes.
+- The service boundary is the AEO page allowlist, `sitemap.xml`, `llms.txt`, `robots.txt`, and JSON-LD generated from `AeoPageConfig`.
+
+AEO Markdown must include limited frontmatter:
+
+```md
+---
+title: What is Kinic?
+description: Kinic is an AI memory for important information.
+answer_summary: Kinic helps people browse and access important information in one organized place.
+updated: 2026-05-07
+index: true
+entities:
+  - Kinic
+  - AI memory
+sources:
+  - README.md
+  - app/page.tsx
+---
+```
+
 ## Troubleshooting
 
 - Local canister not found: `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID` does not exist on `NEXT_PUBLIC_WIKI_IC_HOST`. For `http://127.0.0.1:8000`, start the local replica / icp local network and deploy the wiki canister into that state.
@@ -145,10 +184,10 @@ Cloudflare settings:
 - Root Directory: `wikibrowser`
 - Install Command: `pnpm install --frozen-lockfile`
 - Build Command: `pnpm deploy`
-- Build Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>` for Preview and Production
+- Build Variables: `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io`, `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>`, `KINIC_AEO_CANISTER_ID=<mainnet-wiki-canister-id>`, and `NEXT_PUBLIC_SITE_URL=<canonical-origin>` for Preview and Production
 - Runtime: Cloudflare Workers via `@opennextjs/cloudflare`
 
-Both variables are public browser bundle values. Set them as Cloudflare build variables, not only runtime Worker variables, because Next.js inlines `NEXT_PUBLIC_*` values into the client bundle during build.
+Set `NEXT_PUBLIC_*` values as Cloudflare build variables, not only runtime Worker variables, because Next.js inlines them into the client bundle during build.
 
 CLI deploy from this directory:
 
