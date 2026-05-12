@@ -1,5 +1,27 @@
 export const expectedTypes = {
   CanisterHealth: { kind: "record", fields: { cycles_balance: "nat" } },
+  DatabaseRole: { kind: "variant", cases: { Reader: "null", Writer: "null", Owner: "null" } },
+  DatabaseStatus: { kind: "variant", cases: { Hot: "null", Restoring: "null", Archiving: "null", Archived: "null", Deleted: "null" } },
+  DatabaseSummary: {
+    kind: "record",
+    fields: {
+      status: "DatabaseStatus",
+      role: "DatabaseRole",
+      logical_size_bytes: "nat64",
+      database_id: "text",
+      archived_at_ms: "opt int64",
+      deleted_at_ms: "opt int64"
+    }
+  },
+  DatabaseMember: {
+    kind: "record",
+    fields: {
+      principal: "text",
+      role: "DatabaseRole",
+      created_at_ms: "int64",
+      database_id: "text"
+    }
+  },
   CanonicalRole: {
     kind: "record",
     fields: { name: "text", path_pattern: "text", purpose: "text" }
@@ -32,6 +54,21 @@ export const expectedTypes = {
   },
   NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null" } },
   NodeKind: { kind: "variant", cases: { File: "null", Source: "null" } },
+  WriteNodeRequest: {
+    kind: "record",
+    fields: {
+      content: "text",
+      kind: "NodeKind",
+      path: "text",
+      expected_etag: "opt text",
+      metadata_json: "text",
+      database_id: "text"
+    }
+  },
+  WriteNodeResult: {
+    kind: "record",
+    fields: { created: "bool", node: "RecentNodeHit" }
+  },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
     kind: "record",
@@ -99,6 +136,11 @@ export const expectedTypes = {
     fields: { incoming_links: "vec LinkEdge", node: "Node", outgoing_links: "vec LinkEdge" }
   },
   ResultChildren: { kind: "variant", cases: { Ok: "vec ChildNode", Err: "text" } },
+  ResultCreateDatabase: { kind: "variant", cases: { Ok: "text", Err: "text" } },
+  ResultDatabases: { kind: "variant", cases: { Ok: "vec DatabaseSummary", Err: "text" } },
+  ResultMembers: { kind: "variant", cases: { Ok: "vec DatabaseMember", Err: "text" } },
+  ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
+  ResultWriteNode: { kind: "variant", cases: { Ok: "WriteNodeResult", Err: "text" } },
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
@@ -165,29 +207,40 @@ export const expectedTypes = {
 };
 
 export const didTypeAliases = {
-  ResultChildren: "Result_9",
-  ResultLinks: "Result_8",
-  ResultNode: "Result_17",
-  ResultNodeContext: "Result_18",
-  ResultQueryContext: "Result_15",
-  ResultRecent: "Result_19",
-  ResultSearch: "Result_20",
-  ResultSourceEvidence: "Result_21"
+  ResultChildren: "Result_10",
+  ResultCreateDatabase: "Result_3",
+  ResultDatabases: "Result_12",
+  ResultMembers: "Result_11",
+  ResultUnit: "Result_2",
+  ResultWriteNode: "Result",
+  ResultLinks: "Result_9",
+  ResultNode: "Result_18",
+  ResultNodeContext: "Result_19",
+  ResultQueryContext: "Result_16",
+  ResultRecent: "Result_20",
+  ResultSearch: "Result_21",
+  ResultSourceEvidence: "Result_22"
 };
 
 export const expectedMethods = {
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
+  create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
+  grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
   incoming_links: { input: ["IncomingLinksRequest"], output: "ResultLinks", mode: "query" },
   list_children: { input: ["ListChildrenRequest"], output: "ResultChildren", mode: "query" },
+  list_databases: { input: [], output: "ResultDatabases", mode: "query" },
+  list_database_members: { input: ["text"], output: "ResultMembers", mode: "query" },
   memory_manifest: { input: [], output: "MemoryManifest", mode: "query" },
   outgoing_links: { input: ["OutgoingLinksRequest"], output: "ResultLinks", mode: "query" },
   query_context: { input: ["QueryContextRequest"], output: "ResultQueryContext", mode: "query" },
   read_node: { input: ["text", "text"], output: "ResultNode", mode: "query" },
   read_node_context: { input: ["NodeContextRequest"], output: "ResultNodeContext", mode: "query" },
   recent_nodes: { input: ["RecentNodesRequest"], output: "ResultRecent", mode: "query" },
+  revoke_database_access: { input: ["text", "text"], output: "ResultUnit", mode: "update" },
   search_node_paths: { input: ["SearchNodePathsRequest"], output: "ResultSearch", mode: "query" },
   search_nodes: { input: ["SearchNodesRequest"], output: "ResultSearch", mode: "query" },
-  source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" }
+  source_evidence: { input: ["SourceEvidenceRequest"], output: "ResultSourceEvidence", mode: "query" },
+  write_node: { input: ["WriteNodeRequest"], output: "ResultWriteNode", mode: "update" }
 };

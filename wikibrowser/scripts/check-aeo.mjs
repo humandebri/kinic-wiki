@@ -43,14 +43,14 @@ if (pagesSource.includes("[canisterId]") || pagesSource.includes(":canister")) {
 if (!sitemapSource.includes("listAeoPages")) {
   failures.push("sitemap must use the AEO allowlist");
 }
-if (sitemapSource.includes("/w/")) {
-  failures.push("sitemap must not include /w routes");
+if (sitemapSource.includes("/w/") || sitemapSource.includes("/dashboard/")) {
+  failures.push("sitemap must not include browser routes");
 }
 if (!robotsSource.includes("OAI-SearchBot")) {
   failures.push("robots.txt must include OAI-SearchBot policy");
 }
-if (!robotsSource.includes("disallow: [\"/w/\"]")) {
-  failures.push("robots.txt must disallow /w routes");
+if (!robotsSource.includes('disallow: ["/"]')) {
+  failures.push("robots.txt must disallow arbitrary browser routes");
 }
 if (configSource.includes("output: \"export\"")) {
   failures.push("next.config.ts must not use static export");

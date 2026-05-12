@@ -10,15 +10,15 @@ use sha2::{Digest, Sha256};
 use vfs_store::FsStore;
 use vfs_types::{
     AppendNodeRequest, ChildNode, DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRole,
-    DatabaseStatus, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
-    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MkdirNodeRequest,
-    MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult,
-    Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext,
-    QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest,
-    SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest,
-    WriteNodeResult,
+    DatabaseStatus, DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
+    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit,
+    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -27,6 +27,7 @@ const INDEX_SCHEMA_VERSION_LIFECYCLE: &str = "database_index:001_lifecycle";
 const INDEX_SCHEMA_VERSION_RESTORE_SIZE: &str = "database_index:002_restore_size";
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNKS: &str = "database_index:003_restore_chunks";
 const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events";
+const INDEX_SCHEMA_VERSION_MOUNT_HISTORY: &str = "database_index:005_mount_history";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -36,6 +37,8 @@ pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
 const SHA256_DIGEST_BYTES: usize = 32;
+const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
+const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatabaseMeta {
@@ -44,6 +47,23 @@ pub struct DatabaseMeta {
     pub mount_id: u16,
     pub schema_version: String,
     pub logical_size_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseRestoreBegin {
+    pub meta: DatabaseMeta,
+    pub rollback: DatabaseRestoreRollback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseRestoreRollback {
+    database_id: String,
+    status: DatabaseStatus,
+    active_mount_id: Option<u16>,
+    snapshot_hash: Option<Vec<u8>>,
+    archived_at_ms: Option<i64>,
+    deleted_at_ms: Option<i64>,
+    restore_size_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,12 +111,12 @@ impl VfsService {
         load_database_infos(&conn)
     }
 
-    pub fn list_database_infos_for_caller(
+    pub fn list_database_summaries_for_caller(
         &self,
         caller: &str,
-    ) -> Result<Vec<DatabaseInfo>, String> {
+    ) -> Result<Vec<DatabaseSummary>, String> {
         let conn = self.open_index()?;
-        load_database_infos_for_caller(&conn, caller)
+        load_database_summaries_for_caller(&conn, caller)
     }
 
     pub fn record_usage_event(&self, event: UsageEvent<'_>) -> Result<(), String> {
@@ -143,6 +163,67 @@ impl VfsService {
         Ok(meta)
     }
 
+    pub fn create_generated_database(
+        &self,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        let meta = self.reserve_generated_database(caller, now)?;
+        self.run_database_migrations(&meta.database_id)?;
+        Ok(meta)
+    }
+
+    pub fn reserve_generated_database(
+        &self,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        let mut conn = self.open_index()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let mount_id = allocate_mount_id(&tx)?;
+        let mut selected_database_id = None;
+        for attempt in 0_u32..100 {
+            let database_id = generated_database_id(caller, now, mount_id, attempt);
+            if !database_exists(&tx, &database_id)? {
+                selected_database_id = Some(database_id);
+                break;
+            }
+        }
+        let database_id = selected_database_id
+            .ok_or_else(|| "failed to generate unique database id".to_string())?;
+        let db_file_name = database_file_name(&self.databases_dir, &database_id)?;
+        tx.execute(
+            "INSERT INTO databases
+             (database_id, db_file_name, mount_id, active_mount_id, status, schema_version,
+              logical_size_bytes, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?3, 'hot', ?4, 0, ?5, ?5)",
+            params![
+                database_id,
+                db_file_name,
+                i64::from(mount_id),
+                DATABASE_SCHEMA_VERSION,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        record_mount_history(&tx, &database_id, mount_id, "create", now)?;
+        tx.execute(
+            "INSERT INTO database_members
+             (database_id, principal, role, created_at_ms)
+             VALUES (?1, ?2, 'owner', ?3)",
+            params![database_id, caller, now],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(DatabaseMeta {
+            database_id,
+            db_file_name,
+            mount_id,
+            schema_version: DATABASE_SCHEMA_VERSION.to_string(),
+            logical_size_bytes: 0,
+        })
+    }
+
     pub fn reserve_database(
         &self,
         database_id: &str,
@@ -171,6 +252,7 @@ impl VfsService {
             ],
         )
         .map_err(|error| error.to_string())?;
+        record_mount_history(&tx, database_id, mount_id, "create", now)?;
         tx.execute(
             "INSERT INTO database_members
              (database_id, principal, role, created_at_ms)
@@ -212,6 +294,11 @@ impl VfsService {
         )
         .map_err(|error| error.to_string())?;
         tx.execute(
+            "DELETE FROM database_mount_history WHERE database_id = ?1",
+            params![database_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
             "DELETE FROM databases WHERE database_id = ?1",
             params![database_id],
         )
@@ -241,7 +328,11 @@ impl VfsService {
     pub fn delete_database(&self, database_id: &str, caller: &str, now: i64) -> Result<(), String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         let meta = self.database_meta(database_id)?;
-        let _ = remove_file(&meta.db_file_name);
+        if let Err(error) = remove_file(&meta.db_file_name)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
@@ -262,6 +353,7 @@ impl VfsService {
         &self,
         database_id: &str,
         caller: &str,
+        now: i64,
     ) -> Result<DatabaseArchiveInfo, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         let meta = self.database_meta(database_id)?;
@@ -269,9 +361,10 @@ impl VfsService {
         let conn = self.open_index()?;
         conn.execute(
             "UPDATE databases
-             SET status = 'archiving'
+             SET status = 'archiving',
+                 updated_at_ms = ?2
              WHERE database_id = ?1",
-            params![database_id],
+            params![database_id, now],
         )
         .map_err(|error| error.to_string())?;
         Ok(DatabaseArchiveInfo {
@@ -371,6 +464,18 @@ impl VfsService {
         size_bytes: u64,
         now: i64,
     ) -> Result<DatabaseMeta, String> {
+        self.begin_database_restore_session(database_id, caller, snapshot_hash, size_bytes, now)
+            .map(|restore| restore.meta)
+    }
+
+    pub fn begin_database_restore_session(
+        &self,
+        database_id: &str,
+        caller: &str,
+        snapshot_hash: Vec<u8>,
+        size_bytes: u64,
+        now: i64,
+    ) -> Result<DatabaseRestoreBegin, String> {
         self.require_role(database_id, caller, RequiredRole::Owner)?;
         validate_snapshot_hash(&snapshot_hash)?;
         if size_bytes > MAX_DATABASE_SIZE_BYTES {
@@ -378,9 +483,9 @@ impl VfsService {
                 "database size exceeds limit: {size_bytes} > {MAX_DATABASE_SIZE_BYTES}"
             ));
         }
-        let current_status = self.database_status(database_id)?;
+        let rollback = self.database_restore_rollback(database_id)?;
         if !matches!(
-            current_status,
+            rollback.status,
             DatabaseStatus::Archived | DatabaseStatus::Deleted
         ) {
             return Err(
@@ -390,6 +495,7 @@ impl VfsService {
         let mut conn = self.open_index()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let mount_id = allocate_mount_id(&tx)?;
+        record_mount_history(&tx, database_id, mount_id, "restore", now)?;
         tx.execute(
             "DELETE FROM database_restore_chunks WHERE database_id = ?1",
             params![database_id],
@@ -417,7 +523,55 @@ impl VfsService {
         tx.commit().map_err(|error| error.to_string())?;
         let meta = self.database_meta_allowing_restoring(database_id)?;
         let _ = remove_file(&meta.db_file_name);
-        Ok(meta)
+        Ok(DatabaseRestoreBegin { meta, rollback })
+    }
+
+    pub fn rollback_database_restore_begin(
+        &self,
+        rollback: DatabaseRestoreRollback,
+        now: i64,
+    ) -> Result<(), String> {
+        let mut conn = self.open_index()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let current_status = load_database_status(&tx, &rollback.database_id)?;
+        if current_status != DatabaseStatus::Restoring {
+            return Err(format!(
+                "database restore rollback requires restoring status: {}",
+                rollback.database_id
+            ));
+        }
+        tx.execute(
+            "DELETE FROM database_restore_chunks WHERE database_id = ?1",
+            params![&rollback.database_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "UPDATE databases
+             SET status = ?2,
+                 active_mount_id = ?3,
+                 snapshot_hash = ?4,
+                 archived_at_ms = ?5,
+                 deleted_at_ms = ?6,
+                 restore_size_bytes = ?7,
+                 updated_at_ms = ?8
+            WHERE database_id = ?1",
+            params![
+                &rollback.database_id,
+                status_to_db(rollback.status),
+                rollback.active_mount_id.map(i64::from),
+                rollback.snapshot_hash,
+                rollback.archived_at_ms,
+                rollback.deleted_at_ms,
+                rollback
+                    .restore_size_bytes
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
     }
 
     pub fn write_database_restore_chunk(
@@ -678,12 +832,15 @@ impl VfsService {
         request: AppendNodeRequest,
         now: i64,
     ) -> Result<WriteNodeResult, String> {
-        if let Some(kind) = request.kind.as_ref() {
-            validate_source_path_for_kind(&request.path, kind)?;
-        }
         let database_id = request.database_id.clone();
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
+                let kind = store
+                    .read_node(&request.path)?
+                    .map(|node| node.kind)
+                    .or_else(|| request.kind.clone())
+                    .unwrap_or(NodeKind::File);
+                validate_source_path_for_kind(&request.path, &kind)?;
                 store.append_node(request, now)
             });
         if result.is_ok() {
@@ -958,12 +1115,30 @@ impl VfsService {
             .ok_or_else(|| database_meta_error(&conn, database_id))
     }
 
-    fn database_status(&self, database_id: &str) -> Result<DatabaseStatus, String> {
+    fn database_restore_rollback(
+        &self,
+        database_id: &str,
+    ) -> Result<DatabaseRestoreRollback, String> {
         let conn = self.open_index()?;
         conn.query_row(
-            "SELECT status FROM databases WHERE database_id = ?1",
+            "SELECT database_id, status, active_mount_id, snapshot_hash, archived_at_ms,
+                    deleted_at_ms, restore_size_bytes
+             FROM databases
+             WHERE database_id = ?1",
             params![database_id],
-            |row| status_from_db(&row.get::<_, String>(0)?),
+            |row| {
+                let active_mount_id: Option<i64> = row.get(2)?;
+                let restore_size_bytes: Option<i64> = row.get(6)?;
+                Ok(DatabaseRestoreRollback {
+                    database_id: row.get(0)?,
+                    status: status_from_db(&row.get::<_, String>(1)?)?,
+                    active_mount_id: active_mount_id.map(mount_id_from_db).transpose()?,
+                    snapshot_hash: row.get(3)?,
+                    archived_at_ms: row.get(4)?,
+                    deleted_at_ms: row.get(5)?,
+                    restore_size_bytes: restore_size_bytes.map(|size| size.max(0) as u64),
+                })
+            },
         )
         .optional()
         .map_err(|error| error.to_string())?
@@ -1110,30 +1285,52 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }
-    if migration_applied(conn, INDEX_SCHEMA_VERSION_USAGE_EVENTS)? {
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_USAGE_EVENTS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE usage_events (
+               event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               method TEXT NOT NULL,
+               database_id TEXT,
+               caller TEXT NOT NULL,
+               success INTEGER NOT NULL,
+               cycles_delta INTEGER NOT NULL,
+               error TEXT,
+               created_at_ms INTEGER NOT NULL
+             );
+             CREATE INDEX usage_events_database_id_created_at_idx
+               ON usage_events(database_id, created_at_ms);
+             CREATE INDEX usage_events_caller_created_at_idx
+               ON usage_events(caller, created_at_ms);",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_USAGE_EVENTS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    if migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
         return Ok(());
     }
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     tx.execute_batch(
-        "CREATE TABLE usage_events (
-           event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-           method TEXT NOT NULL,
-           database_id TEXT,
-           caller TEXT NOT NULL,
-           success INTEGER NOT NULL,
-           cycles_delta INTEGER NOT NULL,
-           error TEXT,
-           created_at_ms INTEGER NOT NULL
+        "CREATE TABLE database_mount_history (
+           database_id TEXT NOT NULL,
+           mount_id INTEGER NOT NULL,
+           reason TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (mount_id)
          );
-         CREATE INDEX usage_events_database_id_created_at_idx
-           ON usage_events(database_id, created_at_ms);
-         CREATE INDEX usage_events_caller_created_at_idx
-           ON usage_events(caller, created_at_ms);",
+         INSERT OR IGNORE INTO database_mount_history
+           (database_id, mount_id, reason, created_at_ms)
+           SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
     )
     .map_err(|error| error.to_string())?;
     tx.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-        params![INDEX_SCHEMA_VERSION_USAGE_EVENTS],
+        params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
     )
     .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())
@@ -1204,6 +1401,41 @@ fn validate_database_id(database_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn generated_database_id(caller: &str, now: i64, mount_id: u16, attempt: u32) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(caller.as_bytes());
+    hasher.update(now.to_be_bytes());
+    hasher.update(mount_id.to_be_bytes());
+    hasher.update(attempt.to_be_bytes());
+    format!(
+        "{GENERATED_DATABASE_ID_PREFIX}{}",
+        &base32_lower(&hasher.finalize())[..GENERATED_DATABASE_ID_HASH_CHARS]
+    )
+}
+
+fn base32_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut output = String::new();
+    let mut buffer = 0_u16;
+    let mut bit_count = 0_u8;
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bit_count += 8;
+        while bit_count >= 5 {
+            let shift = bit_count - 5;
+            let index = ((buffer >> shift) & 0b11111) as usize;
+            output.push(ALPHABET[index] as char);
+            bit_count -= 5;
+            buffer &= (1_u16 << bit_count) - 1;
+        }
+    }
+    if bit_count > 0 {
+        let index = ((buffer << (5 - bit_count)) & 0b11111) as usize;
+        output.push(ALPHABET[index] as char);
+    }
+    output
+}
+
 fn database_file_name(databases_dir: &Path, database_id: &str) -> Result<String, String> {
     validate_database_id(database_id)?;
     Ok(databases_dir
@@ -1226,11 +1458,8 @@ fn database_exists(conn: &Connection, database_id: &str) -> Result<bool, String>
 fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
     let used = conn
         .prepare(
-            "SELECT mount_id AS used_mount_id FROM databases
-             UNION
-             SELECT active_mount_id AS used_mount_id
-             FROM databases
-             WHERE active_mount_id IS NOT NULL
+            "SELECT mount_id AS used_mount_id
+             FROM database_mount_history
              ORDER BY used_mount_id ASC",
         )
         .map_err(|error| error.to_string())?
@@ -1256,6 +1485,23 @@ fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {
         used.next();
     }
     Err("database mount_id capacity exhausted".to_string())
+}
+
+fn record_mount_history(
+    conn: &Connection,
+    database_id: &str,
+    mount_id: u16,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO database_mount_history
+         (database_id, mount_id, reason, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![database_id, i64::from(mount_id), reason, now],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn validate_snapshot_hash(snapshot_hash: &[u8]) -> Result<(), String> {
@@ -1320,6 +1566,17 @@ fn load_database(conn: &Connection, database_id: &str) -> Result<Option<Database
     load_database_with_statuses(conn, database_id, &[DatabaseStatus::Hot])
 }
 
+fn load_database_status(conn: &Connection, database_id: &str) -> Result<DatabaseStatus, String> {
+    conn.query_row(
+        "SELECT status FROM databases WHERE database_id = ?1",
+        params![database_id],
+        |row| status_from_db(&row.get::<_, String>(0)?),
+    )
+    .optional()
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| format!("database not found: {database_id}"))
+}
+
 fn load_database_with_statuses(
     conn: &Connection,
     database_id: &str,
@@ -1377,13 +1634,13 @@ fn load_database_infos(conn: &Connection) -> Result<Vec<DatabaseInfo>, String> {
     .map_err(|error| error.to_string())
 }
 
-fn load_database_infos_for_caller(
+fn load_database_summaries_for_caller(
     conn: &Connection,
     caller: &str,
-) -> Result<Vec<DatabaseInfo>, String> {
+) -> Result<Vec<DatabaseSummary>, String> {
     conn.prepare(
-        "SELECT d.database_id, d.status, d.active_mount_id, d.schema_version, d.logical_size_bytes,
-                d.snapshot_hash, d.archived_at_ms, d.deleted_at_ms
+        "SELECT d.database_id, d.status, m.role, d.logical_size_bytes,
+                d.archived_at_ms, d.deleted_at_ms
          FROM databases d
          INNER JOIN database_members m ON m.database_id = d.database_id
          WHERE m.principal = ?1
@@ -1391,17 +1648,14 @@ fn load_database_infos_for_caller(
     )
     .map_err(|error| error.to_string())?
     .query_map(params![caller], |row| {
-        let mount_id: Option<i64> = row.get(2)?;
-        let logical_size_bytes: i64 = row.get(4)?;
-        Ok(DatabaseInfo {
+        let logical_size_bytes: i64 = row.get(3)?;
+        Ok(DatabaseSummary {
             database_id: row.get(0)?,
             status: status_from_db(&row.get::<_, String>(1)?)?,
-            mount_id: mount_id.map(mount_id_from_db).transpose()?,
-            schema_version: row.get(3)?,
+            role: role_from_db(&row.get::<_, String>(2)?)?,
             logical_size_bytes: logical_size_bytes.max(0) as u64,
-            snapshot_hash: row.get(5)?,
-            archived_at_ms: row.get(6)?,
-            deleted_at_ms: row.get(7)?,
+            archived_at_ms: row.get(4)?,
+            deleted_at_ms: row.get(5)?,
         })
     })
     .map_err(|error| error.to_string())?
@@ -1477,6 +1731,16 @@ fn status_from_db(status: &str) -> rusqlite::Result<DatabaseStatus> {
         "deleted" => Ok(DatabaseStatus::Deleted),
         "restoring" => Ok(DatabaseStatus::Restoring),
         _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+fn status_to_db(status: DatabaseStatus) -> &'static str {
+    match status {
+        DatabaseStatus::Hot => "hot",
+        DatabaseStatus::Archiving => "archiving",
+        DatabaseStatus::Archived => "archived",
+        DatabaseStatus::Deleted => "deleted",
+        DatabaseStatus::Restoring => "restoring",
     }
 }
 

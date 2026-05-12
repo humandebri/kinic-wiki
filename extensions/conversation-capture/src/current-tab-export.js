@@ -170,11 +170,19 @@ export async function exportTarget(target, config, send, fetchImpl = fetch) {
 export async function fetchRecentConversationTargets(limit, fetchImpl = fetch, loc = location) {
   const targets = [];
   const seen = new Set();
+  const currentTarget = currentConversationTarget(loc);
+  if (currentTarget) {
+    targets.push(currentTarget);
+    seen.add(currentTarget.id);
+  }
   let offset = 0;
   while (targets.length < limit) {
     const pageLimit = Math.min(CONVERSATION_LIST_PAGE_SIZE, limit - targets.length);
     const payload = await fetchJson(`/backend-api/conversations?offset=${offset}&limit=${pageLimit}&order=updated`, fetchImpl);
     const items = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
+    if (!items.length && offset === 0 && targets.length === 0) {
+      throw new Error(`No recent ChatGPT conversations found. ${conversationListSummary(payload)}`);
+    }
     if (!items.length) break;
     for (const item of items) {
       const id = conversationIdFromListItem(item);
@@ -301,15 +309,36 @@ export function exportStateStorage() {
 }
 
 async function fetchJson(url, fetchImpl) {
+  const accessToken = await readChatGptAccessToken(fetchImpl);
   const response = await fetchImpl(url, {
     method: "GET",
     credentials: "include",
-    headers: { Accept: "application/json" }
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`
+    }
   });
   if (!response.ok) {
     throw new Error(`ChatGPT API failed: ${response.status}`);
   }
   return response.json();
+}
+
+async function readChatGptAccessToken(fetchImpl) {
+  const response = await fetchImpl("/api/auth/session", {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" }
+  });
+  if (!response.ok) {
+    throw new Error(`ChatGPT session failed: ${response.status}`);
+  }
+  const session = await response.json();
+  const accessToken = typeof session?.accessToken === "string" ? session.accessToken : "";
+  if (!accessToken) {
+    throw new Error("ChatGPT session does not include an access token. Sign in again and reload ChatGPT.");
+  }
+  return accessToken;
 }
 
 function conversationIdFromListItem(item) {
@@ -321,6 +350,35 @@ function conversationIdFromListItem(item) {
 function titleFromListItem(item) {
   const title = typeof item?.title === "string" ? item.title.trim() : "";
   return title || "Untitled conversation";
+}
+
+function currentConversationTarget(loc) {
+  try {
+    const url = new URL(loc.href || "", loc.origin);
+    const id = conversationIdFromPath(url.pathname);
+    if (!id) return null;
+    return {
+      id,
+      title: "Current conversation",
+      url: new URL(`/c/${id}`, loc.origin).toString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+function conversationIdFromPath(pathname) {
+  const match = /^\/c\/([^/]+)\/?$/.exec(pathname);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function conversationListSummary(payload) {
+  if (Array.isArray(payload)) return "ChatGPT API returned an empty array.";
+  if (!payload || typeof payload !== "object") return `ChatGPT API returned ${typeof payload}.`;
+  const total = typeof payload.total === "number" ? payload.total : "unknown";
+  const offset = typeof payload.offset === "number" ? payload.offset : "unknown";
+  const keys = Object.keys(payload).slice(0, 8).join(", ") || "none";
+  return `ChatGPT API returned 0 items. total=${total}, offset=${offset}, keys=${keys}.`;
 }
 
 function hydrate(callbacks, state) {

@@ -16,12 +16,18 @@ This extension is local-only. It uses an anonymous write-capable actor and must 
 ```bash
 cd extensions/conversation-capture
 npm install
+cat > .env <<'EOF'
+KINIC_CAPTURE_HOST=http://127.0.0.1:8001
+KINIC_CAPTURE_CANISTER_ID=<wiki-canister-id>
+KINIC_CAPTURE_DATABASE_ID=<database-id>
+EOF
 npm run build
 ```
 
 The build creates:
 
 - `dist/content-ui.js`
+- `dist/popup.js`
 - `dist/service-worker.js`
 
 ## Load in Chrome
@@ -45,8 +51,9 @@ Use these extension settings:
 
 - `IC host`: `http://127.0.0.1:8001`
 - `Canister ID`: the `wiki` canister ID from `local-wiki`
+- `Database ID`: the target database ID, usually `default`
 
-The extension defaults to `http://127.0.0.1:8001`. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
+The extension defaults to `.env` values when present, otherwise `http://127.0.0.1:8001` and database ID `default`. The database must already exist. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
 
 ## Export
 

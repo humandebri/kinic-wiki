@@ -14,6 +14,7 @@ export function hrefForPath(
   searchQuery?: string,
   searchKind?: string
 ): string {
+  void canisterId;
   const normalized = path.startsWith("/") ? path.slice(1) : path;
   const suffix = normalized
     .split("/")
@@ -34,10 +35,11 @@ export function hrefForPath(
     params.set("kind", searchKind);
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
-  return `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/${suffix}${queryString}`;
+  return `/${encodeURIComponent(databaseId)}/${suffix}${queryString}`;
 }
 
 export function hrefForSearch(canisterId: string, databaseId: string, searchQuery: string, searchKind: string): string {
+  void canisterId;
   const params = new URLSearchParams();
   if (searchQuery) {
     params.set("q", searchQuery);
@@ -46,10 +48,11 @@ export function hrefForSearch(canisterId: string, databaseId: string, searchQuer
     params.set("kind", searchKind);
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
-  return `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/search${queryString}`;
+  return `/${encodeURIComponent(databaseId)}/search${queryString}`;
 }
 
 export function hrefForGraph(canisterId: string, databaseId: string, centerPath?: string | null, depth?: number): string {
+  void canisterId;
   const params = new URLSearchParams();
   if (centerPath) {
     params.set("center", centerPath);
@@ -58,7 +61,7 @@ export function hrefForGraph(canisterId: string, databaseId: string, centerPath?
     params.set("depth", String(depth));
   }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
-  return `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/graph${queryString}`;
+  return `/${encodeURIComponent(databaseId)}/graph${queryString}`;
 }
 
 export function hrefForMarkdownLink(canisterId: string, databaseId: string, currentPath: string, href: string | undefined): string | null {

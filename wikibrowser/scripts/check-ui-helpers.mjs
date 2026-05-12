@@ -101,6 +101,12 @@ assert.equal(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequ
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "full", "budget"));
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "beta", "path", "budget"));
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("bbbbb-bb", "alpha", "path", "budget"));
+assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", "aaaaa-aa"));
+assert.notEqual(
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1, "aaaaa-aa")
+);
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget", "aaaaa-aa"));
 assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
 assert.equal(formatCycles(850_000_000_000n), "850.00B");
 assert.equal(formatCycles(123_450_000n), "123.45M");

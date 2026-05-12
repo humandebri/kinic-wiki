@@ -1,5 +1,6 @@
 "use client";
 
+import type { Identity } from "@icp-sdk/core/agent";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { GitBranch } from "lucide-react";
@@ -24,17 +25,18 @@ type GraphLoadState = LoadState<LinkEdge[]> & {
   requestKey: string | null;
 };
 
-export function GraphPanel({ canisterId, databaseId, centerPath, depth }: { canisterId: string; databaseId: string; centerPath: string | null; depth: 1 | 2 }) {
-  const currentRequestKey = graphRequestKey(canisterId, databaseId, centerPath, depth);
+export function GraphPanel({ canisterId, databaseId, centerPath, depth, readIdentity }: { canisterId: string; databaseId: string; centerPath: string | null; depth: 1 | 2; readIdentity: Identity | null }) {
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const currentRequestKey = graphRequestKey(canisterId, databaseId, centerPath, depth, readPrincipal);
   const [links, setLinks] = useState<GraphLoadState>({ centerPath: null, requestKey: null, data: null, error: null, loading: false });
 
   useEffect(() => {
-    const requestKey = graphRequestKey(canisterId, databaseId, centerPath, depth);
+    const requestKey = graphRequestKey(canisterId, databaseId, centerPath, depth, readPrincipal);
     if (!centerPath || !requestKey) {
       return;
     }
     let cancelled = false;
-    graphNeighborhood(canisterId, databaseId, centerPath, depth, GRAPH_LIMIT)
+    graphNeighborhood(canisterId, databaseId, centerPath, depth, GRAPH_LIMIT, readIdentity ?? undefined)
       .then((data) => {
         if (!cancelled) setLinks({ centerPath, requestKey, data, error: null, loading: false });
       })
@@ -44,7 +46,7 @@ export function GraphPanel({ canisterId, databaseId, centerPath, depth }: { cani
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, centerPath, depth]);
+  }, [canisterId, databaseId, centerPath, depth, readIdentity, readPrincipal]);
 
   const currentLinks: LoadState<LinkEdge[]> = !centerPath
     ? { data: null, error: null, loading: false }

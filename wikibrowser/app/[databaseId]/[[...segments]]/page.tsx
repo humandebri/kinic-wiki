@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   }
 };
 
-export default function WikiPage() {
+export default function WikiDatabasePage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-canvas" />}>
       <WikiBrowser />

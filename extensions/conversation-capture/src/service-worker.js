@@ -2,17 +2,18 @@
 // What: MV3 background workflow for canister persistence.
 // Why: Content scripts fetch ChatGPT data while the worker owns canister writes.
 import { buildRawSource } from "./raw-source.js";
-import { createVfsActor } from "./vfs-actor.js";
 
 const DEFAULT_CONFIG = {
-  canisterId: "",
-  host: "http://127.0.0.1:8001"
+  canisterId: process.env.KINIC_CAPTURE_CANISTER_ID || "",
+  databaseId: process.env.KINIC_CAPTURE_DATABASE_ID || "default",
+  host: process.env.KINIC_CAPTURE_HOST || "http://127.0.0.1:8001"
 };
 const ALLOWED_CHATGPT_ORIGINS = new Set(["https://chatgpt.com", "https://chat.openai.com"]);
 const ALLOWED_MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
 const MAX_MESSAGE_COUNT = 500;
 const MAX_MESSAGE_CONTENT_CHARS = 200_000;
 const MAX_RAW_SOURCE_CHARS = 1_500_000;
+let vfsActorFactory = defaultVfsActorFactory;
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -45,7 +46,7 @@ export async function handleMessage(message, sender) {
     await removeSessionValue(message.key);
     return { ok: true };
   }
-  return { ok: false, error: "unknown message type" };
+  return { ok: false, error: `unknown message type: ${describeMessageType(message)}` };
 }
 
 async function saveSource(capture, overrideConfig, sender) {
@@ -55,13 +56,14 @@ async function saveSource(capture, overrideConfig, sender) {
     throw new Error("canister id is required");
   }
   const raw = buildRawSource(capture);
-  const actor = await createVfsActor(config);
-  const existing = await actor.read_node(raw.path);
+  const actor = await vfsActorFactory(config);
+  const existing = await actor.read_node(config.databaseId, raw.path);
   if ("Err" in existing) {
     throw new Error(existing.Err);
   }
   const expected = existing.Ok[0]?.etag ? [existing.Ok[0].etag] : [];
   const result = await actor.write_node({
+    database_id: config.databaseId,
     path: raw.path,
     kind: { Source: null },
     content: raw.content,
@@ -157,6 +159,7 @@ async function loadConfig() {
   const stored = await chrome.storage.sync.get(DEFAULT_CONFIG);
   return {
     canisterId: String(stored.canisterId || ""),
+    databaseId: String(stored.databaseId || DEFAULT_CONFIG.databaseId),
     host: String(stored.host || DEFAULT_CONFIG.host)
   };
 }
@@ -164,8 +167,18 @@ async function loadConfig() {
 async function saveConfig(config) {
   await chrome.storage.sync.set({
     canisterId: String(config?.canisterId || ""),
+    databaseId: String(config?.databaseId || DEFAULT_CONFIG.databaseId),
     host: String(config?.host || DEFAULT_CONFIG.host)
   });
+}
+
+export function setVfsActorFactoryForTest(factory) {
+  vfsActorFactory = factory || defaultVfsActorFactory;
+}
+
+async function defaultVfsActorFactory(config) {
+  const { createVfsActor } = await import("./vfs-actor.js");
+  return createVfsActor(config);
 }
 
 async function readSessionValue(key) {
@@ -200,4 +213,9 @@ function stateStatus(value) {
   } catch {
     return "";
   }
+}
+
+function describeMessageType(message) {
+  if (!message || typeof message !== "object") return typeof message;
+  return typeof message.type === "string" && message.type ? message.type : "missing";
 }

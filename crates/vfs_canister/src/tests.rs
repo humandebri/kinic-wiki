@@ -15,8 +15,9 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, append_node, begin_database_archive, cancel_database_archive, create_database,
-    delete_node, edit_node, export_snapshot, fetch_updates, finalize_database_archive, glob_nodes,
+    SERVICE, append_node, begin_database_archive, begin_database_restore, cancel_database_archive,
+    create_database, delete_node, edit_node, export_snapshot,
+    fail_next_mount_database_file_for_test, fetch_updates, finalize_database_archive, glob_nodes,
     grant_database_access, graph_links, graph_neighborhood, incoming_links, list_children,
     list_databases, list_nodes, memory_manifest, mkdir_node, move_node, multi_edit_node,
     outgoing_links, query_context, read_database_archive_chunk, read_node, read_node_context,
@@ -97,14 +98,26 @@ fn existing_database_index_is_loaded_without_implicit_default() {
 }
 
 #[test]
+fn canister_list_databases_returns_caller_membership_summaries() {
+    install_test_service();
+
+    let summaries = list_databases().expect("database summaries should load");
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].database_id, "default");
+    assert_eq!(summaries[0].role, DatabaseRole::Owner);
+    assert_eq!(summaries[0].status, DatabaseStatus::Hot);
+}
+
+#[test]
 fn update_entrypoints_record_usage_events() {
     install_empty_test_service();
 
-    create_database("default".to_string()).expect("database should create");
+    let database_id = create_database().expect("database should create");
     assert_eq!(usage_event_count(), 1);
 
     let failed = write_node(WriteNodeRequest {
-        database_id: "default".to_string(),
+        database_id,
         path: "/Sources/not-raw.md".to_string(),
         kind: NodeKind::Source,
         content: "invalid source path".to_string(),
@@ -113,6 +126,25 @@ fn update_entrypoints_record_usage_events() {
     });
     assert!(failed.is_err());
     assert_eq!(usage_event_count(), 2);
+}
+
+#[test]
+fn canister_create_database_returns_generated_id_for_followup_reads() {
+    install_empty_test_service();
+
+    let database_id = create_database().expect("database should create");
+    assert!(database_id.starts_with("db_"));
+    assert_eq!(database_id.len(), 15);
+
+    let status = status(database_id.clone());
+    assert_eq!(status.file_count, 0);
+    assert_eq!(status.source_count, 0);
+    let children = list_children(ListChildrenRequest {
+        database_id,
+        path: "/Wiki".to_string(),
+    })
+    .expect("generated database should list");
+    assert!(children.is_empty());
 }
 
 #[test]
@@ -749,13 +781,60 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
     );
 
     let info = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(info.status, DatabaseStatus::Archived);
-    assert_eq!(info.snapshot_hash, Some(snapshot_hash));
-    assert!(info.mount_id.is_none());
+    assert_eq!(info.role, DatabaseRole::Owner);
+}
+
+#[test]
+fn begin_database_restore_rolls_back_when_mount_fails() {
+    install_test_service();
+    write_node(WriteNodeRequest {
+        database_id: "default".to_string(),
+        path: "/Wiki/restore-smoke.md".to_string(),
+        kind: NodeKind::File,
+        content: "restore body".to_string(),
+        metadata_json: "{}".to_string(),
+        expected_etag: None,
+    })
+    .expect("wiki write should succeed");
+
+    let archive = begin_database_archive("default".to_string()).expect("archive should begin");
+    let bytes = read_database_archive_chunk("default".to_string(), 0, archive.size_bytes as u32)
+        .expect("archive chunk should read")
+        .bytes;
+    let snapshot_hash = sha256_bytes(&bytes);
+    finalize_database_archive("default".to_string(), snapshot_hash.clone())
+        .expect("archive should finalize");
+
+    fail_next_mount_database_file_for_test();
+    let error = begin_database_restore(
+        "default".to_string(),
+        snapshot_hash.clone(),
+        archive.size_bytes,
+    )
+    .expect_err("mount failure should fail restore begin");
+    assert!(error.contains("test mount failure"));
+    let rolled_back = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(rolled_back.status, DatabaseStatus::Archived);
+    assert_eq!(rolled_back.role, DatabaseRole::Owner);
+
+    begin_database_restore("default".to_string(), snapshot_hash, archive.size_bytes)
+        .expect("restore begin should retry after rollback");
+    let restoring = list_databases()
+        .expect("database summaries should load")
+        .into_iter()
+        .find(|info| info.database_id == "default")
+        .expect("default info should exist");
+    assert_eq!(restoring.status, DatabaseStatus::Restoring);
+    assert_eq!(restoring.role, DatabaseRole::Owner);
 }
 
 #[test]
@@ -796,12 +875,12 @@ fn cancel_database_archive_entrypoint_returns_database_to_hot() {
     })
     .expect("write should succeed after cancel");
     let info = list_databases()
-        .expect("database infos should load")
+        .expect("database summaries should load")
         .into_iter()
         .find(|info| info.database_id == "default")
         .expect("default info should exist");
     assert_eq!(info.status, DatabaseStatus::Hot);
-    assert!(info.mount_id.is_some());
+    assert_eq!(info.role, DatabaseRole::Owner);
 }
 
 #[test]
@@ -816,7 +895,7 @@ fn cancel_database_archive_entrypoint_rejects_non_owner() {
         .create_database("default", "owner", 1_700_000_000_000)
         .expect("default database should create");
     service
-        .begin_database_archive("default", "owner")
+        .begin_database_archive("default", "owner", 1_700_000_000_001)
         .expect("archive should begin");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
 

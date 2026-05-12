@@ -7,7 +7,7 @@ use candid::{Decode, Encode};
 use ic_agent::{Agent, export::Principal};
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, ChildNode, DatabaseArchiveChunk, DatabaseArchiveInfo,
-    DatabaseInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole, DeleteNodeRequest,
+    DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole, DatabaseSummary, DeleteNodeRequest,
     DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
     ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
     GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
@@ -27,7 +27,7 @@ pub trait VfsApi: Sync {
     async fn memory_manifest(&self) -> Result<MemoryManifest> {
         Err(anyhow!("memory_manifest is not implemented by this client"))
     }
-    async fn create_database(&self, _database_id: &str) -> Result<()> {
+    async fn create_database(&self) -> Result<String> {
         Err(anyhow!("create_database is not implemented by this client"))
     }
     async fn grant_database_access(
@@ -50,7 +50,7 @@ pub trait VfsApi: Sync {
             "list_database_members is not implemented by this client"
         ))
     }
-    async fn list_databases(&self) -> Result<Vec<DatabaseInfo>> {
+    async fn list_databases(&self) -> Result<Vec<DatabaseSummary>> {
         Err(anyhow!("list_databases is not implemented by this client"))
     }
     async fn delete_database(&self, _database_id: &str) -> Result<()> {
@@ -302,10 +302,8 @@ impl VfsApi for CanisterVfsClient {
         self.query("memory_manifest", &()).await
     }
 
-    async fn create_database(&self, database_id: &str) -> Result<()> {
-        let result: Result<(), String> = self
-            .update("create_database", &database_id.to_string())
-            .await?;
+    async fn create_database(&self) -> Result<String> {
+        let result: Result<String, String> = self.update("create_database", &()).await?;
         result.map_err(|error| anyhow!(error))
     }
 
@@ -344,8 +342,9 @@ impl VfsApi for CanisterVfsClient {
         result.map_err(|error| anyhow!(error))
     }
 
-    async fn list_databases(&self) -> Result<Vec<DatabaseInfo>> {
-        let result: Result<Vec<DatabaseInfo>, String> = self.query("list_databases", &()).await?;
+    async fn list_databases(&self) -> Result<Vec<DatabaseSummary>> {
+        let result: Result<Vec<DatabaseSummary>, String> =
+            self.query("list_databases", &()).await?;
         result.map_err(|error| anyhow!(error))
     }
 

@@ -7,17 +7,17 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "OAI-SearchBot",
         allow: ["/answers/", "/llms.txt", "/sitemap.xml"],
-        disallow: ["/w/"]
+        disallow: ["/"]
       },
       {
         userAgent: "GPTBot",
         allow: ["/answers/", "/llms.txt", "/sitemap.xml"],
-        disallow: ["/w/"]
+        disallow: ["/"]
       },
       {
         userAgent: "*",
         allow: ["/answers/", "/llms.txt", "/sitemap.xml"],
-        disallow: ["/w/"]
+        disallow: ["/"]
       }
     ],
     sitemap: `${siteUrl()}/sitemap.xml`,

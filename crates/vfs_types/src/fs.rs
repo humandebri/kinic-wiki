@@ -51,6 +51,16 @@ pub struct DatabaseInfo {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseSummary {
+    pub database_id: String,
+    pub status: DatabaseStatus,
+    pub role: DatabaseRole,
+    pub logical_size_bytes: u64,
+    pub archived_at_ms: Option<i64>,
+    pub deleted_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct DatabaseArchiveInfo {
     pub database_id: String,
     pub size_bytes: u64,
