@@ -91,7 +91,8 @@ assert.match(homePage, /refreshSeqRef/);
 assert.match(homePage, /isCurrentRefresh/);
 assert.match(dashboardClient, /refreshSeqRef/);
 assert.match(dashboardClient, /isCurrentRefresh/);
-assert.match(homePage, /refreshSeqRef\.current \+= 1;\n    await authClient\.logout/);
+assert.match(homePage, /await authClient\.logout\(\);\n    setPrincipal\(null\);\n    setCreatedDatabaseId\(null\);\n    setError\(null\);\n    await refreshDatabases\(null\);/);
+assert.doesNotMatch(homePage, /setDatabases\(\[\]\);\n    setCreatedDatabaseId\(null\);\n    setError\(null\);\n    setWarning\(null\);\n    setLoadState\("idle"\);/);
 assert.match(dashboardClient, /refreshSeqRef\.current \+= 1;\n    await authClient\.logout/);
 
 console.log("Dashboard checks OK");

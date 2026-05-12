@@ -58,8 +58,16 @@ assert.equal(
   "/alpha/Wiki/beam-full-reset/7/facts.md?read=anonymous"
 );
 assert.equal(
+  hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "facts.md?view=raw#evidence", "anonymous"),
+  "/alpha/Wiki/beam-full-reset/7/facts.md?view=raw&read=anonymous#evidence"
+);
+assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "/Wiki/demo.md#evidence"),
   "/alpha/Wiki/demo.md#evidence"
+);
+assert.equal(
+  hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "/Wiki/demo.md#evidence", "anonymous"),
+  "/alpha/Wiki/demo.md?read=anonymous#evidence"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/demo/index.md", "https://example.com"),

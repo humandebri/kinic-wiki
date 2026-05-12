@@ -84,12 +84,12 @@ export function hrefForMarkdownLink(canisterId: string, databaseId: string, curr
   }
   const target = splitMarkdownHref(trimmed);
   if (trimmed.startsWith("/Wiki") || trimmed.startsWith("/Sources")) {
-    return `${hrefForPath(canisterId, databaseId, target.path, undefined, undefined, undefined, undefined, readMode)}${target.suffix}`;
+    return appendMarkdownSuffix(hrefForPath(canisterId, databaseId, target.path, undefined, undefined, undefined, undefined, readMode), target, readMode);
   }
   if (trimmed.startsWith("/")) {
     return null;
   }
-  return `${hrefForPath(canisterId, databaseId, resolveRelativeWikiPath(currentPath, target.path), undefined, undefined, undefined, undefined, readMode)}${target.suffix}`;
+  return appendMarkdownSuffix(hrefForPath(canisterId, databaseId, resolveRelativeWikiPath(currentPath, target.path), undefined, undefined, undefined, undefined, readMode), target, readMode);
 }
 
 export function parentPath(path: string): string | null {
@@ -124,16 +124,32 @@ function isExternalHref(href: string): boolean {
   return /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//");
 }
 
-function splitMarkdownHref(href: string): { path: string; suffix: string } {
+function appendMarkdownSuffix(baseHref: string, target: MarkdownHrefTarget, readMode?: string | null): string {
+  const params = new URLSearchParams(target.query);
+  if (readMode === "anonymous") {
+    params.set("read", "anonymous");
+  }
+  const queryString = params.size > 0 ? `?${params.toString()}` : "";
+  return `${baseHref.split("?")[0]}${queryString}${target.hash}`;
+}
+
+function splitMarkdownHref(href: string): MarkdownHrefTarget {
   const hashIndex = href.indexOf("#");
   const pathAndQuery = hashIndex === -1 ? href : href.slice(0, hashIndex);
   const hash = hashIndex === -1 ? "" : href.slice(hashIndex);
   const queryIndex = pathAndQuery.indexOf("?");
   if (queryIndex === -1) {
-    return { path: pathAndQuery, suffix: hash };
+    return { path: pathAndQuery, query: "", hash };
   }
   return {
     path: pathAndQuery.slice(0, queryIndex),
-    suffix: `${pathAndQuery.slice(queryIndex)}${hash}`
+    query: pathAndQuery.slice(queryIndex + 1),
+    hash
   };
 }
+
+type MarkdownHrefTarget = {
+  path: string;
+  query: string;
+  hash: string;
+};

@@ -56,17 +56,27 @@ export async function processQueueMessage(env: RuntimeEnv, message: QueueMessage
   try {
     const generated = await generateFromSource(env, vfs, config, message.databaseId, source);
     await writeGeneratedDraft(vfs, message.databaseId, generated.targetPath, generated.content, source.path);
-    await appendWorkerLog(vfs, message.databaseId, config.targetRoot, generated.targetPath, source.path);
     await markCompleted(env.DB, message, generated.targetPath);
     if (message.requestPath) {
       await markIngestRequestCompleted(vfs, message.databaseId, message.requestPath, source.path, generated.targetPath);
     }
+    await bestEffortAppendWorkerLog(vfs, message.databaseId, config.targetRoot, generated.targetPath, source.path);
   } catch (error) {
     const messageText = errorMessage(error);
     await markFailed(env.DB, message, messageText);
     if (message.requestPath) {
       await markIngestRequestFailed(vfs, message.databaseId, message.requestPath, messageText);
     }
+  }
+}
+
+export async function bestEffortAppendWorkerLog(vfs: VfsClient, databaseId: string, targetRoot: string, targetPath: string, sourcePath: string): Promise<boolean> {
+  try {
+    await appendWorkerLog(vfs, databaseId, targetRoot, targetPath, sourcePath);
+    return true;
+  } catch (error) {
+    console.warn("failed to append wiki-generator log", errorMessage(error));
+    return false;
   }
 }
 

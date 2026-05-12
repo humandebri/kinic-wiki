@@ -102,14 +102,11 @@ export default function HomePage() {
 
   async function logout() {
     if (!authClient) return;
-    refreshSeqRef.current += 1;
     await authClient.logout();
     setPrincipal(null);
-    setDatabases([]);
     setCreatedDatabaseId(null);
     setError(null);
-    setWarning(null);
-    setLoadState("idle");
+    await refreshDatabases(null);
   }
 
   async function createDatabase() {
