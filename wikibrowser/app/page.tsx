@@ -224,6 +224,7 @@ function DatabaseBody({ databases, loading }: { databases: DatabaseSummary[]; lo
             <th className="px-4 py-3 font-medium">Logical size</th>
             <th className="px-4 py-3 font-medium">Archive</th>
             <th className="px-4 py-3 font-medium">Open</th>
+            <th className="px-4 py-3 font-medium">Skills</th>
             <th className="px-4 py-3 font-medium">Manage</th>
           </tr>
         </thead>
@@ -238,6 +239,11 @@ function DatabaseBody({ databases, loading }: { databases: DatabaseSummary[]; lo
               <td className="px-4 py-3">
                 <Link className="text-accent no-underline hover:underline" href={`/${encodeURIComponent(database.databaseId)}/Wiki`}>
                   Open
+                </Link>
+              </td>
+              <td className="px-4 py-3">
+                <Link className="text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(database.databaseId)}`}>
+                  Registry
                 </Link>
               </td>
               <td className="px-4 py-3">

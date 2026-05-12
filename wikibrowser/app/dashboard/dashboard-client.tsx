@@ -168,6 +168,11 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
             <Link className="text-sm text-accent no-underline hover:underline" href="/">
               Dashboard
             </Link>
+            {databaseId ? (
+              <Link className="ml-3 text-sm text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(databaseId)}`}>
+                Skill Registry
+              </Link>
+            ) : null}
             <h1 className="mt-2 text-3xl font-semibold text-ink">Database access</h1>
             <p className="mt-1 font-mono text-xs text-muted">{databaseId || "unknown database"}</p>
           </div>

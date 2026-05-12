@@ -213,7 +213,22 @@ cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review \
 
 ## Browser
 
-The wiki browser shows a read-only Skill card in the Inspector for registry paths.
+The product target is a team-operated Skill Registry, not only a CLI workflow.
+The browser provides the team operation surface:
+
+- `/skills/<database-id>` lists private and public skill packages in one catalog.
+- Search filters by id, title, summary, tags, use cases, knowledge links, and provenance fields.
+- Status filters separate active skills from deprecated ones.
+- Summary cards show total, promoted, reviewed, draft, and deprecated counts.
+- Each skill card links back into the wiki package for detailed `manifest.md`, `SKILL.md`, provenance, evals, and proposal records.
+- Logged-in writers can update status, record run evidence, and approve proposed improvements from the catalog page.
+- Run evidence is written under `/Sources/skill-runs/<skill-id>/...` with browser provenance and content hashes.
+- Logged-in writers can upsert pasted packages and import public GitHub packages from the browser.
+- Browser package prune is disabled until the browser VFS exposes delete operations.
+- Proposal diffs can be previewed and applied only when they target package-local Markdown files and the current node etag still matches.
+- Browser operations record audit events under `/Sources/skill-events/<skill-id>/...`.
+
+The wiki browser also shows a read-only Skill card in the Inspector for registry paths.
 When viewing `manifest.md`, the card is parsed from the current node.
 When viewing package files such as `SKILL.md`, `ingest.md`, `provenance.md`, or `evals.md`, the browser reads the sibling `manifest.md` and displays the same skill metadata.
 Registry access follows the selected database role.
