@@ -10,6 +10,7 @@ import { usePackageManager } from "@/app/skills/skill-registry-package-state";
 import { EmptyState, SkillCard, StatusPanel, SummaryStrip } from "@/app/skills/skill-registry-ui";
 import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import { filterSkills, loadSkillCatalog, summarizeSkills, type CatalogSkill, type StatusFilter } from "@/lib/skill-registry-catalog";
+import { loadSkillCatalogDetails } from "@/lib/skill-registry-details";
 import { applyProposalDiff, previewApplyProposalDiff, type ProposalDiffPreview } from "@/lib/skill-registry-diff";
 import { approveSkillProposal, recordSkillEvent, recordSkillRun, updateSkillStatus, type RunOutcome, type SkillStatus } from "@/lib/skill-registry-operations";
 import type { DatabaseRole } from "@/lib/types";
@@ -74,6 +75,12 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
         if (!isCurrentRefresh()) return;
         setSkills(nextSkills);
         setLoadState("ready");
+        void loadSkillCatalogDetails(canisterId, databaseId, nextSkills, identity)
+          .then((detailedSkills) => {
+            if (!isCurrentRefresh()) return;
+            setSkills(detailedSkills);
+          })
+          .catch(() => undefined);
       } catch (cause) {
         if (!isCurrentRefresh()) return;
         setError(errorMessage(cause));
@@ -179,115 +186,125 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
   }
 
   return (
-    <main className="min-h-screen px-6 py-8">
-      <section className="mx-auto flex max-w-7xl flex-col gap-6">
+    <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
+      <section className="mx-auto flex max-w-7xl flex-col gap-5">
         <header className="flex flex-col gap-4 border-b border-line pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <Link className="text-accent no-underline hover:underline" href="/">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+              <Link className="text-accent no-underline hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" href="/">
                 Dashboard
               </Link>
+              <span aria-hidden>/</span>
               <Link className="text-accent no-underline hover:underline" href={`/${encodeURIComponent(databaseId)}/Wiki`}>
                 Wiki
               </Link>
             </div>
-            <h1 className="mt-2 text-3xl font-semibold text-ink">Skill Registry</h1>
-            <p className="mt-1 font-mono text-xs text-muted">{databaseId || "unknown database"}</p>
+            <h1 className="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Skill Registry</h1>
+            <p className="mt-1 max-w-full truncate font-mono text-xs text-muted">{databaseId || "unknown database"}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {principal ? <span className="max-w-[320px] truncate rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs text-muted">{principal}</span> : null}
-            <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink disabled:opacity-60" disabled={loadState === "loading"} type="button" onClick={() => void loadCatalog(authClient?.getIdentity())}>
+            <button className="inline-flex items-center rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink hover:border-accent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" disabled={loadState === "loading"} type="button" onClick={() => void loadCatalog(authClient?.getIdentity())}>
               <RefreshCw aria-hidden size={15} />
               <span className="ml-2">Refresh</span>
             </button>
             {principal ? (
-              <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" type="button" onClick={() => void logout()}>
+              <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" type="button" onClick={() => void logout()}>
                 Logout
               </button>
             ) : (
-              <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-60" disabled={!authClient} type="button" onClick={() => void login()}>
+              <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" disabled={!authClient} type="button" onClick={() => void login()}>
                 Login
               </button>
             )}
           </div>
         </header>
 
-        <SummaryStrip summary={summary} />
-        <RoleBanner role={databaseRole} principal={principal} />
-        <PackageManager draft={packageManager.draft} busy={packageManager.busy} writable={writable} message={packageManager.message} handlers={packageManager.handlers} />
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+          <div className="min-w-0 space-y-5">
+            <SummaryStrip summary={summary} />
 
-        <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-          <label className="flex items-center gap-2 rounded-lg border border-line bg-paper px-3 py-2">
-            <Search aria-hidden className="text-muted" size={17} />
-            <input
-              className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted"
-              placeholder="Search skills, tags, use cases, provenance"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          <div className="inline-flex overflow-hidden rounded-lg border border-line bg-white text-sm">
-            {(["active", "all", "deprecated"] as const).map((value) => (
-              <button key={value} className={`px-3 py-2 capitalize ${statusFilter === value ? "bg-accent text-white" : "text-ink"}`} type="button" onClick={() => setStatusFilter(value)}>
-                {value}
-              </button>
-            ))}
-          </div>
-        </section>
+            <section className="grid gap-3 rounded-lg border border-line bg-paper p-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <label className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20">
+                <Search aria-hidden className="shrink-0 text-muted" size={17} />
+                <span className="sr-only">Search Skills</span>
+                <input
+                  autoComplete="off"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+                  name="skill-registry-search"
+                  placeholder="Search skills, tags, use cases, provenance…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </label>
+              <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-line bg-white text-sm">
+                {(["active", "all", "deprecated"] as const).map((value) => (
+                  <button key={value} className={`px-3 py-2 capitalize hover:bg-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${statusFilter === value ? "bg-accent text-white hover:bg-blue-700" : "text-ink"}`} type="button" onClick={() => setStatusFilter(value)}>
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </section>
 
-        {error ? <StatusPanel tone="error" message={error} /> : null}
-        {loadState === "loading" ? <StatusPanel tone="info" message="Loading skill registry..." /> : null}
-        {loadState === "ready" && skills.length === 0 ? <EmptyState databaseId={databaseId} /> : null}
+            {error ? <StatusPanel tone="error" message={error} /> : null}
+            {loadState === "loading" ? <StatusPanel tone="info" message="Loading skill registry…" /> : null}
+            {loadState === "ready" && skills.length === 0 ? <EmptyState /> : null}
 
-        {filteredSkills.length > 0 ? (
-          <section className="grid gap-3 lg:grid-cols-2">
-            {filteredSkills.map((skill) => (
-              <SkillCard
-                key={skill.manifestPath}
-                canisterId={canisterId}
-                databaseId={databaseId}
-                skill={skill}
-                authenticated={Boolean(principal)}
-                writable={writable}
-                action={actionFor(skill)}
-                handlers={{
-                  setStatusReason: (value) => patchAction(skill, { statusReason: value }),
-                  setRunTask: (value) => patchAction(skill, { runTask: value }),
-                  setRunOutcome: (value) => patchAction(skill, { runOutcome: value }),
-                  setRunAgent: (value) => patchAction(skill, { runAgent: value }),
-                  setRunNotes: (value) => patchAction(skill, { runNotes: value }),
-                  updateStatus: (status: SkillStatus) => void runSkillAction(skill, (activeIdentity, draft) => updateSkillStatus(canisterId, databaseId, activeIdentity, skill, status, draft.statusReason)),
-                  recordRun: () =>
-                    void runSkillAction(
-                      skill,
-                      (activeIdentity, draft) =>
-                        recordSkillRun(canisterId, databaseId, activeIdentity, skill, {
-                          task: draft.runTask,
-                          outcome: draft.runOutcome,
-                          agent: draft.runAgent,
-                          notes: draft.runNotes
+            {filteredSkills.length > 0 ? (
+              <section className="grid gap-3 lg:grid-cols-2">
+                {filteredSkills.map((skill) => (
+                  <SkillCard
+                    key={skill.manifestPath}
+                    canisterId={canisterId}
+                    databaseId={databaseId}
+                    skill={skill}
+                    authenticated={Boolean(principal)}
+                    writable={writable}
+                    action={actionFor(skill)}
+                    handlers={{
+                      setStatusReason: (value) => patchAction(skill, { statusReason: value }),
+                      setRunTask: (value) => patchAction(skill, { runTask: value }),
+                      setRunOutcome: (value) => patchAction(skill, { runOutcome: value }),
+                      setRunAgent: (value) => patchAction(skill, { runAgent: value }),
+                      setRunNotes: (value) => patchAction(skill, { runNotes: value }),
+                      updateStatus: (status: SkillStatus) => void runSkillAction(skill, (activeIdentity, draft) => updateSkillStatus(canisterId, databaseId, activeIdentity, skill, status, draft.statusReason)),
+                      recordRun: () =>
+                        void runSkillAction(
+                          skill,
+                          (activeIdentity, draft) =>
+                            recordSkillRun(canisterId, databaseId, activeIdentity, skill, {
+                              task: draft.runTask,
+                              outcome: draft.runOutcome,
+                              agent: draft.runAgent,
+                              notes: draft.runNotes
+                            }),
+                          true
+                        ),
+                      approveProposal: (proposal) => void runSkillAction(skill, (activeIdentity) => approveSkillProposal(canisterId, databaseId, activeIdentity, skill, proposal.path)),
+                      previewProposal: (proposal) =>
+                        void runSkillAction(skill, async (activeIdentity) => {
+                          const preview = await previewApplyProposalDiff(canisterId, databaseId, activeIdentity, skill, proposal);
+                          patchAction(skill, { preview, message: `Preview ready: ${preview.targetPath}` });
                         }),
-                      true
-                    ),
-                  approveProposal: (proposal) => void runSkillAction(skill, (activeIdentity) => approveSkillProposal(canisterId, databaseId, activeIdentity, skill, proposal.path)),
-                  previewProposal: (proposal) =>
-                    void runSkillAction(skill, async (activeIdentity) => {
-                      const preview = await previewApplyProposalDiff(canisterId, databaseId, activeIdentity, skill, proposal);
-                      patchAction(skill, { preview, message: `Preview ready: ${preview.targetPath}` });
-                    }),
-                  applyProposal: (proposal) =>
-                    void runSkillAction(skill, async (activeIdentity, draft) => {
-                      if (!draft.preview || draft.preview.proposalPath !== proposal.path) throw new Error("Preview this proposal before applying.");
-                      await applyProposalDiff(canisterId, databaseId, activeIdentity, proposal, draft.preview);
-                      await recordSkillEvent(canisterId, databaseId, activeIdentity, skill.manifest.id, { action: "proposal.apply", targetPath: draft.preview.targetPath, result: "applied" });
-                    })
-                }}
-              />
-            ))}
-          </section>
-        ) : loadState === "ready" && skills.length > 0 ? (
-          <StatusPanel tone="info" message="No skills match the current filter." />
-        ) : null}
+                      applyProposal: (proposal) =>
+                        void runSkillAction(skill, async (activeIdentity, draft) => {
+                          if (!draft.preview || draft.preview.proposalPath !== proposal.path) throw new Error("Preview this proposal before applying.");
+                          await applyProposalDiff(canisterId, databaseId, activeIdentity, proposal, draft.preview);
+                          await recordSkillEvent(canisterId, databaseId, activeIdentity, skill.manifest.id, { action: "proposal.apply", targetPath: draft.preview.targetPath, result: "applied" });
+                        })
+                    }}
+                  />
+                ))}
+              </section>
+            ) : loadState === "ready" && skills.length > 0 ? (
+              <StatusPanel tone="info" message="No skills match the current filter." />
+            ) : null}
+          </div>
+          <aside className="space-y-3 lg:sticky lg:top-6">
+            <RoleBanner role={databaseRole} principal={principal} />
+            <PackageManager draft={packageManager.draft} busy={packageManager.busy} writable={writable} message={packageManager.message} handlers={packageManager.handlers} />
+          </aside>
+        </div>
       </section>
     </main>
   );

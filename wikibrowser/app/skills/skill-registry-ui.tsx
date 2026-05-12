@@ -35,7 +35,7 @@ export type SkillActionHandlers = {
 
 export function SummaryStrip({ summary }: { summary: CatalogSummary }) {
   return (
-    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
       <SummaryMetric label="Total" value={summary.total} icon={<BookOpen size={17} />} />
       <SummaryMetric label="Promoted" value={summary.promoted} icon={<ShieldCheck size={17} />} />
       <SummaryMetric label="Reviewed" value={summary.reviewed} icon={<CheckCircle2 size={17} />} />
@@ -213,12 +213,12 @@ function EventList({ skill }: { skill: CatalogSkill }) {
 
 function SummaryMetric({ label, value, icon }: { label: string; value: number; icon: ReactNode }) {
   return (
-    <div className="rounded-lg border border-line bg-paper p-4">
+    <div className="rounded-lg border border-line bg-paper px-3 py-3">
       <div className="flex items-center justify-between text-muted">
-        <span className="text-xs uppercase tracking-[0.12em]">{label}</span>
+        <span className="text-xs font-medium uppercase text-muted">{label}</span>
         {icon}
       </div>
-      <p className="mt-2 text-2xl font-semibold text-ink">{value}</p>
+      <p className="mt-1 font-mono text-2xl font-semibold tabular-nums text-ink">{value}</p>
     </div>
   );
 }
@@ -245,12 +245,13 @@ function TokenRow({ label, values, mono = false }: { label: string; values: stri
   );
 }
 
-export function EmptyState({ databaseId }: { databaseId: string }) {
+export function EmptyState() {
   return (
     <section className="rounded-lg border border-line bg-paper p-6 text-sm text-muted">
-      <p>No Skill KB packages found under /Wiki/skills or /Wiki/public-skills.</p>
+      <h2 className="text-base font-semibold text-ink">No Skill Packages</h2>
+      <p className="mt-2">No packages found under /Wiki/skills or /Wiki/public-skills.</p>
       <p className="mt-2">
-        Use <span className="font-mono">skill upsert</span> or <span className="font-mono">skill import github</span>, then return to <Link className="text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(databaseId)}`}>this registry</Link>.
+        Open <span className="font-medium text-ink">Add Or Update Package</span> to import from GitHub or paste a package.
       </p>
     </section>
   );

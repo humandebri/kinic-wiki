@@ -3,7 +3,7 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -12,10 +12,13 @@ import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
+import { IngestPanel } from "@/components/ingest-panel";
 import { LintPanel } from "@/components/lint-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
+import { RecipesPanel } from "@/components/recipes-panel";
 import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { readBrowserNodeCache } from "@/lib/browser-node-cache";
 import { hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
 import type { ChildNode, NodeContext, WikiNode } from "@/lib/types";
@@ -31,7 +34,7 @@ import {
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "search", "recent", "lint"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "search", "recent", "ingest", "recipes", "lint"];
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
   ssr: false,
   loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
@@ -56,6 +59,7 @@ export function WikiBrowser() {
   const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
   const graphCenter = isGraphPage ? searchParams.get("center") : null;
   const graphDepth = parseGraphDepth(searchParams.get("depth"));
+  const readMode = parseReadMode(searchParams.get("read"));
   const selectedPath = useMemo(
     () => isSearchPage ? "/Wiki" : isGraphPage ? graphCenter ?? "/Wiki" : routeState.nodePath,
     [graphCenter, isGraphPage, isSearchPage, routeState.nodePath]
@@ -67,11 +71,15 @@ export function WikiBrowser() {
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [readIdentity, setReadIdentity] = useState<Identity | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
-  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const effectiveReadIdentity = readMode === "anonymous" ? null : readIdentity;
+  const authPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const readPrincipal = effectiveReadIdentity?.getPrincipal().toText() ?? null;
   const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
   const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
+  const nodeContextCache = useRef(new Map<string, NodeContext>());
+  const childNodesCache = useRef(new Map<string, ChildNode[]>());
   const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
@@ -101,13 +109,27 @@ export function WikiBrowser() {
       return;
     }
     const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
+    const cached = readBrowserNodeCache(nodeContextCache.current, childNodesCache.current, requestKey);
+    if (cached) {
+      if (cached.kind === "node") {
+        setNode({ requestKey, path: selectedPath, data: cached.context.node, error: null, loading: false });
+        setNodeContext({ requestKey, path: selectedPath, data: cached.context, error: null, loading: false });
+        setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+      } else {
+        setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+        setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+        setChildNodes({ requestKey, path: selectedPath, data: cached.children, error: null, loading: false });
+      }
+      return;
+    }
     import("@/lib/vfs-client")
-      .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20, readIdentity ?? undefined))
+      .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20, effectiveReadIdentity ?? undefined))
       .then((data) => {
         if (!cancelled) {
           if (!data) {
             throw new ApiError(`node not found: ${selectedPath}`, 404);
           }
+          nodeContextCache.current.set(requestKey, data);
           setNode({ requestKey, path: selectedPath, data: data.node, error: null, loading: false });
           setNodeContext({ requestKey, path: selectedPath, data, error: null, loading: false });
           setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
@@ -123,7 +145,7 @@ export function WikiBrowser() {
           return;
         }
         import("@/lib/vfs-client")
-          .then(({ listChildren }) => listChildren(canisterId, databaseId, selectedPath, readIdentity ?? undefined))
+          .then(({ listChildren }) => listChildren(canisterId, databaseId, selectedPath, effectiveReadIdentity ?? undefined))
           .then((data) => {
             if (!cancelled) {
               if (data.length === 0 && looksLikeFilePath(selectedPath)) {
@@ -133,6 +155,7 @@ export function WikiBrowser() {
               } else {
                 setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
                 setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+                childNodesCache.current.set(requestKey, data);
                 setChildNodes({ requestKey, path: selectedPath, data, error: null, loading: false });
               }
             }
@@ -148,7 +171,7 @@ export function WikiBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, readIdentity, readPrincipal, selectedPath]);
+  }, [canisterId, databaseId, effectiveReadIdentity, graphCenter, invalidCanister, isGraphPage, readPrincipal, selectedPath]);
 
   async function login() {
     if (!authClient) return;
@@ -176,27 +199,46 @@ export function WikiBrowser() {
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
   const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
   const noteRole = inferNoteRole(selectedPath);
+  const authPrompt = authPromptMode(tab, readIdentity, currentNode.error || currentChildren.error);
+
+  useEffect(() => {
+    const loadError = currentNode.error || currentChildren.error;
+    if (readMode === "anonymous" || !isPermissionError(loadError)) return;
+    const anonymousHref = hrefForCurrentReadRoute(canisterId, databaseId, {
+      graphCenter,
+      graphDepth,
+      isGraphPage,
+      isSearchPage,
+      query,
+      searchKind,
+      selectedPath,
+      tab,
+      view
+    });
+    if (anonymousHref) {
+      router.replace(anonymousHref);
+    }
+  }, [canisterId, currentChildren.error, currentNode.error, databaseId, graphCenter, graphDepth, isGraphPage, isSearchPage, query, readMode, router, searchKind, selectedPath, tab, view]);
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <TopBar
         canisterId={canisterId}
         databaseId={databaseId}
-        authReady={Boolean(authClient)}
         authError={authError}
-        principal={readPrincipal}
+        principal={authPrincipal}
         query={query}
         searchKind={searchKind}
         isGraphPage={isGraphPage}
         graphCenter={graphCenter}
+        readMode={readMode}
         selectedPath={selectedPath}
-        onLogin={login}
         onLogout={logout}
       />
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
           <PanelHeader icon={<GitBranch size={15} />} title={tabTitle(tab)} />
-          <ModeTabs canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} tab={tab} />
+          <ModeTabs canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} tab={tab} readMode={readMode} />
           <LeftPane
             tab={tab}
             canisterId={canisterId}
@@ -205,13 +247,15 @@ export function WikiBrowser() {
             node={currentNode.data}
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
             readIdentity={readIdentity}
+            effectiveReadIdentity={effectiveReadIdentity}
+            readMode={readMode}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
           {isGraphPage ? (
-            <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} readIdentity={readIdentity} />
+            <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} readIdentity={effectiveReadIdentity} readMode={readMode} />
           ) : isSearchPage ? (
-            <SearchPanel canisterId={canisterId} databaseId={databaseId} query={query} initialKind={searchKind} readIdentity={readIdentity} />
+            <SearchPanel canisterId={canisterId} databaseId={databaseId} query={query} initialKind={searchKind} readIdentity={effectiveReadIdentity} readMode={readMode} />
           ) : (
             <>
               <DocumentHeader
@@ -220,7 +264,7 @@ export function WikiBrowser() {
                 path={selectedPath}
                 view={view}
                 onViewChange={(nextView) => {
-                  router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab));
+                  router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab, undefined, undefined, readMode));
                 }}
                 isDirectory={!currentNode.data && Boolean(currentChildren.data)}
               />
@@ -230,9 +274,10 @@ export function WikiBrowser() {
                 view={view}
                 canisterId={canisterId}
                 databaseId={databaseId}
-                authPrompt={!readIdentity && isPermissionError(currentNode.error || currentChildren.error)}
+                authPrompt={authPrompt}
                 onLogin={login}
                 authReady={Boolean(authClient)}
+                readMode={readMode}
               />
             </>
           )}
@@ -250,7 +295,8 @@ export function WikiBrowser() {
               incomingLinks={currentNodeContext.data?.incomingLinks ?? null}
               incomingError={currentNodeContext.error}
               outgoingLinks={currentNodeContext.data?.outgoingLinks ?? []}
-              readIdentity={readIdentity}
+              readIdentity={effectiveReadIdentity}
+              readMode={readMode}
             />
           </aside>
         ) : null}
@@ -266,7 +312,9 @@ function LeftPane({
   selectedPath,
   node,
   autoExpandExplorer,
-  readIdentity
+  readIdentity,
+  effectiveReadIdentity,
+  readMode
 }: {
   tab: ModeTab;
   canisterId: string;
@@ -275,45 +323,46 @@ function LeftPane({
   node: WikiNode | null;
   autoExpandExplorer: boolean;
   readIdentity: Identity | null;
+  effectiveReadIdentity: Identity | null;
+  readMode: "anonymous" | null;
 }) {
-  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" readIdentity={readIdentity} />;
-  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
-  if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} databaseId={databaseId} />;
-  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={readIdentity} />;
+  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" readIdentity={effectiveReadIdentity} readMode={readMode} />;
+  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} readMode={readMode} />;
+  if (tab === "ingest") return <IngestPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
+  if (tab === "recipes") return <RecipesPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} writeIdentity={readIdentity} readMode={readMode} />;
+  if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />;
+  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={effectiveReadIdentity} readMode={readMode} />;
 }
 
 function TopBar({
   canisterId,
   databaseId,
-  authReady,
   authError,
   principal,
   query,
   searchKind,
   isGraphPage,
   graphCenter,
+  readMode,
   selectedPath,
-  onLogin,
   onLogout
 }: {
   canisterId: string;
   databaseId: string;
-  authReady: boolean;
   authError: string | null;
   principal: string | null;
   query: string;
   searchKind: "path" | "full";
   isGraphPage: boolean;
   graphCenter: string | null;
+  readMode: "anonymous" | null;
   selectedPath: string;
-  onLogin: () => void;
   onLogout: () => void;
 }) {
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
   return (
     <header className="flex min-h-[52px] items-center gap-4 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur">
       <div className="w-[168px] shrink-0">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Wiki Canister Browser</p>
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
       </div>
       <div className="hidden min-w-0 max-w-[180px] shrink text-xs text-muted sm:block">
@@ -325,26 +374,16 @@ function TopBar({
           <button className="hidden rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink md:block" type="button" onClick={onLogout}>
             Logout
           </button>
-        ) : (
-          <button
-            className="hidden rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 md:block"
-            disabled={!authReady}
-            data-tid="login-button"
-            type="button"
-            onClick={onLogin}
-          >
-            Login
-          </button>
-        )}
+        ) : null}
         <Link
           className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
-          href={hrefForGraph(canisterId, databaseId, graphLinkCenter)}
+          href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
         >
           <Network size={15} />
           Graph
         </Link>
         <CycleBattery canisterId={canisterId} />
-        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} />
+        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} readMode={readMode} />
       </div>
     </header>
   );
@@ -358,12 +397,14 @@ function HeaderSearch({
   canisterId,
   databaseId,
   query,
-  searchKind
+  searchKind,
+  readMode
 }: {
   canisterId: string;
   databaseId: string;
   query: string;
   searchKind: "path" | "full";
+  readMode: "anonymous" | null;
 }) {
   const router = useRouter();
   const draftKey = `${query}\n${searchKind}`;
@@ -373,7 +414,7 @@ function HeaderSearch({
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    router.replace(hrefForSearch(canisterId, databaseId, text.trim(), kind));
+    router.replace(hrefForSearch(canisterId, databaseId, text.trim(), kind, readMode));
   }
 
   return (
@@ -413,20 +454,22 @@ function ModeTabs({
   canisterId,
   databaseId,
   selectedPath,
-  tab
+  tab,
+  readMode
 }: {
   canisterId: string;
   databaseId: string;
   selectedPath: string;
   tab: ModeTab;
+  readMode: "anonymous" | null;
 }) {
   return (
     <nav className="border-b border-line px-3 py-2" aria-label="Left sidebar mode">
-      <div className="grid grid-cols-4 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
+      <div className="grid grid-cols-6 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
         {SIDEBAR_TABS.map((value) => (
           <Link
             key={value}
-            href={hrefForPath(canisterId, databaseId, selectedPath, undefined, value)}
+            href={hrefForPath(canisterId, databaseId, selectedPath, undefined, value, undefined, undefined, readMode)}
             className={`rounded-lg px-1.5 py-1.5 no-underline ${tab === value ? "bg-accent text-white" : "text-muted hover:bg-paper"}`}
           >
             {value}
@@ -440,12 +483,20 @@ function ModeTabs({
 function tabTitle(tab: ModeTab): string {
   if (tab === "search") return "Search";
   if (tab === "recent") return "Recent";
+  if (tab === "ingest") return "Ingest";
+  if (tab === "recipes") return "Recipes";
   if (tab === "lint") return "Lint Hints";
   return "Explorer";
 }
 
+function authPromptMode(tab: ModeTab, readIdentity: Identity | null, loadError: string | null): "private" | "write" | null {
+  if (readIdentity) return null;
+  if (tab === "ingest" || tab === "recipes") return "write";
+  return isPermissionError(loadError) ? "private" : null;
+}
+
 function parseTab(value: string | null): ModeTab {
-  if (value === "recent" || value === "lint" || value === "search" || value === "explorer") {
+  if (value === "recent" || value === "ingest" || value === "recipes" || value === "lint" || value === "search" || value === "explorer") {
     return value;
   }
   return "explorer";
@@ -459,8 +510,36 @@ function parseSearchKind(value: string | null): "path" | "full" {
   return value === "full" ? "full" : "path";
 }
 
+function parseReadMode(value: string | null): "anonymous" | null {
+  return value === "anonymous" ? "anonymous" : null;
+}
+
 function parseGraphDepth(value: string | null): 1 | 2 {
   return value === "2" ? 2 : 1;
+}
+
+function hrefForCurrentReadRoute(
+  canisterId: string,
+  databaseId: string,
+  state: {
+    graphCenter: string | null;
+    graphDepth: 1 | 2;
+    isGraphPage: boolean;
+    isSearchPage: boolean;
+    query: string;
+    searchKind: "path" | "full";
+    selectedPath: string;
+    tab: ModeTab;
+    view: ViewMode;
+  }
+): string | null {
+  if (state.isSearchPage) {
+    return hrefForSearch(canisterId, databaseId, state.query, state.searchKind, "anonymous");
+  }
+  if (state.isGraphPage) {
+    return state.graphCenter ? hrefForGraph(canisterId, databaseId, state.graphCenter, state.graphDepth, "anonymous") : null;
+  }
+  return hrefForPath(canisterId, databaseId, state.selectedPath, state.view, state.tab, undefined, undefined, "anonymous");
 }
 
 function currentNodeState(

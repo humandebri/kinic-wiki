@@ -3,6 +3,7 @@
 // Why: The canister has no push event hook, so v1 uses snapshot/update polling.
 import { loadConfig } from "./config.js";
 import { enqueueSourceJob, loadCursor, saveCursor } from "./jobs.js";
+import { parseUrlIngestRequest, processUrlIngestRequest, shouldProcessIngestRequest } from "./url-ingest.js";
 import { createVfsClient, type VfsClient } from "./vfs.js";
 import type { WikiNode, WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
@@ -11,7 +12,23 @@ export async function scanSources(env: RuntimeEnv): Promise<void> {
   const config = loadConfig(env);
   const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_JSON);
   for (const databaseId of config.databaseIds) {
+    await scanIngestRequests(env, vfs, config, databaseId);
     await scanDatabase(env, vfs, config, databaseId);
+  }
+}
+
+async function scanIngestRequests(env: RuntimeEnv, vfs: VfsClient, config: WorkerConfig, databaseId: string): Promise<void> {
+  let cursor: string | null = null;
+  for (;;) {
+    const page = await vfs.exportSnapshot(databaseId, config.ingestRequestPrefix, cursor, null);
+    for (const node of page.nodes) {
+      const request = parseUrlIngestRequest(node);
+      if (request && shouldProcessIngestRequest(request)) {
+        await processUrlIngestRequest(env, vfs, config, databaseId, request);
+      }
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
   }
 }
 

@@ -1,4 +1,7 @@
-export const DELEGATION_TTL_NS = BigInt(8) * BigInt(3_600_000_000_000);
+const HOURS_PER_DAY = BigInt(24);
+const NANOSECONDS_PER_HOUR = BigInt(3_600_000_000_000);
+
+export const DELEGATION_TTL_NS = BigInt(30) * HOURS_PER_DAY * NANOSECONDS_PER_HOUR;
 
 export function identityProviderUrl(): string {
   if (process.env.NEXT_PUBLIC_II_PROVIDER_URL) {

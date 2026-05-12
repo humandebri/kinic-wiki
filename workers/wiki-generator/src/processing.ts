@@ -6,6 +6,7 @@ import { enqueueSourceJob, loadJob, markCompleted, markFailed, markProcessing, s
 import { generateDraft, validateDraftSources } from "./openai.js";
 import { ensureTargetCanBeWritten, renderDraftMarkdown, slugForDraft } from "./render.js";
 import { validateCanonicalSourcePath } from "./source-path.js";
+import { markIngestRequestCompleted, markIngestRequestFailed } from "./url-ingest.js";
 import { createVfsClient, type VfsClient } from "./vfs.js";
 import type { ManualRunInput, QueueMessage, SearchNodeHit, WikiNode, WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
@@ -57,8 +58,15 @@ export async function processQueueMessage(env: RuntimeEnv, message: QueueMessage
     await writeGeneratedDraft(vfs, message.databaseId, generated.targetPath, generated.content, source.path);
     await appendWorkerLog(vfs, message.databaseId, config.targetRoot, generated.targetPath, source.path);
     await markCompleted(env.DB, message, generated.targetPath);
+    if (message.requestPath) {
+      await markIngestRequestCompleted(vfs, message.databaseId, message.requestPath, source.path, generated.targetPath);
+    }
   } catch (error) {
-    await markFailed(env.DB, message, errorMessage(error));
+    const messageText = errorMessage(error);
+    await markFailed(env.DB, message, messageText);
+    if (message.requestPath) {
+      await markIngestRequestFailed(vfs, message.databaseId, message.requestPath, messageText);
+    }
   }
 }
 
@@ -78,10 +86,14 @@ export function parseQueueMessage(value: unknown): QueueMessage | null {
   if (typeof value.databaseId !== "string") return null;
   if (typeof value.sourcePath !== "string") return null;
   if (typeof value.sourceEtag !== "string") return null;
+  if ("kind" in value && value.kind !== undefined && value.kind !== "source") return null;
+  if ("requestPath" in value && value.requestPath !== undefined && typeof value.requestPath !== "string") return null;
   return {
+    kind: "source",
     databaseId: value.databaseId,
     sourcePath: value.sourcePath,
-    sourceEtag: value.sourceEtag
+    sourceEtag: value.sourceEtag,
+    requestPath: typeof value.requestPath === "string" ? value.requestPath : undefined
   };
 }
 

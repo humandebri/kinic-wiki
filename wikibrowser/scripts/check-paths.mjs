@@ -13,7 +13,7 @@ const compiled = ts.transpileModule(source, {
   }
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
-const { hrefForMarkdownLink, hrefForPath, hrefForSearch, pathFromSegments } = await import(moduleUrl);
+const { hrefForGraph, hrefForMarkdownLink, hrefForPath, hrefForSearch, pathFromSegments } = await import(moduleUrl);
 
 assert.equal(pathFromSegments([]), "/Wiki");
 assert.equal(pathFromSegments(["Wiki", "100%.md"]), "/Wiki/100%.md");
@@ -24,6 +24,10 @@ assert.equal(
 assert.equal(
   hrefForPath("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/space name.md", "raw"),
   "/alpha/Wiki/space%20name.md?view=raw"
+);
+assert.equal(
+  hrefForPath("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki", undefined, "recent", undefined, undefined, "anonymous"),
+  "/alpha/Wiki?tab=recent&read=anonymous"
 );
 assert.equal(
   hrefForSearch("t63gs-up777-77776-aaaba-cai", "alpha", "", "path"),
@@ -38,8 +42,20 @@ assert.equal(
   "/alpha/search?q=alpha+beta&kind=full"
 );
 assert.equal(
+  hrefForSearch("t63gs-up777-77776-aaaba-cai", "alpha", "alpha beta", "path", "anonymous"),
+  "/alpha/search?q=alpha+beta&kind=path&read=anonymous"
+);
+assert.equal(
+  hrefForGraph("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/index.md", 2, "anonymous"),
+  "/alpha/graph?center=%2FWiki%2Findex.md&depth=2&read=anonymous"
+);
+assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "facts.md"),
   "/alpha/Wiki/beam-full-reset/7/facts.md"
+);
+assert.equal(
+  hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "facts.md", "anonymous"),
+  "/alpha/Wiki/beam-full-reset/7/facts.md?read=anonymous"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "/Wiki/demo.md#evidence"),

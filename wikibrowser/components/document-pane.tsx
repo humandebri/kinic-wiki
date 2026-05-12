@@ -60,31 +60,33 @@ export function DocumentPane({
   canisterId,
   authPrompt,
   authReady,
-  onLogin
+  onLogin,
+  readMode = null
 }: {
   node: PathLoadState<WikiNode>;
   childrenState: PathLoadState<ChildNode[]>;
   view: ViewMode;
   canisterId: string;
   databaseId: string;
-  authPrompt?: boolean;
+  authPrompt?: "private" | "write" | null;
   authReady?: boolean;
   onLogin?: () => void;
+  readMode?: "anonymous" | null;
 }) {
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
-  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
+  if (authPrompt && onLogin) {
+    return <PaneBody className="p-6"><AuthRequiredState authReady={Boolean(authReady)} mode={authPrompt} onLogin={onLogin} /></PaneBody>;
+  }
+  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} databaseId={databaseId} readMode={readMode} /></PaneBody>;
   if (childrenState.data) {
     return (
       <PaneBody>
-        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} />
+        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />
       </PaneBody>
     );
   }
   if (isVfsNotFound(node.error, childrenState.error)) {
-    return <PaneBody><NotFoundState path={node.path} canisterId={canisterId} databaseId={databaseId} /></PaneBody>;
-  }
-  if (authPrompt && onLogin) {
-    return <PaneBody className="p-6"><PrivateDatabaseState authReady={Boolean(authReady)} onLogin={onLogin} /></PaneBody>;
+    return <PaneBody><NotFoundState path={node.path} canisterId={canisterId} databaseId={databaseId} readMode={readMode} /></PaneBody>;
   }
   return (
     <PaneBody className="p-6">
@@ -96,14 +98,15 @@ export function DocumentPane({
   );
 }
 
-function PrivateDatabaseState({ authReady, onLogin }: { authReady: boolean; onLogin: () => void }) {
+function AuthRequiredState({ authReady, mode, onLogin }: { authReady: boolean; mode: "private" | "write"; onLogin: () => void }) {
+  const isWriteAction = mode === "write";
   return (
     <div className="flex h-full items-center justify-center">
       <section className="max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
-        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Private database</p>
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">{isWriteAction ? "Write access" : "Private database"}</p>
         <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
         <p className="mt-3 text-sm leading-6 text-muted">
-          This database is not public. Login with Internet Identity to read databases linked to your principal.
+          {isWriteAction ? "Login with Internet Identity to queue URL ingest or save recipe clips for this database." : "This database is not public. Login with Internet Identity to read databases linked to your principal."}
         </p>
         <button
           className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
@@ -126,11 +129,13 @@ function PaneBody({ children, className = "" }: { children: ReactNode; className
 function NotFoundState({
   path,
   canisterId,
-  databaseId
+  databaseId,
+  readMode
 }: {
   path: string;
   canisterId: string;
   databaseId: string;
+  readMode: "anonymous" | null;
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -141,17 +146,17 @@ function NotFoundState({
         <div className="mt-5 flex flex-wrap gap-2 text-sm">
           <Link
             className="rounded-lg bg-accent px-3 py-2 text-white no-underline"
-            href={hrefForPath(canisterId, databaseId, "/Wiki")}
+            href={hrefForPath(canisterId, databaseId, "/Wiki", undefined, undefined, undefined, undefined, readMode)}
           >
             Open /Wiki
           </Link>
           <Link
             className="rounded-lg border border-line bg-white px-3 py-2 no-underline"
-            href={hrefForPath(canisterId, databaseId, "/Sources")}
+            href={hrefForPath(canisterId, databaseId, "/Sources", undefined, undefined, undefined, undefined, readMode)}
           >
             Open /Sources
           </Link>
-          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForSearch(canisterId, databaseId, path.split("/").filter(Boolean).at(-1) ?? path, "path")}>
+          <Link className="rounded-lg border border-line bg-white px-3 py-2 no-underline" href={hrefForSearch(canisterId, databaseId, path.split("/").filter(Boolean).at(-1) ?? path, "path", readMode)}>
             Search this path
           </Link>
         </div>
@@ -160,7 +165,7 @@ function NotFoundState({
   );
 }
 
-function NodeDocument({ node, view, canisterId, databaseId }: { node: WikiNode; view: ViewMode; canisterId: string; databaseId: string }) {
+function NodeDocument({ node, view, canisterId, databaseId, readMode }: { node: WikiNode; view: ViewMode; canisterId: string; databaseId: string; readMode: "anonymous" | null }) {
   const contentBytes = new TextEncoder().encode(node.content).length;
   const isLargeContent = contentBytes > LARGE_CONTENT_BYTES;
   return (
@@ -168,10 +173,10 @@ function NodeDocument({ node, view, canisterId, databaseId }: { node: WikiNode; 
       {view === "raw" ? (
         <RawContent key={`${node.path}-${node.etag}`} content={node.content} isLargeContent={isLargeContent} contentBytes={contentBytes} />
       ) : isLargeContent ? (
-        <LargeMarkdownPreview key={`${node.path}:${node.etag}`} content={node.content} contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={node.path} />
+        <LargeMarkdownPreview key={`${node.path}:${node.etag}`} content={node.content} contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={node.path} readMode={readMode} />
       ) : (
         <div className="markdown-body mx-auto max-w-3xl">
-          <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={node.path} content={node.content} />
+          <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={node.path} content={node.content} readMode={readMode} />
         </div>
       )}
     </article>
@@ -183,18 +188,20 @@ function LargeMarkdownPreview({
   contentBytes,
   canisterId,
   databaseId,
-  nodePath
+  nodePath,
+  readMode
 }: {
   content: string;
   contentBytes: number;
   canisterId: string;
   databaseId: string;
   nodePath: string;
+  readMode: "anonymous" | null;
 }) {
   const sections = splitMarkdownPreviewSections(content);
   const [visibleSections, setVisibleSections] = useState(1);
   if (sections.length < 2) {
-    return <LargeContentState contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} reason="No section headings found." />;
+    return <LargeContentState contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} readMode={readMode} reason="No section headings found." />;
   }
   const cappedVisibleSections = Math.min(visibleSections, sections.length);
   const showingFullPreview = cappedVisibleSections >= sections.length;
@@ -208,7 +215,7 @@ function LargeMarkdownPreview({
         {showingFullPreview ? <p className="mt-2 font-medium">Showing full preview.</p> : null}
       </div>
       <div className="markdown-body mx-auto max-w-3xl">
-        <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} content={previewContent} />
+        <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={nodePath} content={previewContent} readMode={readMode} />
       </div>
       {!showingFullPreview ? (
         <button
@@ -267,12 +274,14 @@ function LargeContentState({
   canisterId,
   databaseId,
   nodePath,
+  readMode,
   reason
 }: {
   contentBytes: number;
   canisterId: string;
   databaseId: string;
   nodePath: string;
+  readMode: "anonymous" | null;
   reason?: string;
 }) {
   return (
@@ -285,7 +294,7 @@ function LargeContentState({
       {reason ? <p className="mt-3 text-muted">{reason}</p> : null}
       <Link
         className="mt-5 inline-flex rounded-lg bg-accent px-3 py-2 text-white no-underline"
-        href={hrefForPath(canisterId, databaseId, nodePath, "raw")}
+        href={hrefForPath(canisterId, databaseId, nodePath, "raw", undefined, undefined, undefined, readMode)}
       >
         Open raw view
       </Link>
@@ -296,11 +305,13 @@ function LargeContentState({
 function DirectoryDocument({
   childrenState,
   canisterId,
-  databaseId
+  databaseId,
+  readMode
 }: {
   childrenState: LoadState<ChildNode[]>;
   canisterId: string;
   databaseId: string;
+  readMode: "anonymous" | null;
 }) {
   return (
     <div className="h-full overflow-auto p-6">
@@ -311,7 +322,7 @@ function DirectoryDocument({
           {childrenState.data?.map((child) => (
             <Link
               key={child.path}
-              href={hrefForPath(canisterId, databaseId, child.path)}
+              href={hrefForPath(canisterId, databaseId, child.path, undefined, undefined, undefined, undefined, readMode)}
               className="flex items-center justify-between rounded-xl border border-line bg-white px-4 py-3 text-sm no-underline hover:border-accent"
             >
               <span className="flex min-w-0 items-center gap-2">

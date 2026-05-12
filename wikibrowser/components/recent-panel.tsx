@@ -10,7 +10,7 @@ import type { RecentNode } from "@/lib/types";
 import { errorHint, errorMessage, type LoadState } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
 
-export function RecentPanel({ canisterId, databaseId, readIdentity }: { canisterId: string; databaseId: string; readIdentity: Identity | null }) {
+export function RecentPanel({ canisterId, databaseId, readIdentity, readMode = null }: { canisterId: string; databaseId: string; readIdentity: Identity | null; readMode?: "anonymous" | null }) {
   const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   const requestKey = `${canisterId}\n${databaseId}\n${authRequestKey(readPrincipal)}`;
   const [recent, setRecent] = useState<LoadState<RecentNode[]> & { requestKey: string | null }>({
@@ -44,7 +44,7 @@ export function RecentPanel({ canisterId, databaseId, readIdentity }: { canister
       {currentRecent.data?.map((node) => (
         <Link
           key={node.path}
-          href={hrefForPath(canisterId, databaseId, node.path)}
+          href={hrefForPath(canisterId, databaseId, node.path, undefined, undefined, undefined, undefined, readMode)}
           className="block rounded-xl border border-line bg-white p-3 text-sm no-underline hover:border-accent"
         >
           <div className="flex items-center gap-2">

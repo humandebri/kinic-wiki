@@ -10,12 +10,14 @@ export function MarkdownPreview({
   canisterId,
   databaseId,
   nodePath,
-  content
+  content,
+  readMode = null
 }: {
   canisterId: string;
   databaseId: string;
   nodePath: string;
   content: string;
+  readMode?: "anonymous" | null;
 }) {
   const frontmatter = splitMarkdownFrontmatter(content);
   const markdown = frontmatter ? frontmatter.body : content;
@@ -26,7 +28,7 @@ export function MarkdownPreview({
         remarkPlugins={[remarkGfm]}
         components={{
           a({ href, children, ...props }) {
-            const wikiHref = hrefForMarkdownLink(canisterId, databaseId, nodePath, href);
+            const wikiHref = hrefForMarkdownLink(canisterId, databaseId, nodePath, href, readMode);
             if (!wikiHref) {
               return <a href={href} {...props}>{children}</a>;
             }

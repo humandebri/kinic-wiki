@@ -14,6 +14,7 @@ import {
 } from "@/lib/vfs-client";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
+type BusyAction = { kind: "grant"; principalText: string; role: DatabaseRole } | { kind: "revoke"; principalText: string };
 
 export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) {
   const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
@@ -28,6 +29,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionTone, setActionTone] = useState<"error" | "info">("info");
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
 
   const database = useMemo(() => databases.find((item) => item.databaseId === databaseId) ?? null, [databaseId, databases]);
   const canManage = database?.role === "owner" && !memberError;
@@ -129,23 +131,26 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
   async function grantAccess(principalText: string, role: DatabaseRole) {
     if (!authClient || !databaseId) return;
     setBusy(true);
+    setBusyAction({ kind: "grant", principalText, role });
     setActionMessage(null);
     try {
       await grantDatabaseAccessAuthenticated(canisterId, authClient.getIdentity(), databaseId, principalText, role);
       setActionTone("info");
-      setActionMessage("Access granted.");
+      setActionMessage("Access updated.");
       await refresh(authClient, databaseId);
     } catch (cause) {
       setActionTone("error");
       setActionMessage(errorMessage(cause));
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   }
 
   async function revokeAccess(principalText: string) {
     if (!authClient || !databaseId) return;
     setBusy(true);
+    setBusyAction({ kind: "revoke", principalText });
     setActionMessage(null);
     try {
       await revokeDatabaseAccessAuthenticated(canisterId, authClient.getIdentity(), databaseId, principalText);
@@ -157,6 +162,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
       setActionMessage(errorMessage(cause));
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -187,7 +193,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
             <SummaryPanel database={database} databaseId={databaseId} principal={principal} />
             {database ? (
               canManage ? (
-                <OwnerPanel busy={busy} members={members} principal={principal} onGrant={grantAccess} onRevoke={revokeAccess} />
+                <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal} onGrant={grantAccess} onRevoke={revokeAccess} />
               ) : (
                 <StatusPanel tone="info" message={memberError ?? "No management permission for this database."} />
               )

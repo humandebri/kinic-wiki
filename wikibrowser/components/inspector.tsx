@@ -28,7 +28,8 @@ export function Inspector({
   incomingLinks,
   incomingError,
   outgoingLinks,
-  readIdentity
+  readIdentity,
+  readMode = null
 }: {
   canisterId: string;
   databaseId: string;
@@ -40,6 +41,7 @@ export function Inspector({
   incomingError?: string | null;
   outgoingLinks: LinkEdge[];
   readIdentity: Identity | null;
+  readMode?: "anonymous" | null;
 }) {
   const kind = node?.kind ?? "directory";
   const size = node ? `${new TextEncoder().encode(node.content).length}` : null;
@@ -151,7 +153,7 @@ export function Inspector({
           <ul className="space-y-1">
             {outgoingLinks.map((edge) => (
               <li key={`${edge.targetPath}-${edge.rawHref}`} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.targetPath)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.targetPath, undefined, undefined, undefined, undefined, readMode)}>
                   {edge.targetPath}
                 </Link>
                 <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
@@ -173,7 +175,7 @@ export function Inspector({
           <ul className="space-y-1">
             {incomingLinks.map((edge) => (
               <li key={`${edge.sourcePath}-${edge.rawHref}`} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.sourcePath)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, edge.sourcePath, undefined, undefined, undefined, undefined, readMode)}>
                   {edge.sourcePath}
                 </Link>
                 <p className="truncate text-[11px] text-muted">{edge.linkText || edge.rawHref}</p>
@@ -189,7 +191,7 @@ export function Inspector({
           <ul className="space-y-1">
             {rawSourceLinks.map((link) => (
               <li key={link} className="truncate font-mono text-xs">
-                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, link)}>
+                <Link className="text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, link, undefined, undefined, undefined, undefined, readMode)}>
                   {link}
                 </Link>
               </li>

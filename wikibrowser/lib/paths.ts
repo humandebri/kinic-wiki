@@ -12,7 +12,8 @@ export function hrefForPath(
   view?: string,
   tab?: string,
   searchQuery?: string,
-  searchKind?: string
+  searchKind?: string,
+  readMode?: string | null
 ): string {
   void canisterId;
   const normalized = path.startsWith("/") ? path.slice(1) : path;
@@ -34,11 +35,14 @@ export function hrefForPath(
   if (searchKind) {
     params.set("kind", searchKind);
   }
+  if (readMode === "anonymous") {
+    params.set("read", "anonymous");
+  }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
   return `/${encodeURIComponent(databaseId)}/${suffix}${queryString}`;
 }
 
-export function hrefForSearch(canisterId: string, databaseId: string, searchQuery: string, searchKind: string): string {
+export function hrefForSearch(canisterId: string, databaseId: string, searchQuery: string, searchKind: string, readMode?: string | null): string {
   void canisterId;
   const params = new URLSearchParams();
   if (searchQuery) {
@@ -47,11 +51,14 @@ export function hrefForSearch(canisterId: string, databaseId: string, searchQuer
   if (searchKind) {
     params.set("kind", searchKind);
   }
+  if (readMode === "anonymous") {
+    params.set("read", "anonymous");
+  }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
   return `/${encodeURIComponent(databaseId)}/search${queryString}`;
 }
 
-export function hrefForGraph(canisterId: string, databaseId: string, centerPath?: string | null, depth?: number): string {
+export function hrefForGraph(canisterId: string, databaseId: string, centerPath?: string | null, depth?: number, readMode?: string | null): string {
   void canisterId;
   const params = new URLSearchParams();
   if (centerPath) {
@@ -60,11 +67,14 @@ export function hrefForGraph(canisterId: string, databaseId: string, centerPath?
   if (depth && depth !== 1) {
     params.set("depth", String(depth));
   }
+  if (readMode === "anonymous") {
+    params.set("read", "anonymous");
+  }
   const queryString = params.size > 0 ? `?${params.toString()}` : "";
   return `/${encodeURIComponent(databaseId)}/graph${queryString}`;
 }
 
-export function hrefForMarkdownLink(canisterId: string, databaseId: string, currentPath: string, href: string | undefined): string | null {
+export function hrefForMarkdownLink(canisterId: string, databaseId: string, currentPath: string, href: string | undefined, readMode?: string | null): string | null {
   if (!href) {
     return null;
   }
@@ -74,12 +84,12 @@ export function hrefForMarkdownLink(canisterId: string, databaseId: string, curr
   }
   const target = splitMarkdownHref(trimmed);
   if (trimmed.startsWith("/Wiki") || trimmed.startsWith("/Sources")) {
-    return `${hrefForPath(canisterId, databaseId, target.path)}${target.suffix}`;
+    return `${hrefForPath(canisterId, databaseId, target.path, undefined, undefined, undefined, undefined, readMode)}${target.suffix}`;
   }
   if (trimmed.startsWith("/")) {
     return null;
   }
-  return `${hrefForPath(canisterId, databaseId, resolveRelativeWikiPath(currentPath, target.path))}${target.suffix}`;
+  return `${hrefForPath(canisterId, databaseId, resolveRelativeWikiPath(currentPath, target.path), undefined, undefined, undefined, undefined, readMode)}${target.suffix}`;
 }
 
 export function parentPath(path: string): string | null {

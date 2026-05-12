@@ -1,6 +1,7 @@
 // Where: workers/wiki-generator/src/openai.ts
 // What: OpenAI Responses API integration and draft schema validation.
 // Why: The model only produces structured JSON; worker code performs all writes.
+import { buildWikiDraftSystemPrompt } from "./wiki-skill.js";
 import type { SearchNodeHit, WikiDraft, WikiDraftItem, WikiNode, WorkerConfig } from "./types.js";
 
 type OpenAITextContent = {
@@ -38,8 +39,7 @@ export async function generateDraft(source: WikiNode, contextHits: SearchNodeHit
       input: [
         {
           role: "system",
-          content:
-            "Generate one review-ready wiki draft from raw source material. Keep raw transcript out of wiki content. Every item must cite the provided source_path. Do not canonicalize decisions."
+          content: buildWikiDraftSystemPrompt()
         },
         {
           role: "user",

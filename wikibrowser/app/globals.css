@@ -24,6 +24,31 @@ a {
   color: #1f6feb;
 }
 
+button {
+  transition-duration: 150ms;
+  transition-property: background-color, border-color, box-shadow, color, opacity, transform;
+  transition-timing-function: ease-out;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+button[aria-busy="true"] {
+  cursor: progress;
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition-duration: 1ms;
+  }
+
+  button:not(:disabled):active {
+    transform: none;
+  }
+}
+
 pre,
 code {
   font-family: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;

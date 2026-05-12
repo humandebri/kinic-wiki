@@ -58,9 +58,11 @@ export type WikiDraft = {
 };
 
 export type QueueMessage = {
+  kind?: "source";
   databaseId: string;
   sourcePath: string;
   sourceEtag: string;
+  requestPath?: string;
 };
 
 export type ManualRunInput = {
@@ -76,8 +78,10 @@ export type WorkerConfig = {
   model: string;
   targetRoot: string;
   sourcePrefix: string;
+  ingestRequestPrefix: string;
   contextPrefix: string;
   maxRawChars: number;
+  maxFetchedBytes: number;
   maxContextHits: number;
   maxOutputTokens: number;
 };
@@ -93,4 +97,18 @@ export type SourceJob = {
   attempts: number;
   last_error: string | null;
   updated_at: string;
+};
+
+export type IngestRequestStatus = "queued" | "fetching" | "source_written" | "generating" | "completed" | "failed";
+
+export type UrlIngestRequest = {
+  path: string;
+  etag: string;
+  status: IngestRequestStatus;
+  url: string;
+  requestedBy: string;
+  requestedAt: string;
+  sourcePath: string | null;
+  targetPath: string | null;
+  error: string | null;
 };

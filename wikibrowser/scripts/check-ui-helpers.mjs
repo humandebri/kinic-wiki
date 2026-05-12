@@ -4,11 +4,20 @@ import ts from "typescript";
 
 const { collectLintHints, provenancePathFor, rawSourceLinksFor } = await importTs("../lib/lint-hints.ts");
 const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
+const { readBrowserNodeCache } = await importTs("../lib/browser-node-cache.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
 const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
+const { buildRecipeClipDocument, normalizeClipUrl, parseTags, recipeClipPath, renderRecipeClipMarkdown } = await importTs("../lib/recipe-clips.ts");
+const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
+const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+
+assert.match(globalsCss, /button:not\(:disabled\):active/);
+assert.match(globalsCss, /transform: scale\(0\.98\)/);
+assert.match(globalsCss, /button\[aria-busy="true"\]/);
+assert.match(globalsCss, /prefers-reduced-motion/);
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);
@@ -107,6 +116,32 @@ assert.notEqual(
   graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1, "aaaaa-aa")
 );
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget", "aaaaa-aa"));
+
+const cachedNodeContext = {
+  node: {
+    path: "/Wiki/demo.md",
+    kind: "file",
+    content: "# Demo",
+    updatedAt: null,
+    etag: "node-etag",
+    sizeBytes: 6
+  },
+  incomingLinks: [],
+  outgoingLinks: []
+};
+const cachedChildren = [child("/Wiki/demo", "demo", "directory")];
+const nodeContextCache = new Map([["node-key", cachedNodeContext]]);
+const childNodesCache = new Map([["children-key", cachedChildren], ["node-key", cachedChildren]]);
+assert.deepEqual(readBrowserNodeCache(nodeContextCache, childNodesCache, "missing-key"), null);
+assert.deepEqual(readBrowserNodeCache(nodeContextCache, childNodesCache, "children-key"), {
+  kind: "children",
+  children: cachedChildren
+});
+assert.deepEqual(readBrowserNodeCache(nodeContextCache, childNodesCache, "node-key"), {
+  kind: "node",
+  context: cachedNodeContext
+});
+
 assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
 assert.equal(formatCycles(850_000_000_000n), "850.00B");
 assert.equal(formatCycles(123_450_000n), "123.45M");
@@ -115,6 +150,37 @@ assert.equal(cycleTone(5_000_000_000_000n), "blue");
 assert.equal(cycleTone(1_000_000_000_000n), "amber");
 assert.equal(cycleTone(999_999_999_999n), "red");
 assert.equal(cycleTone(null), "gray");
+assert.equal(normalizeClipUrl("HTTPS://Example.COM:443/a?b=1#section"), "https://example.com/a?b=1");
+assert.throws(() => normalizeClipUrl("ftp://example.com/a"), /http or https/);
+assert.deepEqual(parseTags("#easy, dinner easy\nquick"), ["easy", "dinner", "quick"]);
+const clipPath = await recipeClipPath("https://example.com/a?b=1");
+assert.match(clipPath, /^\/Sources\/Recipes\/example\.com\/[a-f0-9]{12}\.md$/);
+assert.equal(clipPath, await recipeClipPath("https://example.com/a?b=1"));
+const clipMarkdown = renderRecipeClipMarkdown({
+  url: "https://example.com/a",
+  title: "Weeknight Pasta",
+  site: "example.com",
+  capturedAt: "2026-05-12T00:00:00.000Z",
+  tags: ["easy", "pasta"],
+  userNote: "halve salt",
+  extractedText: "Ingredients\n- tomato"
+});
+assert.match(clipMarkdown, /source_url: "https:\/\/example\.com\/a"/);
+assert.match(clipMarkdown, /# Weeknight Pasta/);
+assert.match(clipMarkdown, /halve salt/);
+const clipDocument = await buildRecipeClipDocument({
+  url: "https://example.com/a#ignored",
+  title: "Weeknight Pasta",
+  site: "example.com",
+  capturedAt: "2026-05-12T00:00:00.000Z",
+  tags: ["easy"],
+  userNote: "",
+  extractedText: "body"
+});
+assert.equal(clipDocument.normalizedUrl, "https://example.com/a");
+assert.equal(JSON.parse(clipDocument.metadataJson).app, "recipe_clip");
+assert.match(searchPanelSource, /prefix = "\/Wiki"/);
+assert.match(searchPanelSource, /prefix, readIdentity/);
 
 console.log("UI helper checks OK");
 

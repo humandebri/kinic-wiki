@@ -1,11 +1,12 @@
 "use client";
 
 import { AuthClient } from "@icp-sdk/auth/client";
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AuthControls, CreatedDatabasePanel, DatabaseBody, StatusPanel } from "./home-ui";
 import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import type { DatabaseSummary } from "@/lib/types";
-import { createDatabaseAuthenticated, listDatabasesAuthenticated } from "@/lib/vfs-client";
+import { createDatabaseAuthenticated, listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
+import type { DatabaseRow } from "./home-ui";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -14,14 +15,15 @@ export default function HomePage() {
   const refreshSeqRef = useRef(0);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [principal, setPrincipal] = useState<string | null>(null);
-  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [databases, setDatabases] = useState<DatabaseRow[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [createdDatabaseId, setCreatedDatabaseId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const refreshDatabases = useCallback(
-    async (client: AuthClient) => {
+    async (client: AuthClient | null) => {
       const refreshSeq = (refreshSeqRef.current += 1);
       const isCurrentRefresh = () => refreshSeq === refreshSeqRef.current;
       if (!canisterId) {
@@ -31,12 +33,23 @@ export default function HomePage() {
       }
       setLoadState("loading");
       setError(null);
+      setWarning(null);
       try {
-        const identity = client.getIdentity();
-        const nextDatabases = await listDatabasesAuthenticated(canisterId, identity);
+        const identity = client?.getIdentity() ?? null;
+        const [publicResult, memberResult] = await Promise.allSettled([
+          listDatabasesPublic(canisterId),
+          identity ? listDatabasesAuthenticated(canisterId, identity) : Promise.resolve<DatabaseSummary[]>([])
+        ]);
+        if (publicResult.status === "rejected" && memberResult.status === "rejected") {
+          throw new Error(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
+        }
+        const publicDatabases = publicResult.status === "fulfilled" ? publicResult.value : [];
+        const memberDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
+        const nextDatabases = mergeDatabaseRows(memberDatabases, publicDatabases);
         if (!isCurrentRefresh()) return;
         setDatabases(nextDatabases);
-        setPrincipal(identity.getPrincipal().toText());
+        setPrincipal(identity?.getPrincipal().toText() ?? null);
+        setWarning(listWarning(publicResult, memberResult));
         setLoadState("ready");
       } catch (cause) {
         if (!isCurrentRefresh()) return;
@@ -56,6 +69,8 @@ export default function HomePage() {
         setAuthClient(client);
         if (await client.isAuthenticated()) {
           await refreshDatabases(client);
+        } else {
+          await refreshDatabases(null);
         }
       })
       .catch((cause) => {
@@ -93,6 +108,7 @@ export default function HomePage() {
     setDatabases([]);
     setCreatedDatabaseId(null);
     setError(null);
+    setWarning(null);
     setLoadState("idle");
   }
 
@@ -133,10 +149,11 @@ export default function HomePage() {
         </header>
 
         {error ? <StatusPanel tone="error" message={error} /> : null}
+        {warning ? <StatusPanel tone="info" message={warning} /> : null}
         {createdDatabaseId ? <CreatedDatabasePanel databaseId={createdDatabaseId} /> : null}
 
-        {principal ? (
-          <section className="rounded-lg border border-line bg-paper shadow-sm">
+        <section className="rounded-lg border border-line bg-paper shadow-sm">
+          {principal ? (
             <div className="flex flex-col gap-3 border-b border-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-ink">Databases</h2>
@@ -151,164 +168,35 @@ export default function HomePage() {
                 {creating ? "Creating..." : "Create database"}
               </button>
             </div>
-            <DatabaseBody databases={databases} loading={loadState === "loading"} />
-          </section>
-        ) : (
-          <section className="rounded-lg border border-line bg-paper p-8 shadow-sm">
-            <p className="text-sm leading-6 text-muted">
-              Login with Internet Identity to list databases where your principal has membership.
-            </p>
-          </section>
-        )}
+          ) : (
+            <div className="border-b border-line px-4 py-4">
+              <h2 className="text-lg font-semibold text-ink">Public databases</h2>
+              <p className="mt-1 text-sm leading-6 text-muted">Login with Internet Identity to list databases where your principal has membership.</p>
+            </div>
+          )}
+          <DatabaseBody databases={databases} loading={loadState === "loading"} />
+        </section>
       </section>
     </main>
   );
 }
 
-function AuthControls({
-  authReady,
-  principal,
-  loading,
-  onLogin,
-  onLogout,
-  onRefresh
-}: {
-  authReady: boolean;
-  principal: string | null;
-  loading: boolean;
-  onLogin: () => void;
-  onLogout: () => void;
-  onRefresh: () => void;
-}) {
-  if (!principal) {
-    return (
-      <button
-        className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={!authReady}
-        data-tid="login-button"
-        type="button"
-        onClick={onLogin}
-      >
-        Login with Internet Identity
-      </button>
-    );
+function mergeDatabaseRows(memberDatabases: DatabaseSummary[], publicDatabases: DatabaseSummary[]): DatabaseRow[] {
+  const publicIds = new Set(publicDatabases.map((database) => database.databaseId));
+  const rows = new Map<string, DatabaseRow>();
+  for (const database of publicDatabases) {
+    rows.set(database.databaseId, { ...database, publicReadable: true });
   }
-
-  return (
-    <div className="flex flex-wrap gap-2">
-      <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" disabled={loading} type="button" onClick={onRefresh}>
-        Refresh
-      </button>
-      <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" type="button" onClick={onLogout}>
-        Logout
-      </button>
-    </div>
-  );
+  for (const database of memberDatabases) {
+    rows.set(database.databaseId, { ...database, publicReadable: publicIds.has(database.databaseId) });
+  }
+  return [...rows.values()].sort((left, right) => left.databaseId.localeCompare(right.databaseId));
 }
 
-function DatabaseBody({ databases, loading }: { databases: DatabaseSummary[]; loading: boolean }) {
-  if (loading) {
-    return <div className="p-6 text-sm text-muted">Loading databases...</div>;
-  }
-  if (databases.length === 0) {
-    return <div className="p-6 text-sm text-muted">No databases are linked to this principal.</div>;
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-left text-sm">
-        <thead className="bg-white/70 text-xs uppercase tracking-[0.12em] text-muted">
-          <tr>
-            <th className="px-4 py-3 font-medium">Database</th>
-            <th className="px-4 py-3 font-medium">Role</th>
-            <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium">Logical size</th>
-            <th className="px-4 py-3 font-medium">Archive</th>
-            <th className="px-4 py-3 font-medium">Open</th>
-            <th className="px-4 py-3 font-medium">Skills</th>
-            <th className="px-4 py-3 font-medium">Manage</th>
-          </tr>
-        </thead>
-        <tbody>
-          {databases.map((database) => (
-            <tr key={database.databaseId} className="border-t border-line">
-              <td className="px-4 py-3 font-mono text-xs text-ink">{database.databaseId}</td>
-              <td className="px-4 py-3 capitalize text-ink">{database.role}</td>
-              <td className="px-4 py-3 capitalize text-ink">{database.status}</td>
-              <td className="px-4 py-3 text-ink">{formatBytes(database.logicalSizeBytes)}</td>
-              <td className="px-4 py-3 text-muted">{databaseMarker(database)}</td>
-              <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={`/${encodeURIComponent(database.databaseId)}/Wiki`}>
-                  Open
-                </Link>
-              </td>
-              <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(database.databaseId)}`}>
-                  Registry
-                </Link>
-              </td>
-              <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={`/dashboard/${encodeURIComponent(database.databaseId)}`}>
-                  Manage
-                </Link>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function StatusPanel({ tone, message }: { tone: "error" | "info"; message: string }) {
-  const toneClass = tone === "error" ? "border-red-200 bg-red-50 text-red-900" : "border-line bg-paper text-ink";
-  return <div className={`rounded-lg border px-4 py-3 text-sm ${toneClass}`}>{message}</div>;
-}
-
-function CreatedDatabasePanel({ databaseId }: { databaseId: string }) {
-  return (
-    <div className="rounded-lg border border-line bg-paper px-4 py-3 text-sm text-ink">
-      Created <span className="font-mono">{databaseId}</span>.{" "}
-      <Link className="text-accent no-underline hover:underline" href={`/${encodeURIComponent(databaseId)}/Wiki`}>
-        Open
-      </Link>
-    </div>
-  );
-}
-
-function formatBytes(value: string): string {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes)) {
-    return value;
-  }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB"];
-  let unitIndex = -1;
-  let current = bytes;
-  while (current >= 1024 && unitIndex < units.length - 1) {
-    current /= 1024;
-    unitIndex += 1;
-  }
-  return `${current.toFixed(current >= 10 ? 1 : 2)} ${units[unitIndex]}`;
-}
-
-function databaseMarker(database: DatabaseSummary): string {
-  if (database.deletedAtMs) {
-    return `Deleted ${formatTimestamp(database.deletedAtMs)}`;
-  }
-  if (database.archivedAtMs) {
-    return `Archived ${formatTimestamp(database.archivedAtMs)}`;
-  }
-  return "-";
-}
-
-function formatTimestamp(value: string): string {
-  const milliseconds = Number(value);
-  if (!Number.isFinite(milliseconds)) {
-    return value;
-  }
-  return new Date(milliseconds).toLocaleString();
+function listWarning(publicResult: PromiseSettledResult<DatabaseSummary[]>, memberResult: PromiseSettledResult<DatabaseSummary[]>): string | null {
+  if (publicResult.status === "rejected") return `Public database list unavailable: ${errorMessage(publicResult.reason)}`;
+  if (memberResult.status === "rejected") return `Member database list unavailable: ${errorMessage(memberResult.reason)}`;
+  return null;
 }
 
 function errorMessage(cause: unknown): string {
