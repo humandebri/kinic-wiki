@@ -8,23 +8,23 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
-use candid::export_service;
+use candid::{Principal, export_service};
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DatabaseArchiveChunk,
-    DatabaseArchiveInfo, DatabaseInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
-    DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
-    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
-    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
-    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
-    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry, OutgoingLinksRequest,
-    QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest, SearchNodeHit,
-    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    DatabaseArchiveInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
+    DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
+    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
+    GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
+    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MemoryCapability,
+    MemoryManifest, MemoryRoot, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
+    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
 };
 
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
@@ -104,24 +104,24 @@ fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String>
 }
 
 #[update]
-fn create_database(database_id: String) -> Result<(), String> {
-    with_usage(
-        "create_database",
-        Some(database_id.clone()),
-        |service, caller, now| {
-            let meta = service.reserve_database(&database_id, caller, now)?;
-            if let Err(error) = mount_database_file(&meta) {
-                let cleanup_error = service.discard_database_reservation(&database_id).err();
-                return Err(database_create_error(error, cleanup_error));
-            }
-            if let Err(error) = service.run_database_migrations(&database_id) {
-                unmount_database_file(&meta.db_file_name);
-                let cleanup_error = service.discard_database_reservation(&database_id).err();
-                return Err(database_create_error(error, cleanup_error));
-            }
-            Ok(())
-        },
-    )
+fn create_database() -> Result<String, String> {
+    with_usage("create_database", None, |service, caller, now| {
+        let meta = service.reserve_generated_database(caller, now)?;
+        if let Err(error) = mount_database_file(&meta) {
+            let cleanup_error = service
+                .discard_database_reservation(&meta.database_id)
+                .err();
+            return Err(database_create_error(error, cleanup_error));
+        }
+        if let Err(error) = service.run_database_migrations(&meta.database_id) {
+            unmount_database_file(&meta.db_file_name);
+            let cleanup_error = service
+                .discard_database_reservation(&meta.database_id)
+                .err();
+            return Err(database_create_error(error, cleanup_error));
+        }
+        Ok(meta.database_id)
+    })
 }
 
 #[update]
@@ -134,6 +134,9 @@ fn grant_database_access(
         "grant_database_access",
         Some(database_id.clone()),
         |service, caller, now| {
+            let principal = Principal::from_text(&principal)
+                .map_err(|error| format!("invalid principal: {error}"))?
+                .to_text();
             service.grant_database_access(&database_id, caller, &principal, role, now)
         },
     )
@@ -144,7 +147,12 @@ fn revoke_database_access(database_id: String, principal: String) -> Result<(), 
     with_usage(
         "revoke_database_access",
         Some(database_id.clone()),
-        |service, caller, _now| service.revoke_database_access(&database_id, caller, &principal),
+        |service, caller, _now| {
+            let principal = Principal::from_text(&principal)
+                .map_err(|error| format!("invalid principal: {error}"))?
+                .to_text();
+            service.revoke_database_access(&database_id, caller, &principal)
+        },
     )
 }
 
@@ -154,8 +162,8 @@ fn list_database_members(database_id: String) -> Result<Vec<DatabaseMember>, Str
 }
 
 #[query]
-fn list_databases() -> Result<Vec<DatabaseInfo>, String> {
-    with_service(|service| service.list_database_infos_for_caller(&caller_text()))
+fn list_databases() -> Result<Vec<DatabaseSummary>, String> {
+    with_service(|service| service.list_database_summaries_for_caller(&caller_text()))
 }
 
 #[update]
@@ -182,7 +190,7 @@ fn begin_database_archive(database_id: String) -> Result<DatabaseArchiveInfo, St
     with_usage(
         "begin_database_archive",
         Some(database_id.clone()),
-        |service, caller, _now| service.begin_database_archive(&database_id, caller),
+        |service, caller, now| service.begin_database_archive(&database_id, caller, now),
     )
 }
 
@@ -205,14 +213,21 @@ fn finalize_database_archive(database_id: String, snapshot_hash: Vec<u8>) -> Res
         "finalize_database_archive",
         Some(database_id.clone()),
         |service, caller, now| {
-            let meta = service.list_databases().and_then(|databases| {
-                databases
-                    .into_iter()
-                    .find(|meta| meta.database_id == database_id)
-                    .ok_or_else(|| format!("database not found: {database_id}"))
-            })?;
-            service.finalize_database_archive(&database_id, caller, snapshot_hash, now)?;
+            let meta =
+                service.finalize_database_archive(&database_id, caller, snapshot_hash, now)?;
             unmount_database_file(&meta.db_file_name);
+            Ok(())
+        },
+    )
+}
+
+#[update]
+fn cancel_database_archive(database_id: String) -> Result<(), String> {
+    with_usage(
+        "cancel_database_archive",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            service.cancel_database_archive(&database_id, caller, now)?;
             Ok(())
         },
     )
@@ -228,14 +243,22 @@ fn begin_database_restore(
         "begin_database_restore",
         Some(database_id.clone()),
         |service, caller, now| {
-            let meta = service.begin_database_restore(
+            let restore = service.begin_database_restore_session(
                 &database_id,
                 caller,
                 snapshot_hash,
                 size_bytes,
                 now,
             )?;
-            mount_database_file(&meta)
+            if let Err(error) = mount_database_file(&restore.meta) {
+                service
+                    .rollback_database_restore_begin(restore.rollback, now)
+                    .map_err(|rollback_error| {
+                        format!("{error}; restore rollback failed: {rollback_error}")
+                    })?;
+                return Err(error);
+            }
+            Ok(())
         },
     )
 }
@@ -462,6 +485,9 @@ fn mount_database_file(meta: &DatabaseMeta) -> Result<(), String> {
 
 #[cfg(test)]
 fn mount_database_file(_meta: &DatabaseMeta) -> Result<(), String> {
+    if TEST_MOUNT_DATABASE_FILE_FAIL_ONCE.with(|flag| flag.replace(false)) {
+        return Err("test mount failure".to_string());
+    }
     Ok(())
 }
 
@@ -472,6 +498,16 @@ fn unmount_database_file(db_file_name: &str) {
 
 #[cfg(test)]
 fn unmount_database_file(_db_file_name: &str) {}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MOUNT_DATABASE_FILE_FAIL_ONCE: RefCell<bool> = const { RefCell::new(false) };
+}
+
+#[cfg(test)]
+fn fail_next_mount_database_file_for_test() {
+    TEST_MOUNT_DATABASE_FILE_FAIL_ONCE.with(|flag| flag.replace(true));
+}
 
 fn database_create_error(error: String, cleanup_error: Option<String>) -> String {
     match cleanup_error {

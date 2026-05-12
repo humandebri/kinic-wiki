@@ -13,6 +13,7 @@ export function buildRawSource(capture, now = new Date()) {
     conversation_id: conversationIdFromUrl(capture.url),
     conversation_title: capture.conversationTitle,
     captured_at: capture.capturedAt,
+    message_count: capture.messages.length,
     source_id: sourceId
   };
   return {
@@ -51,10 +52,10 @@ function rawMarkdown(capture) {
     "",
     "## Metadata",
     "",
-    `- provider: ${capture.provider}`,
-    `- source_url: ${capture.url}`,
-    `- captured_at: ${capture.capturedAt}`,
-    `- conversation_title: ${capture.conversationTitle}`,
+    `- provider: ${metadataValue(capture.provider)}`,
+    `- source_url: ${metadataValue(capture.url)}`,
+    `- captured_at: ${metadataValue(capture.capturedAt)}`,
+    `- conversation_title: ${metadataValue(capture.conversationTitle)}`,
     `- message_count: ${capture.messages.length}`,
     "",
     "## Chat",
@@ -69,6 +70,10 @@ function rawMarkdown(capture) {
     lines.push("");
   });
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function metadataValue(value) {
+  return JSON.stringify(String(value || ""));
 }
 
 function slug(value) {

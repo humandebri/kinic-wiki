@@ -1,5 +1,7 @@
 "use client";
 
+import { AuthClient } from "@icp-sdk/auth/client";
+import type { Identity } from "@icp-sdk/core/agent";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
@@ -13,6 +15,7 @@ import { Inspector } from "@/components/inspector";
 import { LintPanel } from "@/components/lint-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
+import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import { hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
 import type { ChildNode, NodeContext, WikiNode } from "@/lib/types";
@@ -47,7 +50,7 @@ export function WikiBrowser() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const routeState = useMemo(() => parseWikiRoute(pathname), [pathname]);
-  const canisterId = routeState.canisterId ?? "";
+  const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const databaseId = routeState.databaseId ?? "";
   const isSearchPage = useMemo(() => isBrowserSearchPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
   const isGraphPage = useMemo(() => isBrowserGraphPathname(canisterId, databaseId, pathname), [canisterId, databaseId, pathname]);
@@ -61,11 +64,33 @@ export function WikiBrowser() {
   const tab = parseTab(searchParams.get("tab"));
   const query = isSearchPage ? searchParams.get("q") ?? "" : "";
   const searchKind = parseSearchKind(searchParams.get("kind"));
-  const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath);
+  const [authClient, setAuthClient] = useState<AuthClient | null>(null);
+  const [readIdentity, setReadIdentity] = useState<Identity | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
   const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const invalidCanister = validateCanisterText(canisterId);
+
+  useEffect(() => {
+    let cancelled = false;
+    AuthClient.create()
+      .then(async (client) => {
+        if (cancelled) return;
+        setAuthClient(client);
+        if (await client.isAuthenticated()) {
+          if (!cancelled) setReadIdentity(client.getIdentity());
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setAuthError(errorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,9 +100,9 @@ export function WikiBrowser() {
     if (isGraphPage && !graphCenter) {
       return;
     }
-    const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath);
+    const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
     import("@/lib/vfs-client")
-      .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20))
+      .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20, readIdentity ?? undefined))
       .then((data) => {
         if (!cancelled) {
           if (!data) {
@@ -98,7 +123,7 @@ export function WikiBrowser() {
           return;
         }
         import("@/lib/vfs-client")
-          .then(({ listChildren }) => listChildren(canisterId, databaseId, selectedPath))
+          .then(({ listChildren }) => listChildren(canisterId, databaseId, selectedPath, readIdentity ?? undefined))
           .then((data) => {
             if (!cancelled) {
               if (data.length === 0 && looksLikeFilePath(selectedPath)) {
@@ -123,7 +148,29 @@ export function WikiBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, selectedPath]);
+  }, [canisterId, databaseId, graphCenter, invalidCanister, isGraphPage, readIdentity, readPrincipal, selectedPath]);
+
+  async function login() {
+    if (!authClient) return;
+    setAuthError(null);
+    await authClient.login({
+      identityProvider: identityProviderUrl(),
+      maxTimeToLive: DELEGATION_TTL_NS,
+      onSuccess: () => {
+        setReadIdentity(authClient.getIdentity());
+      },
+      onError: (cause) => {
+        setAuthError(errorMessage(cause));
+      }
+    });
+  }
+
+  async function logout() {
+    if (!authClient) return;
+    await authClient.logout();
+    setReadIdentity(null);
+    setAuthError(null);
+  }
 
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
@@ -135,11 +182,16 @@ export function WikiBrowser() {
       <TopBar
         canisterId={canisterId}
         databaseId={databaseId}
+        authReady={Boolean(authClient)}
+        authError={authError}
+        principal={readPrincipal}
         query={query}
         searchKind={searchKind}
         isGraphPage={isGraphPage}
         graphCenter={graphCenter}
         selectedPath={selectedPath}
+        onLogin={login}
+        onLogout={logout}
       />
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
@@ -152,13 +204,14 @@ export function WikiBrowser() {
             selectedPath={selectedPath}
             node={currentNode.data}
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
+            readIdentity={readIdentity}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
           {isGraphPage ? (
-            <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} />
+            <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} readIdentity={readIdentity} />
           ) : isSearchPage ? (
-            <SearchPanel canisterId={canisterId} databaseId={databaseId} query={query} initialKind={searchKind} />
+            <SearchPanel canisterId={canisterId} databaseId={databaseId} query={query} initialKind={searchKind} readIdentity={readIdentity} />
           ) : (
             <>
               <DocumentHeader
@@ -177,6 +230,9 @@ export function WikiBrowser() {
                 view={view}
                 canisterId={canisterId}
                 databaseId={databaseId}
+                authPrompt={!readIdentity && isPermissionError(currentNode.error || currentChildren.error)}
+                onLogin={login}
+                authReady={Boolean(authClient)}
               />
             </>
           )}
@@ -194,6 +250,7 @@ export function WikiBrowser() {
               incomingLinks={currentNodeContext.data?.incomingLinks ?? null}
               incomingError={currentNodeContext.error}
               outgoingLinks={currentNodeContext.data?.outgoingLinks ?? []}
+              readIdentity={readIdentity}
             />
           </aside>
         ) : null}
@@ -208,7 +265,8 @@ function LeftPane({
   databaseId,
   selectedPath,
   node,
-  autoExpandExplorer
+  autoExpandExplorer,
+  readIdentity
 }: {
   tab: ModeTab;
   canisterId: string;
@@ -216,29 +274,40 @@ function LeftPane({
   selectedPath: string;
   node: WikiNode | null;
   autoExpandExplorer: boolean;
+  readIdentity: Identity | null;
 }) {
-  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" />;
-  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} />;
+  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" readIdentity={readIdentity} />;
+  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
   if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} databaseId={databaseId} />;
-  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} />;
+  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={readIdentity} />;
 }
 
 function TopBar({
   canisterId,
   databaseId,
+  authReady,
+  authError,
+  principal,
   query,
   searchKind,
   isGraphPage,
   graphCenter,
-  selectedPath
+  selectedPath,
+  onLogin,
+  onLogout
 }: {
   canisterId: string;
   databaseId: string;
+  authReady: boolean;
+  authError: string | null;
+  principal: string | null;
   query: string;
   searchKind: "path" | "full";
   isGraphPage: boolean;
   graphCenter: string | null;
   selectedPath: string;
+  onLogin: () => void;
+  onLogout: () => void;
 }) {
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
   return (
@@ -247,7 +316,26 @@ function TopBar({
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Wiki Canister Browser</p>
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
       </div>
+      <div className="hidden min-w-0 max-w-[180px] shrink text-xs text-muted sm:block">
+        <span className="font-mono">db:</span> <span className="font-medium text-ink">{databaseId}</span>
+      </div>
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+        {authError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{authError}</span> : null}
+        {principal ? (
+          <button className="hidden rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink md:block" type="button" onClick={onLogout}>
+            Logout
+          </button>
+        ) : (
+          <button
+            className="hidden rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 md:block"
+            disabled={!authReady}
+            data-tid="login-button"
+            type="button"
+            onClick={onLogin}
+          >
+            Login
+          </button>
+        )}
         <Link
           className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
           href={hrefForGraph(canisterId, databaseId, graphLinkCenter)}
@@ -260,6 +348,10 @@ function TopBar({
       </div>
     </header>
   );
+}
+
+export function isPermissionError(message: string | null): boolean {
+  return Boolean(message && /access|auth|permission|principal|unauthorized|not allowed|forbidden/i.test(message));
 }
 
 function HeaderSearch({
@@ -424,37 +516,38 @@ function looksLikeFilePath(path: string): boolean {
 
 function validateCanisterText(canisterId: string): string | null {
   if (!canisterId) {
-    return "missing canister id";
+    return "NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID is not configured";
   }
   if (!/^[a-z0-9-]+$/i.test(canisterId)) {
-    return "canister id contains unsupported characters";
+    return "NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID contains unsupported characters";
   }
   return null;
 }
 
-function parseWikiRoute(pathname: string): { canisterId: string | null; databaseId: string | null; nodePath: string } {
+function parseWikiRoute(pathname: string): { databaseId: string | null; nodePath: string } {
   const segments = pathname.split("/").filter(Boolean);
-  if (segments[0] !== "w" || !segments[1] || segments[2] !== "db" || !segments[3]) {
-    return { canisterId: null, databaseId: null, nodePath: "/Wiki" };
+  if (!segments[0]) {
+    return { databaseId: null, nodePath: "/Wiki" };
   }
   const path = segments
-    .slice(4)
+    .slice(1)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
   return {
-    canisterId: decodePathSegment(segments[1]),
-    databaseId: decodePathSegment(segments[3]),
-    nodePath: path ? `/${path}` : "/Wiki"
+    databaseId: decodePathSegment(segments[0]),
+    nodePath: path ? `/${path}` : "/Wiki",
   };
 }
 
 function isBrowserSearchPathname(canisterId: string, databaseId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/search`;
+  void canisterId;
+  return pathname === `/${encodeURIComponent(databaseId)}/search`;
 }
 
 function isBrowserGraphPathname(canisterId: string, databaseId: string, pathname: string): boolean {
-  return pathname === `/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/graph`;
+  void canisterId;
+  return pathname === `/${encodeURIComponent(databaseId)}/graph`;
 }
 
 function decodePathSegment(segment: string): string {

@@ -41,8 +41,9 @@ Current scope:
 
 Storage constraints:
 
-- Hot or restoring databases use stable-memory mount IDs `11..=32767`, so one canister can keep up to 32757 active database mounts at once.
-- Archived or deleted databases release their active mount ID.
+- User databases consume stable-memory mount IDs `11..=32767`, so one canister has 32757 lifetime database slots in v1.
+- Archived or deleted databases clear their active mount ID, but v1 does not recycle historical mount IDs.
+- Deleting, archiving, and restoring databases still consume cumulative lifetime mount IDs.
 - See [`docs/DB_LIFECYCLE.md`](docs/DB_LIFECYCLE.md) for DB status, slot reuse, archive, and restore behavior.
 - Link graph queries are backed by `fs_links`; SQLite size grows with stored link edges and two link indexes.
 - Node writes update the link index in the same transaction as node content and FTS updates.
@@ -98,6 +99,16 @@ CANISTER_ID=<canister-id> LOCAL=1 scripts/demo_skill_kb.sh
 See [`docs/QUICKSTART_SKILL_KB.md`](docs/QUICKSTART_SKILL_KB.md) for the manual 5 minute flow.
 The sample under [`examples/skill-kb`](examples/skill-kb) shows the intended loop: upload a skill package, find it from task context, inspect package files and evidence, record run evidence, then promote it.
 The demo script can be rerun; if the database already exists, it links and continues.
+
+DB-backed commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` DB is created implicitly. Older single-DB commands such as `vfs-cli read-node --path /Wiki/index.md` must now select a DB:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/index.md --input index.md
+cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+```
+
+`database create` prints the generated DB ID. Use that ID for `--database-id` and grants. Public browser reads use the anonymous principal `2vxsx-fae`, so public DBs must grant that principal `reader`.
 
 ## Main Interfaces
 

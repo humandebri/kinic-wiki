@@ -7,9 +7,7 @@ const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
-const { splitMarkdownFrontmatter } = await importTs("../lib/markdown-frontmatter.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
-const { parseSkillManifest } = await importTs("../lib/skill-manifest.ts");
 const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
@@ -93,23 +91,6 @@ assert.deepEqual(
   ["# One", "## Two"]
 );
 assert.equal(splitMarkdownPreviewSections("No headings\nOnly prose").length, 1);
-const frontmatter = splitMarkdownFrontmatter(`---
-name: canister-security
-description: "IC-specific security patterns"
-metadata:
-  title: Canister Security
-  category: Security
----
-
-# Canister Security
-`);
-assert.equal(frontmatter.body, "# Canister Security\n");
-assert.deepEqual(frontmatter.fields, [
-  { key: "name", value: "canister-security" },
-  { key: "description", value: "IC-specific security patterns" },
-  { key: "metadata.title", value: "Canister Security" },
-  { key: "metadata.category", value: "Security" }
-]);
 assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("bbbbb-bb", "alpha", "/Wiki/index.md"));
 assert.notEqual(
   graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
@@ -120,30 +101,12 @@ assert.equal(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequ
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "full", "budget"));
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "beta", "path", "budget"));
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("bbbbb-bb", "alpha", "path", "budget"));
-const skillManifest = parseSkillManifest(`---
-kind: kinic.skill
-schema_version: 1
-id: legal-review
-version: 0.1.0
-entry: SKILL.md
-title: Legal Review
-summary: Contract review
-tags:
-  - legal
-use_cases:
-  - Review redlines
-status: reviewed
-related:
-  - /Wiki/legal/contracts.md
----
-# Skill Manifest
-`);
-assert.equal(skillManifest.summary, "Contract review");
-assert.equal(skillManifest.title, "Legal Review");
-assert.deepEqual(skillManifest.tags, ["legal"]);
-assert.deepEqual(skillManifest.useCases, ["Review redlines"]);
-assert.equal(skillManifest.status, "reviewed");
-assert.deepEqual(skillManifest.related, ["/Wiki/legal/contracts.md"]);
+assert.notEqual(nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md"), nodeRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", "aaaaa-aa"));
+assert.notEqual(
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1),
+  graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1, "aaaaa-aa")
+);
+assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget", "aaaaa-aa"));
 assert.equal(formatCycles(12_345_000_000_000n), "12.34T");
 assert.equal(formatCycles(850_000_000_000n), "850.00B");
 assert.equal(formatCycles(123_450_000n), "123.45M");

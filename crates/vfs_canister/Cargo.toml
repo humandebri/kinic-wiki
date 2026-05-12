@@ -22,4 +22,5 @@ vfs-types = { path = "../vfs_types" }
 wiki-domain = { path = "../wiki_domain" }
 
 [dev-dependencies]
+sha2 = "0.10.9"
 tempfile = "3.23.0"

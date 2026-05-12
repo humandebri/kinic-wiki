@@ -28,6 +28,8 @@ pub struct DatabaseMember {
 pub enum DatabaseStatus {
     #[serde(alias = "Hot")]
     Hot,
+    #[serde(alias = "Archiving")]
+    Archiving,
     #[serde(alias = "Archived")]
     Archived,
     #[serde(alias = "Deleted")]
@@ -44,6 +46,16 @@ pub struct DatabaseInfo {
     pub schema_version: String,
     pub logical_size_bytes: u64,
     pub snapshot_hash: Option<Vec<u8>>,
+    pub archived_at_ms: Option<i64>,
+    pub deleted_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct DatabaseSummary {
+    pub database_id: String,
+    pub status: DatabaseStatus,
+    pub role: DatabaseRole,
+    pub logical_size_bytes: u64,
     pub archived_at_ms: Option<i64>,
     pub deleted_at_ms: Option<i64>,
 }

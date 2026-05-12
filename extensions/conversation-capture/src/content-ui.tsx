@@ -7,7 +7,10 @@ import { cancelCurrentTabExport, resumeCurrentTabExport, startCurrentTabExport }
 import { DEFAULT_EXPORT_LIMIT, normalizeExportLimit } from "./history-links.js";
 
 const ROOT_ID = "kinic-conversation-capture-root";
-const config = signal({ canisterId: "", databaseId: "", host: "https://icp0.io" });
+const DEFAULT_CANISTER_ID = process.env.KINIC_CAPTURE_CANISTER_ID || "";
+const DEFAULT_HOST = process.env.KINIC_CAPTURE_HOST || "http://127.0.0.1:8001";
+const DEFAULT_DATABASE_ID = process.env.KINIC_CAPTURE_DATABASE_ID || "default";
+const config = signal({ canisterId: DEFAULT_CANISTER_ID, databaseId: DEFAULT_DATABASE_ID, host: DEFAULT_HOST });
 const countText = signal(String(DEFAULT_EXPORT_LIMIT));
 const status = signal("idle");
 const error = signal("");
@@ -15,7 +18,7 @@ const panelOpen = signal(false);
 const logs = signal([]);
 const phase = signal("idle");
 const progress = signal({ total: 0, done: 0, ok: 0, failed: 0 });
-const canExport = computed(() => Boolean(config.value.canisterId && config.value.databaseId && status.value !== "exporting"));
+const canExport = computed(() => Boolean(config.value.canisterId && status.value !== "exporting"));
 let resumeStarted = false;
 
 ensureMounted();
@@ -129,10 +132,15 @@ async function startExport() {
   phase.value = "fetching";
   progress.value = { total: limit, done: 0, ok: 0, failed: 0 };
   try {
-    await send({ type: "save-config", config: normalizedConfig() });
+    const nextConfig = normalizedConfig();
+    if (isMainnetHost(nextConfig.host) && !confirmMainnetExport()) {
+      status.value = "idle";
+      return;
+    }
+    await send({ type: "save-config", config: nextConfig });
     await startCurrentTabExport({
       limit,
-      config: normalizedConfig(),
+      config: nextConfig,
       originalUrl: location.href,
       callbacks: exportCallbacks()
     });
@@ -149,7 +157,7 @@ async function cancelExport() {
 async function loadConfig() {
   try {
     const response = await send({ type: "load-config" });
-    config.value = response.config;
+    config.value = configWithDefaults(response.config);
   } catch (nextError) {
     error.value = messageForError(nextError);
   }
@@ -159,12 +167,35 @@ function updateConfig(patch) {
   config.value = { ...config.value, ...patch };
 }
 
+function configWithDefaults(value) {
+  return {
+    canisterId: String(value?.canisterId || DEFAULT_CANISTER_ID),
+    databaseId: String(value?.databaseId || DEFAULT_DATABASE_ID),
+    host: String(value?.host || DEFAULT_HOST)
+  };
+}
+
 function normalizedConfig() {
   return {
     canisterId: config.value.canisterId.trim(),
-    databaseId: config.value.databaseId.trim(),
-    host: config.value.host.trim() || "https://icp0.io"
+    databaseId: config.value.databaseId.trim() || DEFAULT_DATABASE_ID,
+    host: config.value.host.trim() || DEFAULT_HOST
   };
+}
+
+function isMainnetHost(host) {
+  try {
+    const { hostname } = new URL(host);
+    return hostname === "icp0.io" || hostname.endsWith(".icp0.io");
+  } catch {
+    return false;
+  }
+}
+
+function confirmMainnetExport() {
+  return globalThis.confirm(
+    "This will write ChatGPT conversations to a mainnet IC host using an anonymous extension actor. Continue?"
+  );
 }
 
 async function send(message) {
@@ -187,7 +218,7 @@ function exportCallbacks() {
     send,
     onState(nextState) {
       panelOpen.value = true;
-      config.value = nextState.config || config.value;
+      config.value = configWithDefaults(nextState.config || config.value);
       progress.value = nextState.progress;
       logs.value = nextState.logs || [];
       status.value = nextState.status;

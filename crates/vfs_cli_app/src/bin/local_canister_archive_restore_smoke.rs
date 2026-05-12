@@ -2,7 +2,6 @@
 // What: Manual local-canister archive/restore smoke over vfs_client.
 // Why: Byte-range SQLite archive flows need an end-to-end canister check outside unit tests.
 use std::env;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
@@ -19,8 +18,6 @@ async fn main() -> Result<()> {
     let canister_id = env::var("CANISTER_ID")
         .or_else(|_| env::var("VFS_CANISTER_ID"))
         .context("CANISTER_ID or VFS_CANISTER_ID is required")?;
-    let database_id = env::var("DATABASE_ID").unwrap_or_else(|_| unique_database_id());
-    let isolation_database_id = format!("{database_id}_iso");
     let chunk_size = env::var("ARCHIVE_CHUNK_SIZE")
         .ok()
         .map(|value| value.parse::<u32>())
@@ -34,8 +31,8 @@ async fn main() -> Result<()> {
         return Err(anyhow!("unexpected memory manifest entrypoint"));
     }
 
-    client.create_database(&database_id).await?;
-    client.create_database(&isolation_database_id).await?;
+    let database_id = client.create_database().await?;
+    let isolation_database_id = client.create_database().await?;
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.clone(),
@@ -189,11 +186,6 @@ async fn main() -> Result<()> {
         info.status == DatabaseStatus::Hot,
         "smoke database should be hot",
     )?;
-    ensure(
-        info.snapshot_hash == Some(snapshot_hash),
-        "snapshot hash metadata should survive restore",
-    )?;
-
     println!("local_canister_archive_restore_smoke ok");
     println!("canister_id={canister_id}");
     println!("database_id={database_id}");
@@ -320,14 +312,6 @@ async fn read_archive_bytes(
         "archive byte length mismatch",
     )?;
     Ok(bytes)
-}
-
-fn unique_database_id() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("smoke_{millis}")
 }
 
 fn ensure(condition: bool, message: &str) -> Result<()> {

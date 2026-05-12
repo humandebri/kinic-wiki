@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { WikiBrowser } from "@/components/wiki-browser";
 
-export default function WikiPage() {
+export default function WikiDatabasePage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-canvas" />}>
       <WikiBrowser />

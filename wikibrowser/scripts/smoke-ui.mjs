@@ -14,11 +14,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 async function main() {
   const url = readUrl();
   const target = parseSmokeTargetUrl(url);
-  const basePath = `${target.origin}/w/${encodeURIComponent(target.canisterId)}/db/${encodeURIComponent(target.databaseId)}`;
-  const searchUrl = `${basePath}/search`;
-  const graphUrl = `${basePath}/graph?center=${encodeURIComponent(target.nodePath)}&depth=1`;
-  const emptyGraphUrl = `${basePath}/graph`;
-  const targetContext = await readTargetContext(target.canisterId, target.databaseId, target.nodePath);
+  const searchUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/search`;
+  const graphUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/graph?center=${encodeURIComponent(target.nodePath)}&depth=1`;
+  const emptyGraphUrl = `${target.origin}/${encodeURIComponent(target.databaseId)}/graph`;
+  const targetContext = await readTargetContext(target.databaseId, target.nodePath);
   const targetNode = targetContext.node;
   const contentProbe = contentProbeFor(targetNode.content);
   const pathQuery = pathQueryFor(target.nodePath);
@@ -46,25 +45,20 @@ async function main() {
   assertSnapshotIncludes("Open Graph from a wiki page to inspect its local neighborhood.");
   assertNoSnapshotText("Cannot reach IC host");
 
-  console.log(`Wiki browser smoke OK: ${target.canisterId} ${target.databaseId} ${target.nodePath}`);
+  console.log(`Wiki browser smoke OK: ${target.databaseId} ${target.nodePath}`);
 }
 
 export function parseSmokeTargetUrl(url) {
   const targetUrl = new URL(url);
   const segments = targetUrl.pathname.split("/").filter(Boolean);
-  const canisterId = decodePathSegment(segments[1] ?? "");
-  if (segments[2] !== "db") {
-    throw new Error("smoke URL must use /w/<canister-id>/db/<database-id>/...");
-  }
-  const databaseId = decodePathSegment(segments[3] ?? "");
+  const databaseId = decodePathSegment(segments[0] ?? "");
   const path = segments
-    .slice(4)
+    .slice(1)
     .filter(Boolean)
     .map(decodePathSegment)
     .join("/");
   return {
     origin: targetUrl.origin,
-    canisterId,
     databaseId,
     nodePath: path ? `/${path}` : "/Wiki"
   };
@@ -92,8 +86,9 @@ function assertSnapshotIncludes(text) {
   throw new Error(`snapshot missing ${text}\n${lastOutput}`);
 }
 
-async function readTargetContext(canisterId, databaseId, nodePath) {
+async function readTargetContext(databaseId, nodePath) {
   const host = process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io";
+  const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const agent = HttpAgent.createSync({ host });
   if (isLocalHost(host)) {
     await agent.fetchRootKey();

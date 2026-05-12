@@ -316,25 +316,20 @@ fn resolve_link_target(source_path: &str, raw_href: &str, strip_title: bool) -> 
 fn find_markdown_href_end(content: &str, href_start: usize) -> Option<usize> {
     let bytes = content.as_bytes();
     let mut index = href_start;
+    let mut paren_depth = 0_u32;
     while index < bytes.len() {
         if bytes[index] == b')' {
-            return Some(index);
+            if paren_depth == 0 {
+                return Some(index);
+            }
+            paren_depth -= 1;
         }
-        if bytes[index] == b'(' && looks_like_parenthesized_title(&content[href_start..index]) {
-            return content[index + 1..]
-                .find(')')
-                .map(|title_end| index + 1 + title_end + 1);
+        if bytes[index] == b'(' {
+            paren_depth += 1;
         }
         index += 1;
     }
     None
-}
-
-fn looks_like_parenthesized_title(before_open_paren: &str) -> bool {
-    before_open_paren
-        .chars()
-        .last()
-        .is_some_and(char::is_whitespace)
 }
 
 fn split_href_path(href: &str) -> &str {
@@ -350,14 +345,44 @@ fn split_href_path(href: &str) -> &str {
 }
 
 fn strip_markdown_title(href: &str) -> &str {
-    let Some((target, title)) = href.split_once(char::is_whitespace) else {
-        return href;
-    };
-    let title = title.trim_start();
-    if title.starts_with('"') || title.starts_with('\'') || title.starts_with('(') {
-        return target;
+    strip_quoted_markdown_title(href)
+        .or_else(|| strip_parenthesized_markdown_title(href))
+        .unwrap_or(href)
+}
+
+fn strip_quoted_markdown_title(href: &str) -> Option<&str> {
+    let quote = href.chars().last()?;
+    if !matches!(quote, '"' | '\'') {
+        return None;
     }
-    href
+    let title_start = href[..href.len() - quote.len_utf8()].rfind(quote)?;
+    if title_start == 0 || !href[..title_start].chars().last()?.is_whitespace() {
+        return None;
+    }
+    Some(href[..title_start].trim_end())
+}
+
+fn strip_parenthesized_markdown_title(href: &str) -> Option<&str> {
+    if !href.ends_with(')') {
+        return None;
+    }
+    let mut depth = 0_u32;
+    for (index, ch) in href.char_indices().rev() {
+        if ch == ')' {
+            depth += 1;
+            continue;
+        }
+        if ch == '(' {
+            depth -= 1;
+            if depth == 0 {
+                if index == 0 || !href[..index].chars().last()?.is_whitespace() {
+                    return None;
+                }
+                return Some(href[..index].trim_end());
+            }
+        }
+    }
+    None
 }
 
 fn resolve_relative_path(source_path: &str, href: &str) -> String {
@@ -416,6 +441,20 @@ mod tests {
         assert_eq!(edges[1].raw_href, "../paren.md (Paren title)");
         assert_eq!(edges[2].target_path, "/Wiki/after.md");
         assert_eq!(edges[2].raw_href, "../after.md");
+    }
+
+    #[test]
+    fn markdown_parser_keeps_spaces_and_parentheses_in_target_path() {
+        let edges = edges_for("[Project](Project (Alpha).md) [Nested](Project (Alpha (Draft)).md)");
+
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].target_path, "/Wiki/topic/Project (Alpha).md");
+        assert_eq!(edges[0].raw_href, "Project (Alpha).md");
+        assert_eq!(
+            edges[1].target_path,
+            "/Wiki/topic/Project (Alpha (Draft)).md"
+        );
+        assert_eq!(edges[1].raw_href, "Project (Alpha (Draft)).md");
     }
 
     #[test]

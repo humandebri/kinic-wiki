@@ -52,6 +52,7 @@ const CONTEXT_SEARCH_LIMIT: u32 = 10;
 const TOKEN_CHAR_APPROX: usize = 4;
 const SNAPSHOT_REVISION_NO_LONGER_CURRENT: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
+const SNAPSHOT_REVISION_CURSOR_REQUIRED: &str = "snapshot_revision is required when cursor is set";
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
 const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
@@ -722,6 +723,9 @@ impl FsStore {
             return Err(SNAPSHOT_SESSION_INVALID.to_string());
         }
         let cursor = normalize_sync_cursor(request.cursor.as_deref(), &prefix)?;
+        if cursor.is_some() && request.snapshot_revision.is_none() {
+            return Err(SNAPSHOT_REVISION_CURSOR_REQUIRED.to_string());
+        }
         let conn = self.open()?;
         let current_revision = current_snapshot_revision_number(&conn)?;
         let snapshot = match request.snapshot_revision.as_deref() {
@@ -736,6 +740,11 @@ impl FsStore {
                 prefix: prefix.clone(),
             },
         };
+        if request.snapshot_revision.is_some()
+            && has_prefix_changes_after_revision(&conn, &prefix, snapshot.revision)?
+        {
+            return Err(SNAPSHOT_REVISION_NO_LONGER_CURRENT.to_string());
+        }
         let mut nodes = load_snapshot_nodes_page(
             &conn,
             &prefix,
@@ -1071,6 +1080,25 @@ fn load_changed_paths_page(
     stmt.query_map(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn has_prefix_changes_after_revision(
+    conn: &Connection,
+    prefix: &str,
+    snapshot_revision: i64,
+) -> Result<bool, String> {
+    let mut sql = String::from("SELECT 1 FROM fs_change_log WHERE revision > ?1");
+    let mut values = vec![rusqlite::types::Value::from(snapshot_revision)];
+    if prefix != "/" {
+        let (scope_sql, scope_values) = prefix_filter_sql(prefix, values.len() + 1);
+        sql.push_str(&scope_sql);
+        values.extend(scope_values);
+    }
+    sql.push_str(" LIMIT 1");
+    conn.prepare(&sql)
+        .map_err(|error| error.to_string())?
+        .exists(rusqlite::params_from_iter(values))
         .map_err(|error| error.to_string())
 }
 

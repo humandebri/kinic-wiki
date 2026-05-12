@@ -1,6 +1,7 @@
 // Where: crates/vfs_cli_core/src/commands.rs
 // What: Generic VFS command execution and sync paging helpers.
 // Why: The app-facing CLI package should delegate shared VFS command behavior instead of owning it.
+use std::borrow::Cow;
 use std::fs;
 
 use anyhow::{Result, anyhow};
@@ -453,8 +454,8 @@ async fn run_database_command(
     command: DatabaseCommand,
 ) -> Result<()> {
     match command {
-        DatabaseCommand::Create { database_id } => {
-            client.create_database(&database_id).await?;
+        DatabaseCommand::Create => {
+            let database_id = client.create_database().await?;
             println!("{database_id}");
         }
         DatabaseCommand::List { json } => {
@@ -464,10 +465,10 @@ async fn run_database_command(
             } else {
                 for database in databases {
                     println!(
-                        "{}\t{:?}\t{}\t{}",
+                        "{}\t{:?}\t{:?}\t{}",
                         database.database_id,
+                        database.role,
                         database.status,
-                        database.schema_version,
                         database.logical_size_bytes
                     );
                 }
@@ -563,6 +564,20 @@ fn require_database_id(database_id: Option<&str>) -> Result<&str> {
     database_id
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"))
+}
+
+pub fn database_id_or_env(database_id: Option<&str>) -> Result<Cow<'_, str>> {
+    if let Some(database_id) = database_id.filter(|value| !value.is_empty()) {
+        return Ok(Cow::Borrowed(database_id));
+    }
+    let env_database_id = std::env::var("VFS_DATABASE_ID").unwrap_or_default();
+    if env_database_id.is_empty() {
+        Err(anyhow!(
+            "database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"
+        ))
+    } else {
+        Ok(Cow::Owned(env_database_id))
+    }
 }
 
 fn print_link_summary(label: &str, links: &[LinkEdge]) {
@@ -712,8 +727,12 @@ mod tests {
     use vfs_client::VfsApi;
     use vfs_types::*;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[derive(Default)]
     struct MockClient {
+        created: Mutex<u32>,
+        database_lists: Mutex<u32>,
         writes: Mutex<Vec<WriteNodeRequest>>,
         child_lists: Mutex<Vec<ListChildrenRequest>>,
         contexts: Mutex<Vec<NodeContextRequest>>,
@@ -735,6 +754,23 @@ mod tests {
     impl VfsApi for MockClient {
         async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
+        }
+        async fn create_database(&self) -> Result<String> {
+            let mut created = self.created.lock().unwrap();
+            *created += 1;
+            Ok("db_k7p9x2mq4v8r".to_string())
+        }
+        async fn list_databases(&self) -> Result<Vec<DatabaseSummary>> {
+            let mut lists = self.database_lists.lock().unwrap();
+            *lists += 1;
+            Ok(vec![DatabaseSummary {
+                database_id: "alpha".to_string(),
+                status: DatabaseStatus::Hot,
+                role: DatabaseRole::Owner,
+                logical_size_bytes: 42,
+                archived_at_ms: None,
+                deleted_at_ms: None,
+            }])
         }
         async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
             Ok(None)
@@ -880,6 +916,68 @@ mod tests {
         .await
         .expect("list children should succeed");
         assert_eq!(client.child_lists.lock().unwrap()[0].path, "/Wiki");
+    }
+
+    #[tokio::test]
+    async fn database_create_uses_generated_id_command() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::Database {
+                command: super::DatabaseCommand::Create,
+            },
+        )
+        .await
+        .expect("database create should succeed");
+        assert_eq!(*client.created.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn database_list_uses_list_databases_command() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::Database {
+                command: super::DatabaseCommand::List { json: false },
+            },
+        )
+        .await
+        .expect("database list should succeed");
+        assert_eq!(*client.database_lists.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn database_id_falls_back_to_env() {
+        with_vfs_database_id("env-db", || {
+            let database_id = super::database_id_or_env(None).expect("env database id should load");
+            assert_eq!(database_id.as_ref(), "env-db");
+        });
+    }
+
+    #[test]
+    fn explicit_database_id_overrides_env() {
+        with_vfs_database_id("env-db", || {
+            let database_id =
+                super::database_id_or_env(Some("flag-db")).expect("flag database id should load");
+            assert_eq!(database_id.as_ref(), "flag-db");
+        });
+    }
+
+    fn with_vfs_database_id(value: &str, assert_fn: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous = std::env::var("VFS_DATABASE_ID").ok();
+        unsafe {
+            std::env::set_var("VFS_DATABASE_ID", value);
+        }
+        assert_fn();
+        unsafe {
+            match previous {
+                Some(previous) => std::env::set_var("VFS_DATABASE_ID", previous),
+                None => std::env::remove_var("VFS_DATABASE_ID"),
+            }
+        }
     }
 
     #[tokio::test]

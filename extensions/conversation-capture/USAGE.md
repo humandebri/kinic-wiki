@@ -2,6 +2,8 @@
 
 Local usage guide for exporting recent ChatGPT conversations into the `local-wiki` canister.
 
+This extension is local-only. It uses an anonymous write-capable actor and must not be distributed publicly until the target canister has explicit write authorization.
+
 ## Prerequisites
 
 - `local-wiki` network is running.
@@ -14,12 +16,18 @@ Local usage guide for exporting recent ChatGPT conversations into the `local-wik
 ```bash
 cd extensions/conversation-capture
 npm install
+cat > .env <<'EOF'
+KINIC_CAPTURE_HOST=http://127.0.0.1:8001
+KINIC_CAPTURE_CANISTER_ID=<wiki-canister-id>
+KINIC_CAPTURE_DATABASE_ID=<database-id>
+EOF
 npm run build
 ```
 
 The build creates:
 
 - `dist/content-ui.js`
+- `dist/popup.js`
 - `dist/service-worker.js`
 
 ## Load in Chrome
@@ -43,7 +51,9 @@ Use these extension settings:
 
 - `IC host`: `http://127.0.0.1:8001`
 - `Canister ID`: the `wiki` canister ID from `local-wiki`
-- `Database ID`: the target database id
+- `Database ID`: the target database ID, usually `default`
+
+The extension defaults to `.env` values when present, otherwise `http://127.0.0.1:8001` and database ID `default`. The database must already exist. Mainnet hosts such as `https://icp0.io` require explicit confirmation before export.
 
 ## Export
 
@@ -54,6 +64,8 @@ Use these extension settings:
 5. Watch `Logs` for success or error entries.
 
 The extension fetches ChatGPT conversation data directly from ChatGPT backend API endpoints in the current tab session. It does not navigate the page, open background tabs, use DOM fallback, or use a fetch interceptor.
+
+Those `/backend-api/*` endpoints are private ChatGPT internals. If ChatGPT changes the response shape, export can fail or omit messages.
 
 Raw sources are saved as:
 
@@ -76,11 +88,13 @@ icp canister call wiki status '()' -e local-wiki
 The extension only writes raw evidence. Generate wiki pages from the CLI:
 
 ```bash
-cargo run -p vfs-cli -- --database-id <database_id> generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
+cargo run -p vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
 ```
+
+This command creates a wiki scaffold. Re-running it preserves existing `summary.md`, `facts.md`, `events.md`, `plans.md`, `preferences.md`, and `open_questions.md`. Use `--force` only when those pages should be regenerated.
 
 ## Known Limits
 
 - ChatGPT backend API shape can change.
 - Stopping an export can allow up to 2 in-flight conversations to finish saving.
-- Public distribution requires write authorization design before release.
+- Writes are anonymous. Public distribution requires write authorization design before release.

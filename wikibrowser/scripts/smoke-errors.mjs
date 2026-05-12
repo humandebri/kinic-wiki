@@ -2,30 +2,20 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const baseUrl = readBaseUrl();
-const canisterId = readCanisterId();
 const databaseId = readDatabaseId();
 const smokeWaitMs = 30_000;
 const pollMs = 500;
 
-run("open", [`${baseUrl}/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}/Wiki/does-not-exist.md`]);
+run("open", [`${baseUrl}/${encodeURIComponent(databaseId)}/Wiki/does-not-exist.md`]);
 assertSnapshotIncludes("No wiki node at this path");
 assertSnapshotIncludes("Search this path");
 
-console.log(`Wiki browser error smoke OK: ${canisterId} ${databaseId}`);
+console.log(`Wiki browser error smoke OK: ${databaseId}`);
 
 function readBaseUrl() {
   const argIndex = process.argv.indexOf("--base-url");
   const value = argIndex >= 0 ? process.argv[argIndex + 1] : process.env.WIKI_BROWSER_BASE_URL;
   return (value ?? "http://127.0.0.1:3000").replace(/\/$/, "");
-}
-
-function readCanisterId() {
-  const argIndex = process.argv.indexOf("--canister-id");
-  const value = argIndex >= 0 ? process.argv[argIndex + 1] : process.env.WIKI_BROWSER_CANISTER_ID;
-  if (!value) {
-    throw new Error("missing --canister-id or WIKI_BROWSER_CANISTER_ID");
-  }
-  return value;
 }
 
 function readDatabaseId() {

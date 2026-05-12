@@ -1,15 +1,14 @@
 import { spawnSync } from "node:child_process";
 
 const baseUrl = readRequiredArg("--base-url", "WIKI_BROWSER_PUBLIC_BASE_URL").replace(/\/$/, "");
-const canisterId = readRequiredArg("--canister-id", "WIKI_BROWSER_PUBLIC_CANISTER_ID");
 const databaseId = readRequiredArg("--database-id", "WIKI_BROWSER_PUBLIC_DATABASE_ID");
 const path = normalizePath(readRequiredArg("--path", "WIKI_BROWSER_PUBLIC_PATH"));
-const nodeUrl = `${baseUrl}/w/${encodeURIComponent(canisterId)}/db/${encodeURIComponent(databaseId)}${path}`;
+const nodeUrl = `${baseUrl}/${encodeURIComponent(databaseId)}${path}`;
 
 runNodeScript("scripts/smoke-ui.mjs", ["--url", nodeUrl]);
-runNodeScript("scripts/smoke-errors.mjs", ["--base-url", baseUrl, "--canister-id", canisterId, "--database-id", databaseId]);
+runNodeScript("scripts/smoke-errors.mjs", ["--base-url", baseUrl, "--database-id", databaseId]);
 
-console.log(`Wiki browser public smoke OK: ${baseUrl} ${canisterId} ${databaseId} ${path}`);
+console.log(`Wiki browser public smoke OK: ${baseUrl} ${databaseId} ${path}`);
 
 function readRequiredArg(flag, envName) {
   const argIndex = process.argv.indexOf(flag);

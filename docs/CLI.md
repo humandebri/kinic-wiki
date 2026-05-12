@@ -9,6 +9,7 @@ Use the CLI commands below for shell workflows and local mirror operations.
 ## Connection
 
 Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require an explicit database selection from `--database-id`, `VFS_DATABASE_ID`, `.kinic/config.toml`, or user config. No production `default` database is created implicitly.
+This is a breaking change for older single-DB clients that omitted `database_id`.
 
 ```bash
 cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
@@ -19,6 +20,11 @@ Use `--local` for the local replica host.
 ```bash
 cargo run -p vfs-cli -- --local --database-id <database-id> status
 ```
+
+`--database-id` takes precedence over `VFS_DATABASE_ID`.
+
+List, search, recent, and graph commands default to the VFS root `/`.
+Pass `--prefix /Wiki` or `--path /Wiki` when the human-facing wiki tree is the intended scope.
 
 Without `--canister-id`, the CLI reads configuration from:
 
@@ -40,14 +46,26 @@ Resolution priority is CLI flag, env, `.kinic/config.toml`, user config, then ho
 Create a database before reading or writing:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database create <database-id>
+cargo run -p vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli -- --canister-id <canister-id> database list
 cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
 cargo run -p vfs-cli -- --canister-id <canister-id> database link <database-id>
 cargo run -p vfs-cli -- write-node --path /Wiki/file.md --input file.md
 cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
+`database create` prints the generated database ID.
+`database list` prints databases attached to the caller principal.
+
+For public browser reads, grant anonymous reader access explicitly:
+
+```bash
+cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+```
+
 Archive and restore are low-level canister APIs for snapshot bytes. The CLI does not yet persist archive bytes for you. See [`DB_LIFECYCLE.md`](DB_LIFECYCLE.md) for status, slot reuse, and restore validation details.
+
+If `pull` or `push` reports a snapshot revision resync condition, run `pull --resync` before retrying the workflow.
 
 ## Search
 

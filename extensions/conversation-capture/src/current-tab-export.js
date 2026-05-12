@@ -28,117 +28,135 @@ export function createExportState({ limit, config, originalUrl, startedAt = new 
   };
 }
 
-export function readExportState(storage = globalThis.sessionStorage) {
+export async function readExportState(storage = exportStateStorage()) {
   try {
     if (!storage) return null;
-    const raw = storage.getItem(STATE_KEY);
+    const raw = await storage.getItem(STATE_KEY);
     const state = raw ? JSON.parse(raw) : null;
     if (!isValidState(state)) {
-      if (raw) storage.removeItem(STATE_KEY);
+      if (raw) await storage.removeItem(STATE_KEY);
       return null;
     }
     return state;
   } catch {
-    storage.removeItem(STATE_KEY);
+    await storage?.removeItem?.(STATE_KEY);
     return null;
   }
 }
 
-export function writeExportState(state, storage = globalThis.sessionStorage) {
+export async function writeExportState(state, storage = exportStateStorage()) {
   if (!storage) return;
-  storage.setItem(STATE_KEY, JSON.stringify(state));
+  await storage.setItem(STATE_KEY, JSON.stringify(state));
 }
 
-export function clearExportState(storage = globalThis.sessionStorage) {
+export async function clearExportState(storage = exportStateStorage()) {
   if (!storage) return;
-  storage.removeItem(STATE_KEY);
+  await storage.removeItem(STATE_KEY);
 }
 
 export async function startCurrentTabExport(options) {
   const state = createExportState(options);
-  writeExportState(state);
+  await writeExportState(state);
   await processDirectExport(options.callbacks);
 }
 
 export async function resumeCurrentTabExport(callbacks) {
-  const state = readExportState();
+  const state = await readExportState();
   if (!state) return;
   hydrate(callbacks, state);
   if (state.status !== "exporting") {
-    clearExportState();
+    await clearExportState();
     return;
   }
   const next = { ...state, status: "cancelled", error: "Previous export was interrupted." };
-  writeExportState(next);
+  await writeExportState(next);
   hydrate(callbacks, next);
-  clearExportState();
+  await clearExportState();
 }
 
 export async function cancelCurrentTabExport(callbacks) {
-  const state = readExportState();
+  const state = await readExportState();
   if (!state) return;
   const next = { ...state, status: "cancelled" };
-  writeExportState(next);
+  await writeExportState(next);
   hydrate(callbacks, next);
 }
 
 async function processDirectExport(callbacks) {
-  let state = readExportState();
+  let state = await readExportState();
   if (!state || state.status !== "exporting") return;
   hydrate(callbacks, state);
   try {
     const targets = await fetchRecentConversationTargets(state.limit);
     state = {
-      ...(readExportState() || state),
+      ...((await readExportState()) || state),
       targets,
       phase: "exporting",
       progress: { total: targets.length, done: 0, ok: 0, failed: 0 }
     };
-    writeExportState(state);
+    await writeExportState(state);
     hydrate(callbacks, state);
     if (state.status === "cancelled") {
-      clearExportState();
+      await clearExportState();
       return;
     }
     if (!targets.length) {
       throw new Error("No recent ChatGPT conversations found.");
     }
     let latest = await processExportTargets(targets, state, callbacks);
-    const storedState = readExportState();
+    const storedState = await readExportState();
     if (storedState?.status === "cancelled") {
       hydrate(callbacks, storedState);
-      clearExportState();
+      await clearExportState();
       return;
     }
     state = latest;
     state = { ...state, status: state.progress.failed ? "partial" : "done" };
-    writeExportState(state);
+    await writeExportState(state);
     hydrate(callbacks, state);
-    clearExportState();
+    await clearExportState();
   } catch (error) {
     const failed = {
-      ...(readExportState() || state),
+      ...((await readExportState()) || state),
       status: "error",
       error: error instanceof Error ? error.message : String(error)
     };
-    writeExportState(failed);
+    await writeExportState(failed);
     hydrate(callbacks, failed);
-    clearExportState();
+    await clearExportState();
   }
 }
 
 export async function processExportTargets(targets, state, callbacks, concurrency = EXPORT_CONCURRENCY) {
-  let latest = readExportState() || state;
-  function recordEvent(event) {
-    latest = advanceState(latest, event);
-    writeExportState(latest);
-    hydrate(callbacks, latest);
+  let latest = (await readExportState()) || state;
+  let updateQueue = Promise.resolve();
+  function enqueueStateUpdate(fn) {
+    updateQueue = updateQueue.then(fn, fn);
+    return updateQueue;
+  }
+  async function recordEvent(event) {
+    return enqueueStateUpdate(async () => {
+      const stored = await readExportState();
+      if (stored?.status === "cancelled") {
+        latest = stored;
+        return;
+      }
+      latest = stored || latest;
+      latest = advanceState(latest, event);
+      await writeExportState(latest);
+      const afterWrite = await readExportState();
+      if (afterWrite?.status === "cancelled") {
+        latest = afterWrite;
+        return;
+      }
+      hydrate(callbacks, latest);
+    });
   }
   await mapWithConcurrency(targets, concurrency, async (target) => {
-    if (exportIsCancelled()) return null;
+    if (await exportIsCancelled()) return null;
     const event = await exportTarget(target, latest.config, callbacks.send);
-    if (exportIsCancelled()) return null;
-    recordEvent(event);
+    if (await exportIsCancelled()) return null;
+    await recordEvent(event);
     return event;
   });
   return latest;
@@ -152,11 +170,19 @@ export async function exportTarget(target, config, send, fetchImpl = fetch) {
 export async function fetchRecentConversationTargets(limit, fetchImpl = fetch, loc = location) {
   const targets = [];
   const seen = new Set();
+  const currentTarget = currentConversationTarget(loc);
+  if (currentTarget) {
+    targets.push(currentTarget);
+    seen.add(currentTarget.id);
+  }
   let offset = 0;
   while (targets.length < limit) {
     const pageLimit = Math.min(CONVERSATION_LIST_PAGE_SIZE, limit - targets.length);
     const payload = await fetchJson(`/backend-api/conversations?offset=${offset}&limit=${pageLimit}&order=updated`, fetchImpl);
     const items = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
+    if (!items.length && offset === 0 && targets.length === 0) {
+      throw new Error(`No recent ChatGPT conversations found. ${conversationListSummary(payload)}`);
+    }
     if (!items.length) break;
     for (const item of items) {
       const id = conversationIdFromListItem(item);
@@ -190,7 +216,7 @@ export async function fetchConversationCapture(target, fetchImpl = fetch) {
 }
 
 async function saveCaptureResult(result, config, send) {
-  if (exportIsCancelled()) {
+  if (await exportIsCancelled()) {
     return { ok: false, title: result.target.title, url: result.target.url, error: "export cancelled" };
   }
   if (!result.ok) {
@@ -246,7 +272,7 @@ export async function mapWithConcurrency(items, concurrency, worker) {
   let nextIndex = 0;
   async function run() {
     for (;;) {
-      if (exportIsCancelled()) return;
+      if (await exportIsCancelled()) return;
       const index = nextIndex;
       nextIndex += 1;
       if (index >= items.length) return;
@@ -258,20 +284,61 @@ export async function mapWithConcurrency(items, concurrency, worker) {
   return results.filter(Boolean);
 }
 
-function exportIsCancelled() {
-  return readExportState()?.status === "cancelled";
+async function exportIsCancelled() {
+  return (await readExportState())?.status === "cancelled";
+}
+
+export function exportStateStorage() {
+  const runtime = globalThis.chrome?.runtime;
+  if (typeof runtime?.sendMessage !== "function") return null;
+  return {
+    async getItem(key) {
+      const response = await runtime.sendMessage({ type: "export-state-get", key });
+      if (!response?.ok) throw new Error(response?.error || "failed to read export state");
+      return response.value ?? null;
+    },
+    async setItem(key, value) {
+      const response = await runtime.sendMessage({ type: "export-state-set", key, value });
+      if (!response?.ok) throw new Error(response?.error || "failed to write export state");
+    },
+    async removeItem(key) {
+      const response = await runtime.sendMessage({ type: "export-state-remove", key });
+      if (!response?.ok) throw new Error(response?.error || "failed to remove export state");
+    }
+  };
 }
 
 async function fetchJson(url, fetchImpl) {
+  const accessToken = await readChatGptAccessToken(fetchImpl);
   const response = await fetchImpl(url, {
     method: "GET",
     credentials: "include",
-    headers: { Accept: "application/json" }
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`
+    }
   });
   if (!response.ok) {
     throw new Error(`ChatGPT API failed: ${response.status}`);
   }
   return response.json();
+}
+
+async function readChatGptAccessToken(fetchImpl) {
+  const response = await fetchImpl("/api/auth/session", {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" }
+  });
+  if (!response.ok) {
+    throw new Error(`ChatGPT session failed: ${response.status}`);
+  }
+  const session = await response.json();
+  const accessToken = typeof session?.accessToken === "string" ? session.accessToken : "";
+  if (!accessToken) {
+    throw new Error("ChatGPT session does not include an access token. Sign in again and reload ChatGPT.");
+  }
+  return accessToken;
 }
 
 function conversationIdFromListItem(item) {
@@ -285,13 +352,42 @@ function titleFromListItem(item) {
   return title || "Untitled conversation";
 }
 
+function currentConversationTarget(loc) {
+  try {
+    const url = new URL(loc.href || "", loc.origin);
+    const id = conversationIdFromPath(url.pathname);
+    if (!id) return null;
+    return {
+      id,
+      title: "Current conversation",
+      url: new URL(`/c/${id}`, loc.origin).toString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+function conversationIdFromPath(pathname) {
+  const match = /^\/c\/([^/]+)\/?$/.exec(pathname);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function conversationListSummary(payload) {
+  if (Array.isArray(payload)) return "ChatGPT API returned an empty array.";
+  if (!payload || typeof payload !== "object") return `ChatGPT API returned ${typeof payload}.`;
+  const total = typeof payload.total === "number" ? payload.total : "unknown";
+  const offset = typeof payload.offset === "number" ? payload.offset : "unknown";
+  const keys = Object.keys(payload).slice(0, 8).join(", ") || "none";
+  return `ChatGPT API returned 0 items. total=${total}, offset=${offset}, keys=${keys}.`;
+}
+
 function hydrate(callbacks, state) {
   callbacks.onState?.(state);
 }
 
 function logFromEvent(event) {
   return {
-    id: `${event.title || event.url}-${Date.now()}`,
+    id: globalThis.crypto?.randomUUID?.() || `${event.title || event.url}-${Date.now()}`,
     kind: event.ok ? "success" : "error",
     provider: event.provider || "ChatGPT",
     time: "just now",

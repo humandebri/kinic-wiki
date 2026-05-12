@@ -1,5 +1,6 @@
 "use client";
 
+import type { Identity } from "@icp-sdk/core/agent";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, GitBranch, Info, Sparkles } from "lucide-react";
@@ -26,7 +27,8 @@ export function Inspector({
   noteRole,
   incomingLinks,
   incomingError,
-  outgoingLinks
+  outgoingLinks,
+  readIdentity
 }: {
   canisterId: string;
   databaseId: string;
@@ -37,6 +39,7 @@ export function Inspector({
   incomingLinks: LinkEdge[] | null;
   incomingError?: string | null;
   outgoingLinks: LinkEdge[];
+  readIdentity: Identity | null;
 }) {
   const kind = node?.kind ?? "directory";
   const size = node ? `${new TextEncoder().encode(node.content).length}` : null;
@@ -59,7 +62,7 @@ export function Inspector({
     }
     let cancelled = false;
     import("@/lib/vfs-client")
-      .then(({ readNode }) => readNode(canisterId, databaseId, expectedProvenancePath))
+      .then(({ readNode }) => readNode(canisterId, databaseId, expectedProvenancePath, readIdentity ?? undefined))
       .then((provenanceNode) => {
         if (!cancelled) {
           setProvenance({
@@ -76,7 +79,7 @@ export function Inspector({
     return () => {
       cancelled = true;
     };
-  }, [canisterId, databaseId, expectedProvenancePath]);
+  }, [canisterId, databaseId, expectedProvenancePath, readIdentity]);
 
   useEffect(() => {
     if (!expectedSkillManifestPath) {

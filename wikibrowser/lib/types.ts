@@ -11,8 +11,41 @@ export type WikiNode = {
   metadataJson: string;
 };
 
+export type WriteNodeRequest = {
+  databaseId: string;
+  path: string;
+  kind: NodeKind;
+  content: string;
+  metadataJson: string;
+  expectedEtag: string | null;
+};
+
+export type WriteNodeResult = {
+  created: boolean;
+  node: RecentNode;
+};
+
 export type CanisterHealth = {
   cyclesBalance: bigint;
+};
+
+export type DatabaseRole = "reader" | "writer" | "owner";
+export type DatabaseStatus = "hot" | "restoring" | "archiving" | "archived" | "deleted";
+
+export type DatabaseSummary = {
+  databaseId: string;
+  role: DatabaseRole;
+  status: DatabaseStatus;
+  logicalSizeBytes: string;
+  archivedAtMs: string | null;
+  deletedAtMs: string | null;
+};
+
+export type DatabaseMember = {
+  databaseId: string;
+  principal: string;
+  role: DatabaseRole;
+  createdAtMs: string;
 };
 
 export type ChildNode = {

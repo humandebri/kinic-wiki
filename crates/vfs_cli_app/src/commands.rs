@@ -18,8 +18,8 @@ use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use vfs_cli::commands::{
-    collect_paged_snapshot, collect_paged_updates, resync_required_error, run_vfs_command,
-    snapshot_restart_required_error,
+    collect_paged_snapshot, collect_paged_updates, database_id_or_env, resync_required_error,
+    run_vfs_command, snapshot_restart_required_error,
 };
 use vfs_cli::connection::ResolvedConnection;
 use vfs_client::VfsApi;
@@ -46,11 +46,11 @@ pub async fn run_command(
             run_github_command(client, require_database_id(database_id)?, command).await?;
         }
         Command::RebuildIndex => {
-            rebuild_index(client, require_database_id(database_id)?).await?;
+            rebuild_index(client, database_id_or_env(database_id)?.as_ref()).await?;
             println!("index rebuilt");
         }
         Command::RebuildScopeIndex { scope } => {
-            rebuild_scope_index(client, require_database_id(database_id)?, &scope).await?;
+            rebuild_scope_index(client, database_id_or_env(database_id)?.as_ref(), &scope).await?;
             println!("scope index rebuilt: {scope}");
         }
         Command::GenerateConversationWiki { source_path, json } => {
@@ -80,8 +80,8 @@ pub async fn run_command(
             mirror_root,
             json,
         } => {
-            let database_id = require_database_id(database_id)?;
-            let remote = client.status(database_id).await?;
+            let database_id = database_id_or_env(database_id)?;
+            let remote = client.status(database_id.as_ref()).await?;
             let local = vault_path
                 .as_deref()
                 .map(|vault| read_local_status(&vault.join(&mirror_root)))
@@ -108,7 +108,7 @@ pub async fn run_command(
         } => {
             pull(
                 client,
-                require_database_id(database_id)?,
+                database_id_or_env(database_id)?.as_ref(),
                 &vault_path.join(mirror_root),
                 resync,
             )
@@ -120,7 +120,7 @@ pub async fn run_command(
         } => {
             push(
                 client,
-                require_database_id(database_id)?,
+                database_id_or_env(database_id)?.as_ref(),
                 &vault_path.join(mirror_root),
             )
             .await?;

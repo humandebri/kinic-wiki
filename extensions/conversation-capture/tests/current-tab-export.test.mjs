@@ -11,13 +11,25 @@ import {
   fetchRecentConversationTargets,
   isValidState,
   mapWithConcurrency,
-  readExportState
+  readExportState,
+  writeExportState
 } from "../src/current-tab-export.js";
+import { handleMessage, setVfsActorFactoryForTest, validateSaveSource } from "../src/service-worker.js";
+import { isLocalHost } from "../src/vfs-actor.js";
+
+const VALID_CAPTURE = {
+  provider: "chatgpt",
+  conversationTitle: "Project",
+  url: "https://chatgpt.com/c/abc",
+  capturedAt: "2026-05-01T00:00:00.000Z",
+  messages: [{ role: "user", content: "Hello" }]
+};
+const VALID_SENDER = { tab: { url: "https://chatgpt.com/c/abc" } };
 
 test("createExportState initializes direct-api state", () => {
   const state = createExportState({
     limit: 10,
-    config: { canisterId: "abc", databaseId: "team-db", host: "http://127.0.0.1:8001" },
+    config: { canisterId: "abc", host: "http://127.0.0.1:8001" },
     originalUrl: "https://chatgpt.com/",
     startedAt: "2026-05-01T00:00:00.000Z"
   });
@@ -31,7 +43,7 @@ test("createExportState initializes direct-api state", () => {
 
 test("fetchRecentConversationTargets paginates, dedupes, and limits", async () => {
   const calls = [];
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = chatGptFetch(async (url, init) => {
     calls.push({ url, init });
     if (url.includes("offset=0")) {
       return jsonResponse({
@@ -49,7 +61,7 @@ test("fetchRecentConversationTargets paginates, dedupes, and limits", async () =
       ],
       has_more: false
     });
-  };
+  });
 
   const targets = await fetchRecentConversationTargets(3, fetchImpl, { origin: "https://chatgpt.com" });
 
@@ -59,12 +71,41 @@ test("fetchRecentConversationTargets paginates, dedupes, and limits", async () =
   );
   assert.equal(targets[2].url, "https://chatgpt.com/c/three");
   assert.equal(calls[0].init.credentials, "include");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer test-token");
   assert.match(calls[0].url, /offset=0&limit=3/);
+});
+
+test("fetchRecentConversationTargets includes the current conversation when history is empty", async () => {
+  const targets = await fetchRecentConversationTargets(
+    3,
+    chatGptFetch(async () => jsonResponse({ items: [], total: 0, offset: 0 })),
+    { origin: "https://chatgpt.com", href: "https://chatgpt.com/c/current-chat" }
+  );
+
+  assert.deepEqual(targets, [
+    {
+      id: "current-chat",
+      title: "Current conversation",
+      url: "https://chatgpt.com/c/current-chat"
+    }
+  ]);
+});
+
+test("fetchRecentConversationTargets reports empty history details", async () => {
+  await assert.rejects(
+    () =>
+      fetchRecentConversationTargets(
+        1,
+        chatGptFetch(async () => jsonResponse({ items: [], total: 0, offset: 0 })),
+        { origin: "https://chatgpt.com", href: "https://chatgpt.com/" }
+      ),
+    /No recent ChatGPT conversations found.*total=0/
+  );
 });
 
 test("fetchRecentConversationTargets surfaces API errors", async () => {
   await assert.rejects(
-    () => fetchRecentConversationTargets(1, async () => jsonResponse({}, false, 500), { origin: "https://chatgpt.com" }),
+    () => fetchRecentConversationTargets(1, chatGptFetch(async () => jsonResponse({}, false, 500)), { origin: "https://chatgpt.com" }),
     /ChatGPT API failed: 500/
   );
 });
@@ -72,7 +113,7 @@ test("fetchRecentConversationTargets surfaces API errors", async () => {
 test("fetchConversationCapture converts payloads and rejects empty messages", async () => {
   const ok = await fetchConversationCapture(
     { id: "abc", title: "Project", url: "https://chatgpt.com/c/abc" },
-    async () =>
+    chatGptFetch(async () =>
       jsonResponse({
         conversation_id: "abc",
         title: "Project",
@@ -82,7 +123,7 @@ test("fetchConversationCapture converts payloads and rejects empty messages", as
           user1: node("root", message("user", "Hello")),
           assistant1: node("user1", message("assistant", "Hi"))
         }
-      })
+      }))
   );
   assert.equal(ok.ok, true);
   assert.equal(ok.capture.captureMethod, "direct api");
@@ -93,7 +134,7 @@ test("fetchConversationCapture converts payloads and rejects empty messages", as
 
   const empty = await fetchConversationCapture(
     { id: "empty", title: "Empty", url: "https://chatgpt.com/c/empty" },
-    async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } })
+    chatGptFetch(async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } }))
   );
   assert.equal(empty.ok, false);
   assert.match(empty.error, /no conversation messages/);
@@ -104,15 +145,15 @@ test("exportTarget saves immediately after fetching a valid conversation", async
   const target = { id: "abc", title: "Project", url: "https://chatgpt.com/c/abc" };
   const event = await exportTarget(
     target,
-    { canisterId: "canister", databaseId: "team-db", host: "http://127.0.0.1:8001" },
+    { canisterId: "canister", host: "http://127.0.0.1:8001" },
     async (message) => {
       calls.push(["save", message.capture.conversationTitle]);
       return { result: { path: "/Sources/raw/chatgpt-abc/chatgpt-abc.md", created: true } };
     },
-    async () => {
+    chatGptFetch(async (url) => {
       calls.push(["fetch", target.id]);
       return jsonResponse(conversationPayload("abc", "Project"));
-    }
+    })
   );
 
   assert.deepEqual(calls, [
@@ -131,7 +172,7 @@ test("exportTarget does not save API failures or empty conversations", async () 
     async () => {
       saveCount += 1;
     },
-    async () => jsonResponse({}, false, 500)
+    chatGptFetch(async () => jsonResponse({}, false, 500))
   );
   const empty = await exportTarget(
     { id: "empty", title: "Empty", url: "https://chatgpt.com/c/empty" },
@@ -139,7 +180,7 @@ test("exportTarget does not save API failures or empty conversations", async () 
     async () => {
       saveCount += 1;
     },
-    async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } })
+    chatGptFetch(async () => jsonResponse({ conversation_id: "empty", current_node: "root", mapping: { root: node(null, null) } }))
   );
 
   assert.equal(saveCount, 0);
@@ -164,15 +205,58 @@ test("advanceState records direct-api success and errors in order", () => {
   assert.match(state.logs[1].message, /via direct api/);
 });
 
-test("readExportState removes stale and invalid state", () => {
+test("advanceState gives same-title same-timestamp logs unique ids", () => {
+  const originalCrypto = globalThis.crypto;
+  const originalDateNow = Date.now;
+  let uuid = 0;
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: { randomUUID: () => `uuid-${(uuid += 1)}` }
+  });
+  Date.now = () => 1;
+  try {
+    let state = createExportState({
+      limit: 2,
+      config: {},
+      originalUrl: "https://chatgpt.com/",
+      startedAt: "2026-05-01T00:00:00.000Z"
+    });
+    state = advanceState(state, { ok: true, title: "One", provider: "ChatGPT", captureMethod: "direct api", created: true });
+    state = advanceState(state, { ok: true, title: "One", provider: "ChatGPT", captureMethod: "direct api", created: false });
+
+    assert.notEqual(state.logs[0].id, state.logs[1].id);
+  } finally {
+    Date.now = originalDateNow;
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
+});
+
+test("readExportState removes stale and invalid state", async () => {
   const storage = memoryStorage();
   storage.setItem("kinic-current-tab-export-v1", JSON.stringify({ version: 1, expiresAt: "2026-05-01T00:00:00.000Z" }));
 
-  assert.equal(readExportState(storage), null);
+  assert.equal(await readExportState(storage), null);
   assert.equal(storage.getItem("kinic-current-tab-export-v1"), null);
 
   storage.setItem("kinic-current-tab-export-v1", JSON.stringify({ links: [] }));
-  assert.equal(readExportState(storage), null);
+  assert.equal(await readExportState(storage), null);
+});
+
+test("readExportState uses runtime-backed export state adapter by default", async () => {
+  const restore = installRuntimeStorage(memoryStorage());
+  try {
+    const state = createExportState({
+      limit: 1,
+      config: {},
+      originalUrl: "https://chatgpt.com/",
+      startedAt: new Date().toISOString()
+    });
+    await writeExportState(state);
+
+    assert.equal((await readExportState()).status, "exporting");
+  } finally {
+    restore();
+  }
 });
 
 test("isValidState accepts non-expired schema v1 state", () => {
@@ -202,6 +286,204 @@ test("mapWithConcurrency does not exceed the configured limit", async () => {
   assert.deepEqual(results, [2, 4, 6, 8, 10]);
 });
 
+test("validateSaveSource accepts ChatGPT captures from ChatGPT tabs", () => {
+  assert.doesNotThrow(() => validateSaveSource(VALID_CAPTURE, VALID_SENDER));
+  assert.doesNotThrow(() =>
+    validateSaveSource(
+      { ...VALID_CAPTURE, url: "https://chat.openai.com/c/abc" },
+      { tab: { url: "https://chat.openai.com/c/abc" } }
+    )
+  );
+});
+
+test("validateSaveSource rejects non-ChatGPT senders and capture urls", () => {
+  assert.throws(
+    () => validateSaveSource(VALID_CAPTURE, { tab: { url: "https://evil.test/c/abc" } }),
+    /sender must be a ChatGPT tab/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, url: "https://evil.test/c/abc" }, VALID_SENDER),
+    /capture url must be a ChatGPT conversation/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, url: "https://chatgpt.com/" }, VALID_SENDER),
+    /must use \/c\/<id>/
+  );
+});
+
+test("validateSaveSource rejects wrong provider and malformed messages", () => {
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, provider: "other" }, VALID_SENDER),
+    /provider must be chatgpt/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [] }, VALID_SENDER),
+    /non-empty array/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [{ role: "user", content: 1 }] }, VALID_SENDER),
+    /string role and content/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, capturedAt: "not a date" }, VALID_SENDER),
+    /ISO timestamp/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, conversationTitle: 1 }, VALID_SENDER),
+    /conversationTitle must be a string/
+  );
+  assert.throws(
+    () => validateSaveSource({ ...VALID_CAPTURE, messages: [{ role: "tool", content: "x" }] }, VALID_SENDER),
+    /role must be user, assistant, or system/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: [{ role: "user", content: "x".repeat(200_001) }] },
+        VALID_SENDER
+      ),
+    /content must not exceed/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: Array.from({ length: 501 }, () => ({ role: "user", content: "x" })) },
+        VALID_SENDER
+      ),
+    /messages must not exceed/
+  );
+  assert.throws(
+    () =>
+      validateSaveSource(
+        { ...VALID_CAPTURE, messages: Array.from({ length: 500 }, () => ({ role: "user", content: "x".repeat(3_000) })) },
+        VALID_SENDER
+      ),
+    /raw source must not exceed/
+  );
+});
+
+test("handleMessage stores export state in chrome.storage.session", async () => {
+  const restore = installChromeStorageSession(memoryStorage());
+  try {
+    await handleMessage({ type: "export-state-set", key: "kinic-current-tab-export-v1", value: "state" }, {});
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: "state" }
+    );
+    await handleMessage({ type: "export-state-remove", key: "kinic-current-tab-export-v1" }, {});
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: null }
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("handleMessage does not overwrite cancelled export state with stale progress", async () => {
+  const restore = installChromeStorageSession(memoryStorage());
+  try {
+    await handleMessage({
+      type: "export-state-set",
+      key: "kinic-current-tab-export-v1",
+      value: JSON.stringify({ status: "cancelled" })
+    }, {});
+    await handleMessage({
+      type: "export-state-set",
+      key: "kinic-current-tab-export-v1",
+      value: JSON.stringify({ status: "exporting", progress: { done: 1 } })
+    }, {});
+
+    assert.deepEqual(
+      await handleMessage({ type: "export-state-get", key: "kinic-current-tab-export-v1" }, {}),
+      { ok: true, value: JSON.stringify({ status: "cancelled" }) }
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("save-source calls read_node and write_node with database_id", async () => {
+  const restore = installChromeStorage(memoryStorage(), memoryStorage());
+  const calls = [];
+  setVfsActorFactoryForTest(async (config) => {
+    calls.push(["create", config]);
+    return {
+      async read_node(databaseId, path) {
+        calls.push(["read_node", databaseId, path]);
+        return { Ok: [{ etag: "etag-1" }] };
+      },
+      async write_node(request) {
+        calls.push(["write_node", request]);
+        return {
+          Ok: {
+            created: false,
+            node: {
+              path: request.path,
+              kind: request.kind,
+              updated_at: 1n,
+              etag: "etag-2"
+            }
+          }
+        };
+      }
+    };
+  });
+  try {
+    const response = await handleMessage(
+      {
+        type: "save-source",
+        config: {
+          canisterId: "aaaaa-aa",
+          databaseId: "team_wiki",
+          host: "http://127.0.0.1:8001"
+        },
+        capture: VALID_CAPTURE
+      },
+      VALID_SENDER
+    );
+
+    assert.equal(response.ok, true);
+    assert.deepEqual(calls[1], ["read_node", "team_wiki", "/Sources/raw/chatgpt-abc/chatgpt-abc.md"]);
+    assert.equal(calls[2][0], "write_node");
+    assert.equal(calls[2][1].database_id, "team_wiki");
+    assert.equal(calls[2][1].path, "/Sources/raw/chatgpt-abc/chatgpt-abc.md");
+    assert.deepEqual(calls[2][1].expected_etag, ["etag-1"]);
+  } finally {
+    setVfsActorFactoryForTest(null);
+    restore();
+  }
+});
+
+test("load-config defaults databaseId to default", async () => {
+  const restore = installChromeStorage(memoryStorage(), memoryStorage());
+  try {
+    const response = await handleMessage({ type: "load-config" }, null);
+    assert.equal(response.config.databaseId, "default");
+  } finally {
+    restore();
+  }
+});
+
+test("handleMessage reports the unknown message type value", async () => {
+  assert.deepEqual(await handleMessage({ type: "legacy-save" }, null), {
+    ok: false,
+    error: "unknown message type: legacy-save"
+  });
+  assert.deepEqual(await handleMessage({}, null), {
+    ok: false,
+    error: "unknown message type: missing"
+  });
+});
+
+test("isLocalHost only accepts parsed localhost hostnames", () => {
+  assert.equal(isLocalHost("http://127.0.0.1:8001"), true);
+  assert.equal(isLocalHost("http://localhost:8001"), true);
+  assert.equal(isLocalHost("https://example.com/?next=localhost"), false);
+  assert.equal(isLocalHost("https://localhost.evil.test"), false);
+  assert.equal(isLocalHost("not a url localhost"), false);
+});
+
 function jsonResponse(payload, ok = true, status = 200) {
   return {
     ok,
@@ -209,6 +491,15 @@ function jsonResponse(payload, ok = true, status = 200) {
     async json() {
       return payload;
     }
+  };
+}
+
+function chatGptFetch(handler) {
+  return async (url, init) => {
+    if (url === "/api/auth/session") {
+      return jsonResponse({ accessToken: "test-token" });
+    }
+    return handler(url, init);
   };
 }
 
@@ -248,6 +539,104 @@ function memoryStorage() {
     },
     removeItem(key) {
       values.delete(key);
+    },
+    entries() {
+      return values.entries();
     }
+  };
+}
+
+function installRuntimeStorage(storage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      runtime: {
+        async sendMessage(message) {
+          if (message.type === "export-state-get") {
+            return { ok: true, value: storage.getItem(message.key) };
+          }
+          if (message.type === "export-state-set") {
+            storage.setItem(message.key, message.value);
+            return { ok: true };
+          }
+          if (message.type === "export-state-remove") {
+            storage.removeItem(message.key);
+            return { ok: true };
+          }
+          return { ok: false, error: "unknown message type" };
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+}
+
+function installChromeStorageSession(storage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      storage: {
+        session: {
+          async get(key) {
+            return { [key]: storage.getItem(key) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              storage.setItem(key, value);
+            }
+          },
+          async remove(key) {
+            storage.removeItem(key);
+          }
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+}
+
+function installChromeStorage(syncStorage, sessionStorage) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      storage: {
+        sync: {
+          async get(defaults) {
+            return { ...defaults, ...Object.fromEntries(syncStorage.entries()) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              syncStorage.setItem(key, value);
+            }
+          }
+        },
+        session: {
+          async get(key) {
+            return { [key]: sessionStorage.getItem(key) };
+          },
+          async set(values) {
+            for (const [key, value] of Object.entries(values)) {
+              sessionStorage.setItem(key, value);
+            }
+          },
+          async remove(key) {
+            sessionStorage.removeItem(key);
+          }
+        }
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
   };
 }

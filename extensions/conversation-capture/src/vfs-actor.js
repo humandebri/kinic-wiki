@@ -1,11 +1,11 @@
 // Where: extensions/conversation-capture/src/vfs-actor.js
 // What: Minimal write-capable VFS actor for raw source persistence.
 // Why: The wiki browser client is read-only; capture needs read_node plus write_node.
-import { Actor, HttpAgent } from "@icp-sdk/core/agent";
-import { IDL } from "@icp-sdk/core/candid";
-import { Principal } from "@icp-sdk/core/principal";
-
 export async function createVfsActor({ canisterId, host }) {
+  const [{ Actor, HttpAgent }, { Principal }] = await Promise.all([
+    import("@icp-sdk/core/agent"),
+    import("@icp-sdk/core/principal")
+  ]);
   const principal = Principal.fromText(canisterId);
   const agent = await HttpAgent.create({ host });
   if (isLocalHost(host)) {
@@ -46,6 +46,11 @@ function idlFactory({ IDL: idl }) {
   });
 }
 
-function isLocalHost(host) {
-  return host.includes("127.0.0.1") || host.includes("localhost");
+export function isLocalHost(host) {
+  try {
+    const { hostname } = new URL(host);
+    return hostname === "127.0.0.1" || hostname === "localhost";
+  } catch {
+    return false;
+  }
 }
