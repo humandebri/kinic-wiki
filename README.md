@@ -25,8 +25,8 @@ Detailed structure map:
 ## What Exists Today
 
 - FS-first remote node API backed by the IC
-- Rust CLI for direct path-based operations and sync flows
-- Search, snapshot export, and delta sync
+- Rust CLI for direct path-based operations
+- Search, snapshot export, and delta reads
 - Link graph and node-context queries for wiki navigation
 - Agent Memory API v1 for canister-backed long-term context reads
 - Skill Knowledge Base paths for private/team `SKILL.md` packages plus public catalog nodes
@@ -141,10 +141,7 @@ Main commands:
 - `multi-edit-node`
 - `search-remote`
 - `search-path-remote`
-- `lint-local`
 - `status`
-- `pull`
-- `push`
 - `skill upsert`
 - `skill find`
 - `skill inspect`

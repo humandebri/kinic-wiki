@@ -10,10 +10,14 @@ const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycl
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
 const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
-const { buildRecipeClipDocument, normalizeClipUrl, parseTags, recipeClipPath, renderRecipeClipMarkdown } = await importTs("../lib/recipe-clips.ts");
+const { buildSourceClipDocument, normalizeClipUrl, parseTags, sourceClipPath, renderSourceClipMarkdown } = await importTs("../lib/source-clips.ts");
+const explorerTreeSource = readFileSync(new URL("../components/explorer-tree.tsx", import.meta.url), "utf8");
 const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
+assert.match(explorerTreeSource, /childNodesCache\.current\.get\(requestKey\)/);
+assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, data\)/);
+assert.match(explorerTreeSource, /key=\{`\$\{canisterId\}:\$\{databaseId\}:\/Wiki:/);
 assert.match(globalsCss, /button:not\(:disabled\):active/);
 assert.match(globalsCss, /transform: scale\(0\.98\)/);
 assert.match(globalsCss, /button\[aria-busy="true"\]/);
@@ -153,10 +157,12 @@ assert.equal(cycleTone(null), "gray");
 assert.equal(normalizeClipUrl("HTTPS://Example.COM:443/a?b=1#section"), "https://example.com/a?b=1");
 assert.throws(() => normalizeClipUrl("ftp://example.com/a"), /http or https/);
 assert.deepEqual(parseTags("#easy, dinner easy\nquick"), ["easy", "dinner", "quick"]);
-const clipPath = await recipeClipPath("https://example.com/a?b=1");
-assert.match(clipPath, /^\/Sources\/Recipes\/example\.com\/[a-f0-9]{12}\.md$/);
-assert.equal(clipPath, await recipeClipPath("https://example.com/a?b=1"));
-const clipMarkdown = renderRecipeClipMarkdown({
+const clipPath = await sourceClipPath("https://example.com/a?b=1");
+assert.match(clipPath, /^\/Sources\/raw\/clip-example\.com-[a-f0-9]{12}\/clip-example\.com-[a-f0-9]{12}\.md$/);
+assert.equal(clipPath, await sourceClipPath("https://example.com/a?b=1"));
+const clipSegments = clipPath.split("/");
+assert.equal(clipSegments.at(-1), `${clipSegments.at(-2)}.md`);
+const clipMarkdown = renderSourceClipMarkdown({
   url: "https://example.com/a",
   title: "Weeknight Pasta",
   site: "example.com",
@@ -168,7 +174,7 @@ const clipMarkdown = renderRecipeClipMarkdown({
 assert.match(clipMarkdown, /source_url: "https:\/\/example\.com\/a"/);
 assert.match(clipMarkdown, /# Weeknight Pasta/);
 assert.match(clipMarkdown, /halve salt/);
-const clipDocument = await buildRecipeClipDocument({
+const clipDocument = await buildSourceClipDocument({
   url: "https://example.com/a#ignored",
   title: "Weeknight Pasta",
   site: "example.com",
@@ -178,7 +184,8 @@ const clipDocument = await buildRecipeClipDocument({
   extractedText: "body"
 });
 assert.equal(clipDocument.normalizedUrl, "https://example.com/a");
-assert.equal(JSON.parse(clipDocument.metadataJson).app, "recipe_clip");
+assert.match(clipDocument.path, /^\/Sources\/raw\/clip-example\.com-[a-f0-9]{12}\/clip-example\.com-[a-f0-9]{12}\.md$/);
+assert.equal(JSON.parse(clipDocument.metadataJson).app, "source_clip");
 assert.match(searchPanelSource, /prefix = "\/Wiki"/);
 assert.match(searchPanelSource, /prefix, readIdentity/);
 

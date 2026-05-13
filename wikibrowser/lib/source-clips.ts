@@ -1,10 +1,10 @@
-// Where: wikibrowser/lib/recipe-clips.ts
+// Where: wikibrowser/lib/source-clips.ts
 // What: URL clip normalization, extraction, and Markdown rendering helpers.
-// Why: Recipe clips should stay ordinary VFS source nodes while keeping UI logic small.
+// Why: Source clips should stay ordinary VFS source nodes while keeping UI logic small.
 
-export const RECIPE_CLIP_PREFIX = "/Sources/Recipes";
+export const SOURCE_CLIP_PREFIX = "/Sources/raw";
 
-export type RecipeClipDraft = {
+export type SourceClipDraft = {
   url: string;
   title: string;
   site: string;
@@ -14,24 +14,24 @@ export type RecipeClipDraft = {
   extractedText: string;
 };
 
-export type RecipeClipDocument = RecipeClipDraft & {
+export type SourceClipDocument = SourceClipDraft & {
   normalizedUrl: string;
   path: string;
   metadataJson: string;
   markdown: string;
 };
 
-export type ExtractedRecipeContent = {
+export type ExtractedSourceContent = {
   title: string;
   text: string;
 };
 
-export async function buildRecipeClipDocument(draft: RecipeClipDraft): Promise<RecipeClipDocument> {
+export async function buildSourceClipDocument(draft: SourceClipDraft): Promise<SourceClipDocument> {
   const normalizedUrl = normalizeClipUrl(draft.url);
-  const path = await recipeClipPath(normalizedUrl);
+  const path = await sourceClipPath(normalizedUrl);
   const title = normalizedTitle(draft.title, normalizedUrl);
   const metadataJson = JSON.stringify({
-    app: "recipe_clip",
+    app: "source_clip",
     url: normalizedUrl,
     title,
     tags: draft.tags
@@ -42,7 +42,7 @@ export async function buildRecipeClipDocument(draft: RecipeClipDraft): Promise<R
     normalizedUrl,
     path,
     metadataJson,
-    markdown: renderRecipeClipMarkdown({
+    markdown: renderSourceClipMarkdown({
       ...draft,
       title,
       url: normalizedUrl
@@ -63,11 +63,11 @@ export function normalizeClipUrl(input: string): string {
   return url.toString();
 }
 
-export async function recipeClipPath(normalizedUrl: string): Promise<string> {
+export async function sourceClipPath(normalizedUrl: string): Promise<string> {
   const url = new URL(normalizedUrl);
-  const host = safePathSegment(url.hostname);
   const hash = await sha256Prefix(normalizedUrl, 12);
-  return `${RECIPE_CLIP_PREFIX}/${host}/${hash}.md`;
+  const id = `clip-${safePathSegment(url.hostname).slice(0, 48)}-${hash}`;
+  return `${SOURCE_CLIP_PREFIX}/${id}/${id}.md`;
 }
 
 export function parseTags(input: string): string[] {
@@ -78,7 +78,7 @@ export function parseTags(input: string): string[] {
   return [...new Set(tags)].slice(0, 12);
 }
 
-export function renderRecipeClipMarkdown(draft: RecipeClipDraft): string {
+export function renderSourceClipMarkdown(draft: SourceClipDraft): string {
   const tags = draft.tags.join(", ");
   const title = normalizedTitle(draft.title, draft.url);
   return [
@@ -103,7 +103,7 @@ export function renderRecipeClipMarkdown(draft: RecipeClipDraft): string {
   ].join("\n");
 }
 
-export function extractRecipeContentFromHtml(html: string, sourceUrl: string): ExtractedRecipeContent {
+export function extractSourceContentFromHtml(html: string, sourceUrl: string): ExtractedSourceContent {
   const document = new DOMParser().parseFromString(html, "text/html");
   const jsonLd = extractRecipeJsonLd(document);
   if (jsonLd) {
@@ -118,7 +118,7 @@ export function extractRecipeContentFromHtml(html: string, sourceUrl: string): E
   return { title, text };
 }
 
-export function recipeClipTitleFromMetadata(metadataJson: string, path: string): string {
+export function sourceClipTitleFromMetadata(metadataJson: string, path: string): string {
   const metadata = parseRecord(metadataJson);
   const title = typeof metadata?.title === "string" ? metadata.title.trim() : "";
   if (title) {
@@ -127,7 +127,7 @@ export function recipeClipTitleFromMetadata(metadataJson: string, path: string):
   return path.split("/").at(-1)?.replace(/\.md$/, "") ?? path;
 }
 
-export function recipeClipTagsFromMetadata(metadataJson: string): string[] {
+export function sourceClipTagsFromMetadata(metadataJson: string): string[] {
   const metadata = parseRecord(metadataJson);
   if (!metadata || !Array.isArray(metadata.tags)) {
     return [];
@@ -135,7 +135,7 @@ export function recipeClipTagsFromMetadata(metadataJson: string): string[] {
   return metadata.tags.filter((tag) => typeof tag === "string").slice(0, 12);
 }
 
-export function recipeClipSiteFromMetadata(metadataJson: string): string {
+export function sourceClipSiteFromMetadata(metadataJson: string): string {
   const metadata = parseRecord(metadataJson);
   if (metadata && typeof metadata.url === "string") {
     try {
@@ -147,7 +147,7 @@ export function recipeClipSiteFromMetadata(metadataJson: string): string {
   return "";
 }
 
-function extractRecipeJsonLd(document: Document): ExtractedRecipeContent | null {
+function extractRecipeJsonLd(document: Document): ExtractedSourceContent | null {
   for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
     const parsed = parseJsonValue(script.textContent ?? "");
     const recipes = collectRecipeObjects(parsed);
@@ -236,7 +236,7 @@ function normalizedTitle(title: string, url: string): string {
   try {
     return new URL(url).hostname;
   } catch {
-    return "Untitled recipe";
+    return "Untitled source";
   }
 }
 

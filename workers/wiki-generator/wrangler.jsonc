@@ -24,7 +24,7 @@
     {
       "binding": "DB",
       "database_name": "kinic-wiki-generator",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "c82cdeed-424c-474a-8552-23b2b7e74a7a",
       "migrations_dir": "migrations"
     }
   ],

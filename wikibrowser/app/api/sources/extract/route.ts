@@ -1,6 +1,6 @@
-// Where: wikibrowser/app/api/recipes/extract/route.ts
-// What: Fetch recipe pages for client-side text extraction.
-// Why: Browsers cannot reliably fetch arbitrary recipe pages because of CORS.
+// Where: wikibrowser/app/api/sources/extract/route.ts
+// What: Fetch source pages for client-side text extraction.
+// Why: Browsers cannot reliably fetch arbitrary source pages because of CORS.
 
 const FETCH_TIMEOUT_MS = 12_000;
 const MAX_HTML_BYTES = 2_000_000;
@@ -21,7 +21,7 @@ export async function POST(request: Request): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const { response, finalUrl } = await fetchAllowedRecipeUrl(url, controller.signal);
+    const { response, finalUrl } = await fetchAllowedSourceUrl(url, controller.signal);
     if (!response.ok) {
       return jsonError(`fetch failed: ${response.status}`, 502);
     }
@@ -51,13 +51,13 @@ function parseAllowedUrl(value: string): URL {
   return url;
 }
 
-async function fetchAllowedRecipeUrl(firstUrl: URL, signal: AbortSignal): Promise<{ response: Response; finalUrl: URL }> {
+async function fetchAllowedSourceUrl(firstUrl: URL, signal: AbortSignal): Promise<{ response: Response; finalUrl: URL }> {
   let currentUrl = firstUrl;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
     const response = await fetch(currentUrl.toString(), {
       headers: {
         accept: "text/html,application/xhtml+xml",
-        "user-agent": "KinicWikiRecipeClip/1.0"
+        "user-agent": "KinicWikiSourceClip/1.0"
       },
       redirect: "manual",
       signal

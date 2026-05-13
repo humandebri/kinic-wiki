@@ -1,5 +1,5 @@
 // Where: crates/wiki_domain/src/lib.rs
-// What: Wiki-specific path validation and mirror defaults layered on top of the reusable VFS.
+// What: Wiki-specific path validation layered on top of the reusable VFS.
 // Why: `/Wiki` and `/Sources/...` semantics must stay centralized outside the generic VFS crates.
 use vfs_types::NodeKind;
 
@@ -11,7 +11,6 @@ pub const WIKI_CONCEPTS_PREFIX: &str = "/Wiki/concepts";
 pub const SKILL_REGISTRY_ROOT: &str = "/Wiki/skills";
 pub const PUBLIC_SKILL_REGISTRY_ROOT: &str = "/Wiki/public-skills";
 pub const WIKI_BEAM_SECTION_TITLE: &str = "Benchmarks";
-pub const DEFAULT_MIRROR_ROOT: &str = "Wiki";
 pub const RAW_SOURCES_PREFIX: &str = "/Sources/raw";
 pub const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
 pub const SKILL_RUNS_PREFIX: &str = "/Sources/skill-runs";

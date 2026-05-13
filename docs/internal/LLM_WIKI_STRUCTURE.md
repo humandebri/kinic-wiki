@@ -35,7 +35,7 @@ flowchart LR
 | `crates/` | Rust 実装本体 | 現行 crate と空ディレクトリが混在 |
 | `docs/` | 方針・検証資料 | `internal` と `validation` に分離 |
 | `scripts/` | build / bench / canbench 補助 | Bash と Python 混在 |
-| `fixtures/` | テスト・比較用固定入力 | mirror spec, beam sample |
+| `fixtures/` | テスト・比較用固定入力 | beam sample |
 | `artifacts/` | 生成物・測定結果保管 | 大容量データを含む |
 | `.agents/skills/` | Codex/agent 向け skill | ingest / lint / query |
 | `.benchmarks/`, `.canbench*` | bench 関連補助 | 実行補助と結果置き場 |
@@ -49,7 +49,7 @@ flowchart LR
 | crate | 役割 | 主要ファイル |
 | --- | --- | --- |
 | `vfs_canister` | ICP 公開入口 | `src/lib.rs`, `vfs.did` |
-| `vfs_cli_app` | agent / human 向け CLI 本体 | `src/main.rs`, `src/commands.rs`, `src/mirror.rs` |
+| `vfs_cli_app` | agent / human 向け CLI 本体 | `src/main.rs`, `src/commands.rs` |
 | `vfs_cli_core` | CLI 共通核 | `src/cli.rs`, `src/commands.rs`, `src/agent_tools.rs` |
 | `vfs_client` | canister RPC client | `src/lib.rs` |
 | `vfs_runtime` | service 境界 | `src/lib.rs` |
@@ -69,7 +69,7 @@ flowchart LR
 
 - `/Sources/raw/...`, `/Sources/sessions/...` の source path 制約を集中管理
 - source node の canonical path 制約を強制
-- mirror root 既定値など、wiki だけが知る規則を保持
+- wiki だけが知る path 規則を保持
 
 ### 5.3 `vfs_store`
 
@@ -125,23 +125,19 @@ flowchart LR
 
 - generic VFS CLI 層
 - CLI 引数定義、connection 解決、共通コマンド、tool schema を保持
-- wiki 固有の mirror workflow は持たない
+- wiki 固有 workflow は持たない
 
 ### 5.8 `vfs_cli_app`
 
 - 実運用向け CLI 本体
-- `pull` / `push` による local mirror 同期
-- `lint-local`, `status`, index 再構築を提供
+- `status`, index 再構築、conversation wiki 生成を提供
 - `agent_tools.rs` で OpenAI 互換 tool calling 用 schema と dispatcher を提供
 
 主要ソース:
 
 - `cli.rs`: CLI 定義
-- `commands.rs`: dispatch と pull/push
-- `mirror.rs`: mirror state 管理、差分反映、conflict file 出力
+- `commands.rs`: dispatch と wiki 固有 command
 - `maintenance.rs`: index 再構築
-- `lint_local.rs`: mirror lint
-- `mirror_frontmatter.rs`: mirror frontmatter 補助
 
 ## 6. 同期と保存の流れ
 
@@ -154,7 +150,7 @@ sequenceDiagram
     participant SVC as VfsService
     participant DB as SQLite/FTS
 
-    U->>CLI: pull / push / read / write
+    U->>CLI: read / write / maintenance
     CLI->>C: VfsApi request
     C->>CAN: candid query/update
     CAN->>SVC: service call
@@ -163,7 +159,7 @@ sequenceDiagram
     SVC-->>CAN: domain result
     CAN-->>C: candid response
     C-->>CLI: Rust result
-    CLI-->>U: mirror更新 / 出力
+    CLI-->>U: 出力
 ```
 
 ## 7. データ設計上の要点
@@ -198,7 +194,6 @@ sequenceDiagram
 
 ### 8.3 `fixtures/`
 
-- `fixtures/mirror_spec/`: mirror golden と system page 定義
 - `fixtures/beam/`: beam sample 入力
 
 ### 8.4 `artifacts/`

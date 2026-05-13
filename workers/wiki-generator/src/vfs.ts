@@ -2,8 +2,8 @@
 // What: Minimal authenticated VFS canister client for the generator.
 // Why: Worker code only needs source reads, wiki writes, search, and sync paging.
 import { Actor, HttpAgent } from "@icp-sdk/core/agent";
-import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { Principal } from "@icp-sdk/core/principal";
+import { identityFromPem } from "./identity-pem.js";
 import { idlFactory } from "./vfs-idl.js";
 import type { ExportSnapshotPage, FetchUpdatesPage, NodeKind, SearchNodeHit, WikiNode, WorkerConfig, WriteNodeRequest } from "./types.js";
 
@@ -90,8 +90,8 @@ export type VfsClient = {
   fetchUpdates(databaseId: string, prefix: string, knownRevision: string, cursor: string | null, targetRevision: string | null): Promise<FetchUpdatesPage>;
 };
 
-export async function createVfsClient(config: WorkerConfig, identityJson: string): Promise<VfsClient> {
-  const identity = Ed25519KeyIdentity.fromJSON(identityJson);
+export async function createVfsClient(config: WorkerConfig, identityPem: string): Promise<VfsClient> {
+  const identity = identityFromPem(identityPem);
   const agent = HttpAgent.createSync({ host: config.icHost, identity });
   if (isLocalHost(config.icHost)) {
     await agent.fetchRootKey();

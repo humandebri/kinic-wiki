@@ -74,6 +74,27 @@ export function hrefForGraph(canisterId: string, databaseId: string, centerPath?
   return `/${encodeURIComponent(databaseId)}/graph${queryString}`;
 }
 
+export function hrefForDatabaseSwitch(
+  canisterId: string,
+  databaseId: string,
+  state: {
+    isSearchPage: boolean;
+    isGraphPage: boolean;
+    query: string;
+    searchKind: string;
+    graphDepth: number;
+    readMode?: string | null;
+  }
+): string {
+  if (state.isSearchPage) {
+    return hrefForSearch(canisterId, databaseId, state.query, state.searchKind, state.readMode);
+  }
+  if (state.isGraphPage) {
+    return hrefForGraph(canisterId, databaseId, "/Wiki", state.graphDepth, state.readMode);
+  }
+  return hrefForPath(canisterId, databaseId, "/Wiki", undefined, undefined, undefined, undefined, state.readMode);
+}
+
 export function hrefForMarkdownLink(canisterId: string, databaseId: string, currentPath: string, href: string | undefined, readMode?: string | null): string | null {
   if (!href) {
     return null;

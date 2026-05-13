@@ -1,5 +1,5 @@
 // Where: crates/vfs_cli_core/src/commands.rs
-// What: Generic VFS command execution and sync paging helpers.
+// What: Generic VFS command execution helpers.
 // Why: The app-facing CLI package should delegate shared VFS command behavior instead of owning it.
 use std::borrow::Cow;
 use std::fs;
@@ -7,25 +7,19 @@ use std::fs;
 use anyhow::{Result, anyhow};
 use vfs_client::VfsApi;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
-    GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
-    MultiEditNodeRequest, NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest,
-    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest,
+    NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
-use wiki_domain::{WIKI_ROOT_PATH, validate_source_path_for_kind};
+use wiki_domain::validate_source_path_for_kind;
 
 use crate::cli::{DatabaseCommand, VfsCommand};
 use crate::connection::{
     ResolvedConnection, ResolvedConnectionPreview, link_workspace_database,
     unlink_workspace_database, workspace_config_path,
 };
-
-pub const SYNC_PAGE_LIMIT: u32 = 100;
-pub const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
-pub const SNAPSHOT_INVALID_ERROR: &str = "known_snapshot_revision is invalid";
-pub const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no longer current";
 
 pub async fn run_vfs_command(
     client: &impl VfsApi,
@@ -587,92 +581,6 @@ fn print_link_summary(label: &str, links: &[LinkEdge]) {
             "{label}\t{}\t{}\t{}\t{}",
             link.source_path, link.target_path, link.link_kind, link.link_text
         );
-    }
-}
-
-pub async fn collect_paged_snapshot(
-    client: &impl VfsApi,
-    database_id: &str,
-) -> Result<ExportSnapshotResponse> {
-    let mut cursor = None;
-    let mut snapshot_revision = None;
-    let mut nodes = Vec::new();
-    loop {
-        let page = client
-            .export_snapshot(ExportSnapshotRequest {
-                database_id: database_id.to_string(),
-                prefix: Some(WIKI_ROOT_PATH.to_string()),
-                limit: SYNC_PAGE_LIMIT,
-                cursor: cursor.clone(),
-                snapshot_revision: snapshot_revision.clone(),
-                snapshot_session_id: None,
-            })
-            .await?;
-        snapshot_revision = Some(page.snapshot_revision.clone());
-        nodes.extend(page.nodes);
-        let Some(next_cursor) = page.next_cursor else {
-            return Ok(ExportSnapshotResponse {
-                snapshot_revision: snapshot_revision.unwrap_or_default(),
-                snapshot_session_id: None,
-                nodes,
-                next_cursor: None,
-            });
-        };
-        cursor = Some(next_cursor);
-    }
-}
-
-pub async fn collect_paged_updates(
-    client: &impl VfsApi,
-    database_id: &str,
-    known_snapshot_revision: &str,
-    target_snapshot_revision: Option<String>,
-) -> Result<FetchUpdatesResponse> {
-    let mut cursor = None;
-    let mut target_snapshot_revision = target_snapshot_revision;
-    let mut changed_nodes = Vec::new();
-    let mut removed_paths = Vec::new();
-    loop {
-        let page = client
-            .fetch_updates(FetchUpdatesRequest {
-                database_id: database_id.to_string(),
-                known_snapshot_revision: known_snapshot_revision.to_string(),
-                prefix: Some(WIKI_ROOT_PATH.to_string()),
-                limit: SYNC_PAGE_LIMIT,
-                cursor: cursor.clone(),
-                target_snapshot_revision: target_snapshot_revision.clone(),
-            })
-            .await?;
-        target_snapshot_revision = Some(page.snapshot_revision.clone());
-        changed_nodes.extend(page.changed_nodes);
-        removed_paths.extend(page.removed_paths);
-        let Some(next_cursor) = page.next_cursor else {
-            return Ok(FetchUpdatesResponse {
-                snapshot_revision: target_snapshot_revision.unwrap_or_default(),
-                changed_nodes,
-                removed_paths,
-                next_cursor: None,
-            });
-        };
-        cursor = Some(next_cursor);
-    }
-}
-
-pub fn resync_required_error(error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if message.contains(SNAPSHOT_UNAVAILABLE_ERROR) || message.contains(SNAPSHOT_INVALID_ERROR) {
-        anyhow!("{message}; run pull --resync")
-    } else {
-        error
-    }
-}
-
-pub fn snapshot_restart_required_error(error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if message.contains(SNAPSHOT_NO_LONGER_CURRENT_ERROR) {
-        anyhow!("{message}; rerun pull")
-    } else {
-        error
     }
 }
 

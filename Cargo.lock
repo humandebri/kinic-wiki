@@ -3042,6 +3042,7 @@ dependencies = [
  "async-trait",
  "candid",
  "ic-agent",
+ "k256",
  "vfs-types",
 ]
 

@@ -6,7 +6,7 @@
 
 import { useState } from "react";
 import { ActionButton } from "./action-button";
-import { ANONYMOUS_PRINCIPAL, DATABASE_ROLES, databaseRoleFromValue, isBusyGrant, isBusyRevoke, type BusyAction } from "./access-control";
+import { ANONYMOUS_PRINCIPAL, DATABASE_ROLES, databaseRoleFromValue, isBusyGrant, isBusyRevoke, principalDisplayName, type BusyAction } from "./access-control";
 import type { DatabaseMember, DatabaseRole } from "@/lib/types";
 
 export function MemberTable(props: {
@@ -65,7 +65,7 @@ function MemberRow(props: {
   const changed = role !== props.member.role;
   return (
     <tr className={`border-t border-line ${revokeBusy || roleBusy ? "bg-blue-50/60" : ""}`}>
-      <td className="px-4 py-3 font-mono text-xs text-ink">{props.member.principal}</td>
+      <td className="px-4 py-3 font-mono text-xs text-ink">{principalDisplayName(props.member.principal)}</td>
       <td className="px-4 py-3">
         <div className="flex min-w-[210px] items-center gap-2">
           <select

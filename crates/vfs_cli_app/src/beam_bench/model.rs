@@ -262,7 +262,7 @@ Runtime constraints:
   - graph-links
   - incoming-links
   - outgoing-links
-- Do not use write-node, append-node, edit-node, multi-edit-node, delete-node, delete-tree, rebuild-index, pull, or push
+- Do not use write-node, append-node, edit-node, multi-edit-node, delete-node, delete-tree, or rebuild-index
 - If evidence is insufficient, answer exactly `insufficient evidence`
 - Return the final answer in the same language and terminology as the supporting note span. Do not translate note content into Japanese or another language unless the note itself uses that language.
 

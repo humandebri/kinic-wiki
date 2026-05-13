@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "./env.js";
 
 export async function scanSources(env: RuntimeEnv): Promise<void> {
   const config = loadConfig(env);
-  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_JSON);
+  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_PEM);
   for (const databaseId of config.databaseIds) {
     await scanIngestRequests(env, vfs, config, databaseId);
     await scanDatabase(env, vfs, config, databaseId);

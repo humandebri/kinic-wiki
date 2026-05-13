@@ -4,7 +4,12 @@
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use candid::{Decode, Encode};
-use ic_agent::{Agent, export::Principal};
+use ic_agent::{
+    Agent,
+    export::Principal,
+    identity::{BasicIdentity, Secp256k1Identity},
+};
+use k256::{SecretKey, pkcs8::DecodePrivateKey};
 use vfs_types::{
     AppendNodeRequest, CanisterHealth, ChildNode, DatabaseArchiveChunk, DatabaseArchiveInfo,
     DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole, DatabaseSummary, DeleteNodeRequest,
@@ -172,6 +177,24 @@ impl CanisterVfsClient {
             .with_url(replica_host)
             .build()
             .context("failed to build IC agent")?;
+        Self::from_agent(replica_host, canister_id, agent).await
+    }
+
+    pub async fn new_with_identity_pem(
+        replica_host: &str,
+        canister_id: &str,
+        identity_pem: &[u8],
+    ) -> Result<Self> {
+        let identity = identity_from_pem(identity_pem)?;
+        let agent = Agent::builder()
+            .with_url(replica_host)
+            .with_boxed_identity(identity)
+            .build()
+            .context("failed to build IC agent")?;
+        Self::from_agent(replica_host, canister_id, agent).await
+    }
+
+    async fn from_agent(replica_host: &str, canister_id: &str, agent: Agent) -> Result<Self> {
         if is_local_replica(replica_host) {
             agent
                 .fetch_root_key()
@@ -286,6 +309,19 @@ impl CanisterVfsClient {
         Decode!(&bytes, Out)
             .with_context(|| format!("failed to decode query response for {method}"))
     }
+}
+
+fn identity_from_pem(identity_pem: &[u8]) -> Result<Box<dyn ic_agent::Identity>> {
+    if let Ok(identity) = Secp256k1Identity::from_pem(identity_pem) {
+        return Ok(Box::new(identity));
+    }
+    if let Ok(identity) = BasicIdentity::from_pem(identity_pem) {
+        return Ok(Box::new(identity));
+    }
+    let pem_text = std::str::from_utf8(identity_pem).context("identity PEM is not UTF-8")?;
+    let private_key = SecretKey::from_pkcs8_pem(pem_text)
+        .context("failed to parse identity PEM as secp256k1 or Ed25519 private key")?;
+    Ok(Box::new(Secp256k1Identity::from_private_key(private_key)))
 }
 
 #[async_trait]

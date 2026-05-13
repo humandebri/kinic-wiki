@@ -4,7 +4,7 @@
 
 The canister also exposes read-only Agent Memory API methods such as `memory_manifest`, `query_context`, and `source_evidence`.
 Those are direct canister/client methods, not CLI commands in this document.
-Use the CLI commands below for shell workflows and local mirror operations.
+Use the CLI commands below for shell workflows against the remote VFS.
 
 ## Connection
 
@@ -64,8 +64,6 @@ cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database grant
 ```
 
 Archive and restore are low-level canister APIs for snapshot bytes. The CLI does not yet persist archive bytes for you. See [`DB_LIFECYCLE.md`](DB_LIFECYCLE.md) for status, slot reuse, and restore validation details.
-
-If `pull` or `push` reports a snapshot revision resync condition, run `pull --resync` before retrying the workflow.
 
 ## Search
 
@@ -129,13 +127,4 @@ cargo run -p vfs-cli --bin vfs-cli -- graph-neighborhood --center-path /Wiki/fil
 cargo run -p vfs-cli --bin vfs-cli -- graph-links --prefix /Wiki --limit 100 --json
 cargo run -p vfs-cli --bin vfs-cli -- incoming-links --path /Wiki/file.md --limit 20 --json
 cargo run -p vfs-cli --bin vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
-```
-
-## Mirror Operations
-
-Use `pull` and `push` for local mirror sync.
-
-```bash
-cargo run -p vfs-cli --bin vfs-cli -- pull --vault-path ./vault
-cargo run -p vfs-cli --bin vfs-cli -- push --vault-path ./vault
 ```

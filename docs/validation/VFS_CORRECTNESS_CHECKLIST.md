@@ -22,8 +22,6 @@ This checklist records what the current FS-first contract already covers, what w
 | `fetch_updates` rename delta | `fs_store_sync` | covered |
 | `fetch_updates` removed paths | `fs_store_sync`, `tests_sync_contract` | covered |
 | `fetch_updates` prefix scope change | `fs_store_sync`, `tests_sync_contract` | covered |
-| mirror tracked-state update | `commands_fs_tests`, `commands_sync_tests` | covered |
-| conflict-note generation | `commands_sync_tests` | covered |
 
 ## Focus Cases Added In The Current Pass
 
@@ -33,7 +31,6 @@ This checklist records what the current FS-first contract already covers, what w
 - prefix-limited `search_nodes` with deleted-node suppression
 - `fetch_updates` small deltas against large snapshots
 - removed paths and prefix-scope changes at the canister boundary
-- CLI mirror conflict-note generation and tracked-state updates
 
 ## Known Gaps
 

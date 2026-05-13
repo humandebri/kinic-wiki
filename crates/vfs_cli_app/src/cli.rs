@@ -1,13 +1,13 @@
 // Where: crates/vfs_cli_app/src/cli.rs
 // What: clap definitions for the FS-first CLI surface.
-// Why: Agents need direct node operations and path-based mirror sync commands.
+// Why: Agents need direct node operations against the canister-backed wiki.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
 pub use vfs_cli::cli::{
     ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
 };
-use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
+use wiki_domain::WIKI_ROOT_PATH;
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -240,35 +240,9 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    LintLocal {
-        #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
-        #[arg(long)]
-        json: bool,
-    },
     Status {
         #[arg(long)]
-        vault_path: Option<PathBuf>,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
-        #[arg(long)]
         json: bool,
-    },
-    Pull {
-        #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
-        #[arg(long)]
-        resync: bool,
-    },
-    Push {
-        #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
     },
 }
 
@@ -408,6 +382,47 @@ pub enum GitHubIngestCommand {
 }
 
 impl Command {
+    pub fn requires_identity(&self) -> bool {
+        match self {
+            Self::Database { command } => matches!(
+                command,
+                DatabaseCommand::Create
+                    | DatabaseCommand::Grant { .. }
+                    | DatabaseCommand::Revoke { .. }
+                    | DatabaseCommand::Members { .. }
+            ),
+            Self::Skill { command } => !matches!(
+                command,
+                SkillCommand::Find { .. } | SkillCommand::Inspect { .. }
+            ),
+            Self::Github { .. }
+            | Self::RebuildIndex
+            | Self::RebuildScopeIndex { .. }
+            | Self::GenerateConversationWiki { .. }
+            | Self::WriteNode { .. }
+            | Self::AppendNode { .. }
+            | Self::EditNode { .. }
+            | Self::DeleteNode { .. }
+            | Self::DeleteTree { .. }
+            | Self::MkdirNode { .. }
+            | Self::MoveNode { .. }
+            | Self::MultiEditNode { .. } => true,
+            Self::ReadNode { .. }
+            | Self::ListNodes { .. }
+            | Self::ListChildren { .. }
+            | Self::GlobNodes { .. }
+            | Self::RecentNodes { .. }
+            | Self::ReadNodeContext { .. }
+            | Self::GraphNeighborhood { .. }
+            | Self::GraphLinks { .. }
+            | Self::IncomingLinks { .. }
+            | Self::OutgoingLinks { .. }
+            | Self::SearchRemote { .. }
+            | Self::SearchPathRemote { .. }
+            | Self::Status { .. } => false,
+        }
+    }
+
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
             Self::Database { command } => Some(VfsCommand::Database {
@@ -684,6 +699,25 @@ mod tests {
             panic!("expected database current command");
         };
         assert!(json);
+    }
+
+    #[test]
+    fn command_identity_requirement_keeps_reads_anonymous() {
+        let read = Cli::parse_from(["vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
+        assert!(!read.command.requires_identity());
+
+        let status = Cli::parse_from(["vfs-cli", "status"]);
+        assert!(!status.command.requires_identity());
+
+        let write = Cli::parse_from([
+            "vfs-cli",
+            "write-node",
+            "--path",
+            "/Wiki/index.md",
+            "--input",
+            "index.md",
+        ]);
+        assert!(write.command.requires_identity());
     }
 
     #[test]

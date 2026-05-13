@@ -2,7 +2,7 @@
 
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -13,15 +13,15 @@ import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
 import { IngestPanel } from "@/components/ingest-panel";
-import { LintPanel } from "@/components/lint-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
-import { RecipesPanel } from "@/components/recipes-panel";
+import { SourcesPanel } from "@/components/sources-panel";
 import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
 import { readBrowserNodeCache } from "@/lib/browser-node-cache";
-import { hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
+import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
-import type { ChildNode, NodeContext, WikiNode } from "@/lib/types";
+import type { ChildNode, DatabaseSummary, NodeContext, WikiNode } from "@/lib/types";
+import { listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
 import {
   errorHint,
   errorMessage,
@@ -34,7 +34,7 @@ import {
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "search", "recent", "ingest", "recipes", "lint"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "ingest", "sources"];
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
   ssr: false,
   loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
@@ -229,9 +229,12 @@ export function WikiBrowser() {
         principal={authPrincipal}
         query={query}
         searchKind={searchKind}
+        graphDepth={graphDepth}
         isGraphPage={isGraphPage}
+        isSearchPage={isSearchPage}
         graphCenter={graphCenter}
         readMode={readMode}
+        readIdentity={readIdentity}
         selectedPath={selectedPath}
         onLogout={logout}
       />
@@ -245,6 +248,7 @@ export function WikiBrowser() {
             databaseId={databaseId}
             selectedPath={selectedPath}
             node={currentNode.data}
+            childNodesCache={childNodesCache}
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
             readIdentity={readIdentity}
             effectiveReadIdentity={effectiveReadIdentity}
@@ -311,6 +315,7 @@ function LeftPane({
   databaseId,
   selectedPath,
   node,
+  childNodesCache,
   autoExpandExplorer,
   readIdentity,
   effectiveReadIdentity,
@@ -321,17 +326,16 @@ function LeftPane({
   databaseId: string;
   selectedPath: string;
   node: WikiNode | null;
+  childNodesCache: { current: Map<string, ChildNode[]> };
   autoExpandExplorer: boolean;
   readIdentity: Identity | null;
   effectiveReadIdentity: Identity | null;
   readMode: "anonymous" | null;
 }) {
-  if (tab === "search") return <SearchPanel canisterId={canisterId} databaseId={databaseId} query="" initialKind="path" readIdentity={effectiveReadIdentity} readMode={readMode} />;
   if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} readMode={readMode} />;
   if (tab === "ingest") return <IngestPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
-  if (tab === "recipes") return <RecipesPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} writeIdentity={readIdentity} readMode={readMode} />;
-  if (tab === "lint") return <LintPanel path={selectedPath} node={node} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />;
-  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={effectiveReadIdentity} readMode={readMode} />;
+  if (tab === "sources") return <SourcesPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} writeIdentity={readIdentity} readMode={readMode} />;
+  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={effectiveReadIdentity} readMode={readMode} childNodesCache={childNodesCache} />;
 }
 
 function TopBar({
@@ -341,9 +345,12 @@ function TopBar({
   principal,
   query,
   searchKind,
+  graphDepth,
   isGraphPage,
+  isSearchPage,
   graphCenter,
   readMode,
+  readIdentity,
   selectedPath,
   onLogout
 }: {
@@ -353,23 +360,96 @@ function TopBar({
   principal: string | null;
   query: string;
   searchKind: "path" | "full";
+  graphDepth: 1 | 2;
   isGraphPage: boolean;
+  isSearchPage: boolean;
   graphCenter: string | null;
   readMode: "anonymous" | null;
+  readIdentity: Identity | null;
   selectedPath: string;
   onLogout: () => void;
 }) {
+  const router = useRouter();
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
+  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [databaseListError, setDatabaseListError] = useState<string | null>(null);
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const visibleError = authError ?? databaseListError;
+  const databaseOptions = useMemo(() => withCurrentDatabase(databases, databaseId), [databaseId, databases]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!canisterId) return;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return null;
+        setDatabaseListError(null);
+        return Promise.allSettled([
+          listDatabasesPublic(canisterId),
+          readIdentity ? listDatabasesAuthenticated(canisterId, readIdentity) : Promise.resolve<DatabaseSummary[]>([])
+        ]);
+      })
+      .then((results) => {
+        if (cancelled || !results) return;
+        const [publicResult, memberResult] = results;
+        if (publicResult.status === "rejected" && memberResult.status === "rejected") {
+          setDatabases([]);
+          setDatabaseListError(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
+          return;
+        }
+        const publicDatabases = publicResult.status === "fulfilled" ? publicResult.value : [];
+        const memberDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
+        setDatabases(mergeDatabaseSummaries(memberDatabases, publicDatabases));
+        setDatabaseListError(databaseListWarning(publicResult, memberResult));
+      })
+      .catch((cause) => {
+        if (!cancelled) setDatabaseListError(errorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canisterId, readIdentity, readPrincipal]);
+
+  function switchDatabase(event: ChangeEvent<HTMLSelectElement>) {
+    const nextDatabaseId = event.target.value;
+    if (!nextDatabaseId || nextDatabaseId === databaseId) return;
+    router.replace(
+      hrefForDatabaseSwitch(canisterId, nextDatabaseId, {
+        isSearchPage,
+        isGraphPage,
+        query,
+        searchKind,
+        graphDepth,
+        readMode
+      })
+    );
+  }
+
   return (
-    <header className="flex min-h-[52px] items-center gap-4 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur">
+    <header className="flex min-h-[52px] flex-wrap items-center gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur sm:flex-nowrap sm:gap-4">
       <div className="w-[168px] shrink-0">
         <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
       </div>
-      <div className="hidden min-w-0 max-w-[180px] shrink text-xs text-muted sm:block">
-        <span className="font-mono">db:</span> <span className="font-medium text-ink">{databaseId}</span>
+      <div className="flex min-w-0 shrink-0 items-center gap-1 text-xs text-muted">
+        <label className="hidden font-mono sm:inline" htmlFor="database-switcher">
+          db:
+        </label>
+        <select
+          id="database-switcher"
+          className="w-[132px] rounded-lg border border-line bg-white px-2 py-1.5 font-mono text-xs text-ink outline-none sm:w-[180px]"
+          value={databaseId}
+          onChange={switchDatabase}
+          aria-label="Switch database"
+        >
+          {databaseOptions.map((database) => (
+            <option key={database.databaseId} value={database.databaseId}>
+              {database.databaseId}
+            </option>
+          ))}
+        </select>
       </div>
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-        {authError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{authError}</span> : null}
+      <div className="flex min-w-[280px] flex-1 basis-full items-center justify-end gap-2 sm:basis-auto">
+        {visibleError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{visibleError}</span> : null}
         {principal ? (
           <button className="hidden rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink md:block" type="button" onClick={onLogout}>
             Logout
@@ -387,6 +467,40 @@ function TopBar({
       </div>
     </header>
   );
+}
+
+function mergeDatabaseSummaries(memberDatabases: DatabaseSummary[], publicDatabases: DatabaseSummary[]): DatabaseSummary[] {
+  const rows = new Map<string, DatabaseSummary>();
+  for (const database of publicDatabases) {
+    rows.set(database.databaseId, database);
+  }
+  for (const database of memberDatabases) {
+    rows.set(database.databaseId, database);
+  }
+  return [...rows.values()].sort((left, right) => left.databaseId.localeCompare(right.databaseId));
+}
+
+function withCurrentDatabase(databases: DatabaseSummary[], databaseId: string): DatabaseSummary[] {
+  if (!databaseId || databases.some((database) => database.databaseId === databaseId)) {
+    return databases;
+  }
+  return [
+    {
+      databaseId,
+      role: "reader",
+      status: "hot",
+      logicalSizeBytes: "0",
+      archivedAtMs: null,
+      deletedAtMs: null
+    },
+    ...databases
+  ];
+}
+
+function databaseListWarning(publicResult: PromiseSettledResult<DatabaseSummary[]>, memberResult: PromiseSettledResult<DatabaseSummary[]>): string | null {
+  if (publicResult.status === "rejected") return `Public database list unavailable: ${errorMessage(publicResult.reason)}`;
+  if (memberResult.status === "rejected") return `Member database list unavailable: ${errorMessage(memberResult.reason)}`;
+  return null;
 }
 
 export function isPermissionError(message: string | null): boolean {
@@ -465,7 +579,7 @@ function ModeTabs({
 }) {
   return (
     <nav className="border-b border-line px-3 py-2" aria-label="Left sidebar mode">
-      <div className="grid grid-cols-6 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
+      <div className="grid grid-cols-4 gap-1 rounded-xl border border-line bg-white p-1 text-center text-xs">
         {SIDEBAR_TABS.map((value) => (
           <Link
             key={value}
@@ -481,22 +595,20 @@ function ModeTabs({
 }
 
 function tabTitle(tab: ModeTab): string {
-  if (tab === "search") return "Search";
   if (tab === "recent") return "Recent";
   if (tab === "ingest") return "Ingest";
-  if (tab === "recipes") return "Recipes";
-  if (tab === "lint") return "Lint Hints";
+  if (tab === "sources") return "Sources";
   return "Explorer";
 }
 
 function authPromptMode(tab: ModeTab, readIdentity: Identity | null, loadError: string | null): "private" | "write" | null {
   if (readIdentity) return null;
-  if (tab === "ingest" || tab === "recipes") return "write";
+  if (tab === "ingest" || tab === "sources") return "write";
   return isPermissionError(loadError) ? "private" : null;
 }
 
 function parseTab(value: string | null): ModeTab {
-  if (value === "recent" || value === "ingest" || value === "recipes" || value === "lint" || value === "search" || value === "explorer") {
+  if (value === "recent" || value === "ingest" || value === "sources" || value === "explorer") {
     return value;
   }
   return "explorer";

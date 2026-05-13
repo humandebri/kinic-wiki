@@ -14,7 +14,7 @@ import type { RuntimeEnv } from "./env.js";
 export async function runManual(env: RuntimeEnv, input: ManualRunInput): Promise<Response> {
   const config = loadConfig(env);
   validateCanonicalSourcePath(input.sourcePath, config.sourcePrefix);
-  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_JSON);
+  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_PEM);
   const source = await readRequiredSource(vfs, input.databaseId, input.sourcePath);
 
   if (!input.dryRun) {
@@ -47,7 +47,7 @@ export async function processQueueMessage(env: RuntimeEnv, message: QueueMessage
   if (shouldSkipJob(job, message.sourceEtag)) {
     return;
   }
-  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_JSON);
+  const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_PEM);
   const source = await readRequiredSource(vfs, message.databaseId, message.sourcePath);
   if (source.etag !== message.sourceEtag) {
     return;

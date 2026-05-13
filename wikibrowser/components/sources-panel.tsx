@@ -1,6 +1,6 @@
-// Where: wikibrowser/components/recipes-panel.tsx
-// What: Sidebar workflow for saving and searching recipe URL clips.
-// Why: Recipe clips should be one-step source capture, not a separate app model.
+// Where: wikibrowser/components/sources-panel.tsx
+// What: Sidebar workflow for saving and searching source URL clips.
+// Why: Source clips should be one-step source capture, not a separate app model.
 
 "use client";
 
@@ -12,14 +12,14 @@ import { ErrorBox } from "@/components/panel";
 import { SearchPanel } from "@/components/search-panel";
 import { hrefForPath } from "@/lib/paths";
 import {
-  buildRecipeClipDocument,
-  extractRecipeContentFromHtml,
+  buildSourceClipDocument,
+  extractSourceContentFromHtml,
   parseTags,
-  recipeClipSiteFromMetadata,
-  recipeClipTagsFromMetadata,
-  recipeClipTitleFromMetadata,
-  RECIPE_CLIP_PREFIX
-} from "@/lib/recipe-clips";
+  sourceClipSiteFromMetadata,
+  sourceClipTagsFromMetadata,
+  sourceClipTitleFromMetadata,
+  SOURCE_CLIP_PREFIX
+} from "@/lib/source-clips";
 import type { WikiNode } from "@/lib/types";
 import { errorHint, errorMessage, type LoadState } from "@/lib/wiki-helpers";
 import { readNode, recentNodes, writeNodeAuthenticated } from "@/lib/vfs-client";
@@ -31,7 +31,7 @@ type ExtractResponse = {
   html: string;
 };
 
-export function RecipesPanel({
+export function SourcesPanel({
   canisterId,
   databaseId,
   readIdentity,
@@ -57,7 +57,7 @@ export function RecipesPanel({
     event.preventDefault();
     if (!writeIdentity) {
       setSaveStatus("error");
-      setSaveError("Login is required to save recipe clips.");
+      setSaveError("Login is required to save source clips.");
       return;
     }
     setSaveStatus("extracting");
@@ -65,12 +65,12 @@ export function RecipesPanel({
     setSavedPath(null);
     try {
       const extracted = await fetchExtractedHtml(url);
-      const content = extractRecipeContentFromHtml(extracted.html, extracted.url);
+      const content = extractSourceContentFromHtml(extracted.html, extracted.url);
       if (!content.text.trim()) {
         throw new Error("Extracted text is empty.");
       }
       setSaveStatus("saving");
-      const document = await buildRecipeClipDocument({
+      const document = await buildSourceClipDocument({
         url: extracted.url,
         title: content.title,
         site: new URL(extracted.url).hostname,
@@ -79,7 +79,7 @@ export function RecipesPanel({
         userNote,
         extractedText: content.text
       });
-      const current = await readNode(canisterId, databaseId, document.path, readIdentity ?? undefined);
+      const current = await readNode(canisterId, databaseId, document.path, writeIdentity);
       await writeNodeAuthenticated(canisterId, writeIdentity, {
         databaseId,
         path: document.path,
@@ -103,12 +103,12 @@ export function RecipesPanel({
         <form className="space-y-2 rounded-xl border border-line bg-white p-3" onSubmit={saveClip}>
           <div className="flex items-center gap-2 text-sm font-semibold text-ink">
             <Plus size={15} className="text-accent" />
-            Save recipe URL
+            Save source URL
           </div>
           <input
             className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none placeholder:text-muted focus:border-accent"
             inputMode="url"
-            placeholder="https://example.com/recipe"
+            placeholder="https://example.com/article"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
           />
@@ -120,7 +120,7 @@ export function RecipesPanel({
           />
           <input
             className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none placeholder:text-muted focus:border-accent"
-            placeholder="tags: easy pasta dinner"
+            placeholder="tags: research reference"
             value={tagInput}
             onChange={(event) => setTagInput(event.target.value)}
           />
@@ -146,7 +146,7 @@ export function RecipesPanel({
           <Search size={15} className="shrink-0 text-muted" />
           <input
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted"
-            placeholder="Search saved recipes"
+            placeholder="Search saved sources"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -159,14 +159,14 @@ export function RecipesPanel({
             query={query}
             initialKind="full"
             readIdentity={readIdentity}
-            prefix={RECIPE_CLIP_PREFIX}
-            eyebrow="Recipes"
-            title="Recipe search"
-            emptyMessage="Search saved recipe clips."
+            prefix={SOURCE_CLIP_PREFIX}
+            eyebrow="Sources"
+            title="Source search"
+            emptyMessage="Search saved source clips."
             readMode={readMode}
           />
         ) : (
-          <RecipeRecentList
+          <SourceRecentList
             key={`${refreshKey}:${readIdentity?.getPrincipal().toText() ?? "anonymous"}`}
             canisterId={canisterId}
             databaseId={databaseId}
@@ -195,11 +195,11 @@ function StatusText({ status, error }: { status: SaveStatus; error: string | nul
   return <p className="text-xs text-muted">Full text will be saved.</p>;
 }
 
-function RecipeRecentList({ canisterId, databaseId, readIdentity, readMode }: { canisterId: string; databaseId: string; readIdentity: Identity | null; readMode: "anonymous" | null }) {
+function SourceRecentList({ canisterId, databaseId, readIdentity, readMode }: { canisterId: string; databaseId: string; readIdentity: Identity | null; readMode: "anonymous" | null }) {
   const [state, setState] = useState<LoadState<WikiNode[]>>({ data: null, error: null, loading: true });
   useEffect(() => {
     let cancelled = false;
-    recentNodes(canisterId, databaseId, 20, readIdentity ?? undefined, RECIPE_CLIP_PREFIX)
+    recentNodes(canisterId, databaseId, 20, readIdentity ?? undefined, SOURCE_CLIP_PREFIX)
       .then((recent) => Promise.all(recent.map((item) => readNode(canisterId, databaseId, item.path, readIdentity ?? undefined))))
       .then((nodes) => {
         if (!cancelled) {
@@ -220,24 +220,24 @@ function RecipeRecentList({ canisterId, databaseId, readIdentity, readMode }: { 
     return <ErrorBox message={state.error} hint={state.hint} />;
   }
   if (state.loading) {
-    return <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">Loading recipes...</p>;
+    return <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">Loading sources...</p>;
   }
   if (!state.data || state.data.length === 0) {
-    return <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">No saved recipes yet.</p>;
+    return <p className="rounded-xl border border-line bg-white p-3 text-sm text-muted">No saved sources yet.</p>;
   }
   return (
     <div className="space-y-2">
       {state.data.map((node) => (
-        <RecipeCard key={node.path} canisterId={canisterId} databaseId={databaseId} node={node} readMode={readMode} />
+        <SourceCard key={node.path} canisterId={canisterId} databaseId={databaseId} node={node} readMode={readMode} />
       ))}
     </div>
   );
 }
 
-function RecipeCard({ canisterId, databaseId, node, readMode }: { canisterId: string; databaseId: string; node: WikiNode; readMode: "anonymous" | null }) {
-  const title = recipeClipTitleFromMetadata(node.metadataJson, node.path);
-  const site = recipeClipSiteFromMetadata(node.metadataJson);
-  const tags = recipeClipTagsFromMetadata(node.metadataJson);
+function SourceCard({ canisterId, databaseId, node, readMode }: { canisterId: string; databaseId: string; node: WikiNode; readMode: "anonymous" | null }) {
+  const title = sourceClipTitleFromMetadata(node.metadataJson, node.path);
+  const site = sourceClipSiteFromMetadata(node.metadataJson);
+  const tags = sourceClipTagsFromMetadata(node.metadataJson);
   return (
     <Link href={hrefForPath(canisterId, databaseId, node.path, undefined, undefined, undefined, undefined, readMode)} className="block rounded-xl border border-line bg-white p-3 text-sm no-underline hover:border-accent">
       <div className="line-clamp-2 font-medium text-ink">{title}</div>
@@ -248,7 +248,7 @@ function RecipeCard({ canisterId, databaseId, node, readMode }: { canisterId: st
 }
 
 async function fetchExtractedHtml(url: string): Promise<ExtractResponse> {
-  const response = await fetch("/api/recipes/extract", {
+  const response = await fetch("/api/sources/extract", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ url })

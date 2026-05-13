@@ -18,7 +18,8 @@ For each queued request it:
 4. writes the generated draft under `/Wiki/conversations`,
 5. updates the request status to `completed` or `failed`.
 
-The worker identity in `KINIC_WIKI_WORKER_IDENTITY_JSON` must have writer access to every database listed in `KINIC_WIKI_DATABASE_IDS`.
+The worker identity in `KINIC_WIKI_WORKER_IDENTITY_PEM` must have writer access to every database listed in `KINIC_WIKI_DATABASE_IDS`.
+Use the exact PEM output from `icp identity export <identity-name>`.
 
 ## Cloudflare Setup
 
@@ -28,7 +29,7 @@ pnpm exec wrangler d1 create kinic-wiki-generator
 pnpm exec wrangler d1 migrations apply kinic-wiki-generator --remote
 pnpm exec wrangler secret put DEEPSEEK_API_KEY
 pnpm exec wrangler secret put KINIC_WIKI_WORKER_TOKEN
-pnpm exec wrangler secret put KINIC_WIKI_WORKER_IDENTITY_JSON
+pnpm exec wrangler secret put KINIC_WIKI_WORKER_IDENTITY_PEM
 ```
 
 After `d1 create`, copy the returned database id into `wrangler.jsonc`.

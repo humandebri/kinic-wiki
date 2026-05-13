@@ -13,7 +13,7 @@ const compiled = ts.transpileModule(source, {
   }
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
-const { hrefForGraph, hrefForMarkdownLink, hrefForPath, hrefForSearch, pathFromSegments } = await import(moduleUrl);
+const { hrefForDatabaseSwitch, hrefForGraph, hrefForMarkdownLink, hrefForPath, hrefForSearch, pathFromSegments } = await import(moduleUrl);
 
 assert.equal(pathFromSegments([]), "/Wiki");
 assert.equal(pathFromSegments(["Wiki", "100%.md"]), "/Wiki/100%.md");
@@ -48,6 +48,39 @@ assert.equal(
 assert.equal(
   hrefForGraph("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/index.md", 2, "anonymous"),
   "/alpha/graph?center=%2FWiki%2Findex.md&depth=2&read=anonymous"
+);
+assert.equal(
+  hrefForDatabaseSwitch("t63gs-up777-77776-aaaba-cai", "beta", {
+    isSearchPage: false,
+    isGraphPage: false,
+    query: "ignored",
+    searchKind: "full",
+    graphDepth: 2,
+    readMode: null
+  }),
+  "/beta/Wiki"
+);
+assert.equal(
+  hrefForDatabaseSwitch("t63gs-up777-77776-aaaba-cai", "beta", {
+    isSearchPage: true,
+    isGraphPage: false,
+    query: "alpha beta",
+    searchKind: "full",
+    graphDepth: 1,
+    readMode: "anonymous"
+  }),
+  "/beta/search?q=alpha+beta&kind=full&read=anonymous"
+);
+assert.equal(
+  hrefForDatabaseSwitch("t63gs-up777-77776-aaaba-cai", "beta", {
+    isSearchPage: false,
+    isGraphPage: true,
+    query: "",
+    searchKind: "path",
+    graphDepth: 2,
+    readMode: "anonymous"
+  }),
+  "/beta/graph?center=%2FWiki&depth=2&read=anonymous"
 );
 assert.equal(
   hrefForMarkdownLink("t63gs-up777-77776-aaaba-cai", "alpha", "/Wiki/beam-full-reset/7/index.md", "facts.md"),

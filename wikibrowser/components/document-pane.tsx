@@ -106,7 +106,7 @@ function AuthRequiredState({ authReady, mode, onLogin }: { authReady: boolean; m
         <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">{isWriteAction ? "Write access" : "Private database"}</p>
         <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
         <p className="mt-3 text-sm leading-6 text-muted">
-          {isWriteAction ? "Login with Internet Identity to queue URL ingest or save recipe clips for this database." : "This database is not public. Login with Internet Identity to read databases linked to your principal."}
+          {isWriteAction ? "Login with Internet Identity to queue URL ingest or save source clips for this database." : "This database is not public. Login with Internet Identity to read databases linked to your principal."}
         </p>
         <button
           className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"

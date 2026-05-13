@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
+import { nodeRequestKey } from "@/lib/request-keys";
 import type { ChildNode } from "@/lib/types";
 import { canExpandChildNode, errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
@@ -14,7 +15,8 @@ export function ExplorerTree({
   selectedPath,
   autoExpandSelected = true,
   readIdentity,
-  readMode = null
+  readMode = null,
+  childNodesCache
 }: {
   canisterId: string;
   databaseId: string;
@@ -22,12 +24,13 @@ export function ExplorerTree({
   autoExpandSelected?: boolean;
   readIdentity: Identity | null;
   readMode?: "anonymous" | null;
+  childNodesCache: { current: Map<string, ChildNode[]> };
 }) {
   const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   return (
     <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
-      <TreeNode key={`/Wiki:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} />
-      <TreeNode key={`/Sources:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} />
+      <TreeNode key={`${canisterId}:${databaseId}:/Wiki:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} />
+      <TreeNode key={`${canisterId}:${databaseId}:/Sources:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} />
     </div>
   );
 }
@@ -40,7 +43,8 @@ function TreeNode({
   depth,
   autoExpandSelected,
   readIdentity,
-  readMode
+  readMode,
+  childNodesCache
 }: {
   canisterId: string;
   databaseId: string;
@@ -50,11 +54,17 @@ function TreeNode({
   autoExpandSelected: boolean;
   readIdentity: Identity | null;
   readMode: "anonymous" | null;
+  childNodesCache: { current: Map<string, ChildNode[]> };
 }) {
+  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const requestKey = nodeRequestKey(canisterId, databaseId, node.path, readPrincipal);
   const [expanded, setExpanded] = useState(autoExpandSelected && (node.path === selectedPath || selectedPath.startsWith(`${node.path}/`)));
-  const [children, setChildren] = useState<LoadState<ChildNode[]>>({ data: null, error: null, loading: false });
+  const [children, setChildren] = useState<LoadState<ChildNode[]>>(() => {
+    const cached = childNodesCache.current.get(requestKey);
+    return cached ? { data: cached, error: null, loading: false } : { data: null, error: null, loading: false };
+  });
   const autoExpandedKey = useRef<string | null>(expanded ? selectedPath : null);
-  const requestedPath = useRef<string | null>(null);
+  const requestedKey = useRef<string | null>(null);
   const canExpand = canExpandChildNode(node);
   const selected = selectedPath === node.path;
   const selectedAncestor = node.path === selectedPath || selectedPath.startsWith(`${node.path}/`);
@@ -69,25 +79,48 @@ function TreeNode({
   }, [autoExpandSelected, selectedAncestor, selectedPath]);
 
   useEffect(() => {
-    if (!expanded || !canExpand || children.data || children.error || requestedPath.current === node.path) return;
+    if (!expanded || !canExpand || children.data || children.error || requestedKey.current === requestKey) return;
+    const cached = childNodesCache.current.get(requestKey);
+    if (cached) {
+      let cancelled = false;
+      Promise.resolve().then(() => {
+        if (!cancelled) {
+          setChildren({ data: cached, error: null, loading: false });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     let cancelled = false;
-    requestedPath.current = node.path;
-    import("@/lib/vfs-client")
-      .then(({ listChildren }) => listChildren(canisterId, databaseId, node.path, readIdentity ?? undefined))
+    requestedKey.current = requestKey;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return null;
+        setChildren({ data: null, error: null, loading: true });
+        return import("@/lib/vfs-client");
+      })
+      .then((module) => {
+        if (!module) return [];
+        return module.listChildren(canisterId, databaseId, node.path, readIdentity ?? undefined);
+      })
       .then((data) => {
-        if (!cancelled) setChildren({ data, error: null, loading: false });
+        if (!cancelled) {
+          childNodesCache.current.set(requestKey, data);
+          setChildren({ data, error: null, loading: false });
+        }
       })
       .catch((error: Error) => {
         if (!cancelled) {
           setChildren({ data: null, error: errorMessage(error), loading: false });
-          requestedPath.current = null;
+          requestedKey.current = null;
         }
       });
     return () => {
       cancelled = true;
-      if (requestedPath.current === node.path) requestedPath.current = null;
+      if (requestedKey.current === requestKey) requestedKey.current = null;
     };
-  }, [canisterId, databaseId, canExpand, children.data, children.error, expanded, node.path, readIdentity]);
+  }, [canisterId, databaseId, canExpand, childNodesCache, children.data, children.error, expanded, node.path, readIdentity, requestKey]);
 
   return (
     <div>
@@ -116,6 +149,7 @@ function TreeNode({
           autoExpandSelected={autoExpandSelected}
           readIdentity={readIdentity}
           readMode={readMode}
+          childNodesCache={childNodesCache}
         />
       ) : null}
     </div>
@@ -143,7 +177,8 @@ function ChildrenList({
   selectedPath,
   autoExpandSelected,
   readIdentity,
-  readMode
+  readMode,
+  childNodesCache
 }: {
   canisterId: string;
   databaseId: string;
@@ -153,6 +188,7 @@ function ChildrenList({
   autoExpandSelected: boolean;
   readIdentity: Identity | null;
   readMode: "anonymous" | null;
+  childNodesCache: { current: Map<string, ChildNode[]> };
 }) {
   return (
     <div>
@@ -169,6 +205,7 @@ function ChildrenList({
           autoExpandSelected={autoExpandSelected}
           readIdentity={readIdentity}
           readMode={readMode}
+          childNodesCache={childNodesCache}
         />
       ))}
     </div>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { FormEvent } from "react";
 import { useState } from "react";
-import { ANONYMOUS_PRINCIPAL, databaseRoleFromValue, isBusyGrant, isBusyRevoke, type BusyAction } from "./access-control";
+import { ANONYMOUS_PRINCIPAL, LLM_WRITER_LABEL, LLM_WRITER_PRINCIPAL, databaseRoleFromValue, isBusyGrant, isBusyRevoke, principalDisplayName, type BusyAction } from "./access-control";
 import { ActionButton } from "./action-button";
 import { MemberTable } from "./member-table";
 import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types";
@@ -56,8 +56,13 @@ export function OwnerPanel(props: {
   onRevoke: (principalText: string) => void;
 }) {
   const [pendingAction, setPendingAction] = useState<PendingAclAction | null>(null);
-  const publicEnabled = props.members.some((member) => member.principal === ANONYMOUS_PRINCIPAL);
+  const publicMember = props.members.find((member) => member.principal === ANONYMOUS_PRINCIPAL);
+  const publicEnabled = Boolean(publicMember);
   const publicBusy = isBusyGrant(props.busyAction, ANONYMOUS_PRINCIPAL, "reader") || isBusyRevoke(props.busyAction, ANONYMOUS_PRINCIPAL);
+  const llmWriterMember = props.members.find((member) => member.principal === LLM_WRITER_PRINCIPAL);
+  const llmWriterEnabled = llmWriterMember?.role === "writer";
+  const llmWriterBusy = isBusyGrant(props.busyAction, LLM_WRITER_PRINCIPAL, "writer") || isBusyRevoke(props.busyAction, LLM_WRITER_PRINCIPAL);
+  const llmWriterButtonLabel = llmWriterMember ? (llmWriterEnabled ? "Disable LLM writer" : "Set LLM writer") : "Enable LLM writer";
   function requestGrant(principalText: string, role: DatabaseRole) {
     if (principalText === ANONYMOUS_PRINCIPAL) {
       setPendingAction({
@@ -66,6 +71,17 @@ export function OwnerPanel(props: {
         confirmLabel: "Enable public",
         principalText,
         role: "reader",
+        kind: "grant"
+      });
+      return;
+    }
+    if (principalText === LLM_WRITER_PRINCIPAL) {
+      setPendingAction({
+        title: llmWriterButtonLabel,
+        message: `Grant writer access to ${LLM_WRITER_LABEL}. Worker writes can create and update wiki drafts.`,
+        confirmLabel: llmWriterButtonLabel,
+        principalText,
+        role: "writer",
         kind: "grant"
       });
       return;
@@ -89,7 +105,7 @@ export function OwnerPanel(props: {
     if (role === "owner") {
       setPendingAction({
         title: "Grant owner access",
-        message: `Change ${member.principal} from ${member.role} to owner. Owners can grant and revoke database access.`,
+        message: `Change ${principalDisplayName(member.principal)} from ${member.role} to owner. Owners can grant and revoke database access.`,
         confirmLabel: "Grant owner",
         principalText: member.principal,
         role,
@@ -100,7 +116,7 @@ export function OwnerPanel(props: {
     if (member.role === "owner") {
       setPendingAction({
         title: "Change owner access",
-        message: `Change ${member.principal} from owner to ${role}. This principal will lose database management access.`,
+        message: `Change ${principalDisplayName(member.principal)} from owner to ${role}. This principal will lose database management access.`,
         confirmLabel: "Change role",
         principalText: member.principal,
         role,
@@ -121,10 +137,20 @@ export function OwnerPanel(props: {
       });
       return;
     }
+    if (member.principal === LLM_WRITER_PRINCIPAL) {
+      setPendingAction({
+        title: "Disable LLM writer",
+        message: `Revoke ${LLM_WRITER_LABEL} access. Worker writes will stop for this database.`,
+        confirmLabel: "Disable LLM writer",
+        principalText: member.principal,
+        kind: "revoke"
+      });
+      return;
+    }
     if (member.role === "owner") {
       setPendingAction({
         title: "Revoke owner access",
-        message: `Revoke owner access from ${member.principal}. This principal will lose database management access.`,
+        message: `Revoke owner access from ${principalDisplayName(member.principal)}. This principal will lose database management access.`,
         confirmLabel: "Revoke owner",
         principalText: member.principal,
         kind: "revoke"
@@ -144,30 +170,10 @@ export function OwnerPanel(props: {
   }
   return (
     <section className="rounded-lg border border-line bg-paper shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-line px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-ink">Members</h2>
-          <p className="mt-1 text-sm text-muted">Public: {publicEnabled ? "enabled" : "disabled"}</p>
-        </div>
-        {publicEnabled ? (
-          <ActionButton
-            disabled={props.busy}
-            loading={publicBusy}
-            loadingLabel="Disabling..."
-            type="button"
-            variant="secondary"
-            onClick={() => {
-              const publicMember = props.members.find((member) => member.principal === ANONYMOUS_PRINCIPAL);
-              if (publicMember) requestRevoke(publicMember);
-            }}
-          >
-            Disable public
-          </ActionButton>
-        ) : (
-          <ActionButton disabled={props.busy} loading={publicBusy} loadingLabel="Enabling..." onClick={() => requestGrant(ANONYMOUS_PRINCIPAL, "reader")} variant="primary">
-            Enable public
-          </ActionButton>
-        )}
+      <div className="grid gap-3 border-b border-line px-4 py-4">
+        <h2 className="text-lg font-semibold text-ink">Members</h2>
+        <AclQuickAction label="Public" enabled={publicEnabled} busy={props.busy} actionBusy={publicBusy} enabledLabel="Disable public" disabledLabel="Enable public" onDisable={() => publicMember && requestRevoke(publicMember)} onEnable={() => requestGrant(ANONYMOUS_PRINCIPAL, "reader")} />
+        <AclQuickAction label={LLM_WRITER_LABEL} enabled={llmWriterEnabled} busy={props.busy} actionBusy={llmWriterBusy} enabledLabel="Disable LLM writer" disabledLabel={llmWriterButtonLabel} onDisable={() => llmWriterMember && requestRevoke(llmWriterMember)} onEnable={() => requestGrant(LLM_WRITER_PRINCIPAL, "writer")} />
       </div>
       <GrantForm busy={props.busy} busyAction={props.busyAction} onGrant={requestGrant} />
       <MemberTable busy={props.busy} busyAction={props.busyAction} members={props.members} principal={props.principal} onRevoke={requestRevoke} onRoleChange={requestRoleChange} />
@@ -221,7 +227,7 @@ function ConfirmAclDialog(props: { action: PendingAclAction; busy: boolean; busy
       <div className="w-full max-w-md rounded-lg border border-line bg-paper p-5 shadow-lg">
         <h3 className="text-lg font-semibold text-ink">{props.action.title}</h3>
         <p className="mt-3 text-sm leading-6 text-muted">{props.action.message}</p>
-        <p className="mt-3 break-all rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs text-ink">{props.action.principalText}</p>
+        <p className="mt-3 break-all rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs text-ink">{principalDisplayName(props.action.principalText)}</p>
         <div className="mt-5 flex justify-end gap-2">
           <ActionButton disabled={props.busy} onClick={props.onCancel} variant="secondary">
             Cancel
@@ -231,6 +237,19 @@ function ConfirmAclDialog(props: { action: PendingAclAction; busy: boolean; busy
           </ActionButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AclQuickAction(props: { label: string; enabled: boolean; busy: boolean; actionBusy: boolean; enabledLabel: string; disabledLabel: string; onDisable: () => void; onEnable: () => void }) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-sm text-muted">
+        {props.label}: {props.enabled ? "enabled" : "disabled"}
+      </p>
+      <ActionButton disabled={props.busy} loading={props.actionBusy} loadingLabel={props.enabled ? "Disabling..." : "Enabling..."} onClick={props.enabled ? props.onDisable : props.onEnable} variant={props.enabled ? "secondary" : "primary"}>
+        {props.enabled ? props.enabledLabel : props.disabledLabel}
+      </ActionButton>
     </div>
   );
 }
