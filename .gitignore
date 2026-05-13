@@ -17,6 +17,7 @@
 *.db-wal
 *.sqlite-shm
 *.sqlite-wal
+.kinic/config.toml
 
 # Temp files
 /tmp/

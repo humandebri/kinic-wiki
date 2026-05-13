@@ -12,10 +12,11 @@ use vfs_types::{
 };
 
 use crate::{
-    SERVICE, append_node, export_snapshot, fetch_updates, initialize_service, move_node, read_node,
-    search_nodes, with_service, write_node,
+    SERVICE, append_node, caller_text, export_snapshot, fetch_updates, initialize_service,
+    move_node, now_millis, read_node, search_nodes, with_service, write_node,
 };
 
+const BENCH_DATABASE_ID: &str = "canbench";
 const TREE_DEPTH: usize = 4;
 const CONTENT_SIZE: usize = 256;
 const SEARCH_TOP_K: u32 = 20;
@@ -45,6 +46,18 @@ fn ensure_bench_service() {
     if !initialized {
         initialize_service().expect("bench service should initialize");
     }
+    with_service(|service| {
+        let exists = service
+            .list_databases()?
+            .iter()
+            .any(|meta| meta.database_id == BENCH_DATABASE_ID);
+        if !exists {
+            let caller = caller_text();
+            service.create_database(BENCH_DATABASE_ID, &caller, now_millis())?;
+        }
+        Ok(())
+    })
+    .expect("bench database should exist");
 }
 
 fn bench_prefix(case: BenchCase) -> String {
@@ -77,16 +90,18 @@ fn node_content(index: usize, include_query: bool) -> String {
 }
 
 fn current_etag(path: &str) -> Option<String> {
-    read_node("default".to_string(), path.to_string())
+    read_node(BENCH_DATABASE_ID.to_string(), path.to_string())
         .expect("bench read should succeed")
         .map(|node| node.etag)
 }
 
 fn write_seed(path: &str, content: &str, expected_etag: Option<String>, now: i64) -> String {
     with_service(|service| {
+        let caller = caller_text();
         service.write_node(
+            &caller,
             WriteNodeRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 path: path.to_string(),
                 kind: NodeKind::File,
                 content: content.to_string(),
@@ -112,7 +127,7 @@ fn seed_dataset(case: BenchCase, prefix: &str) {
 
 fn snapshot_metrics(prefix: &str) -> SnapshotMetrics {
     let snapshot = export_snapshot(ExportSnapshotRequest {
-        database_id: "default".to_string(),
+        database_id: BENCH_DATABASE_ID.to_string(),
         prefix: Some(prefix.to_string()),
         limit: 100,
         cursor: None,
@@ -166,7 +181,7 @@ pub(super) fn run_write(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("write_call");
         black_box(
             write_node(WriteNodeRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 path: target.clone(),
                 kind: NodeKind::File,
                 content: content.clone(),
@@ -189,7 +204,7 @@ pub(super) fn run_append(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("append_call");
         black_box(
             append_node(AppendNodeRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 path: target.clone(),
                 content: "\nappend-benchmark-tail".to_string(),
                 expected_etag: expected_etag.clone(),
@@ -214,7 +229,7 @@ pub(super) fn run_move(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("move_call");
         black_box(
             move_node(MoveNodeRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 from_path: from_path.clone(),
                 to_path: to_path.clone(),
                 expected_etag: expected_etag.clone(),
@@ -234,7 +249,7 @@ pub(super) fn run_search(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("search_call");
         black_box(
             search_nodes(SearchNodesRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 query_text: BENCH_QUERY.to_string(),
                 prefix: Some(prefix.clone()),
                 top_k: SEARCH_TOP_K,
@@ -254,7 +269,7 @@ pub(super) fn run_export_snapshot(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("export_snapshot_call");
         black_box(
             export_snapshot(ExportSnapshotRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 prefix: Some(prefix.clone()),
                 limit: 100,
                 cursor: None,
@@ -270,7 +285,7 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
     let prefix = bench_prefix(case);
     seed_dataset(case, &prefix);
     let baseline = export_snapshot(ExportSnapshotRequest {
-        database_id: "default".to_string(),
+        database_id: BENCH_DATABASE_ID.to_string(),
         prefix: Some(prefix.clone()),
         limit: 100,
         cursor: None,
@@ -290,7 +305,7 @@ pub(super) fn run_fetch_updates(case: BenchCase) -> BenchResult {
         let _scope = bench_scope("fetch_updates_call");
         black_box(
             fetch_updates(FetchUpdatesRequest {
-                database_id: "default".to_string(),
+                database_id: BENCH_DATABASE_ID.to_string(),
                 known_snapshot_revision: baseline.snapshot_revision.clone(),
                 prefix: Some(prefix.clone()),
                 limit: 100,
@@ -311,6 +326,7 @@ mod tests {
     fn snapshot_json_bytes_matches_serialized_response_size() {
         let snapshot = ExportSnapshotResponse {
             snapshot_revision: "snap-1".to_string(),
+            snapshot_session_id: None,
             nodes: vec![Node {
                 path: "/Wiki/bench/node.md".to_string(),
                 kind: NodeKind::File,
@@ -320,6 +336,7 @@ mod tests {
                 etag: "etag-1".to_string(),
                 metadata_json: "{\"k\":\"v\"}".to_string(),
             }],
+            next_cursor: None,
         };
         assert_eq!(
             snapshot_json_bytes(&snapshot),

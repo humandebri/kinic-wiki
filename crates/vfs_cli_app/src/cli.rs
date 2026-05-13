@@ -1,13 +1,13 @@
 // Where: crates/vfs_cli_app/src/cli.rs
 // What: clap definitions for the FS-first CLI surface.
-// Why: Agents need direct node operations and path-based mirror sync commands.
+// Why: Agents need direct node operations against the canister-backed wiki.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
 pub use vfs_cli::cli::{
     ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
 };
-use wiki_domain::{DEFAULT_MIRROR_ROOT, WIKI_ROOT_PATH};
+use wiki_domain::WIKI_ROOT_PATH;
 
 #[derive(Parser, Debug)]
 #[command(name = "vfs-cli")]
@@ -26,10 +26,24 @@ pub enum Command {
         #[command(subcommand)]
         command: DatabaseCommand,
     },
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+    Github {
+        #[command(subcommand)]
+        command: GitHubCommand,
+    },
     RebuildIndex,
     RebuildScopeIndex {
         #[arg(long)]
         scope: String,
+    },
+    GenerateConversationWiki {
+        #[arg(long)]
+        source_path: String,
+        #[arg(long)]
+        json: bool,
     },
     ReadNode {
         #[arg(long)]
@@ -226,39 +240,189 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    LintLocal {
-        #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
-        #[arg(long)]
-        json: bool,
-    },
     Status {
         #[arg(long)]
-        vault_path: Option<PathBuf>,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillCommand {
+    Upsert {
+        #[arg(long)]
+        source_dir: PathBuf,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        prune: bool,
         #[arg(long)]
         json: bool,
     },
-    Pull {
+    Find {
+        query: String,
         #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
+        include_deprecated: bool,
+        #[arg(long, default_value_t = 10)]
+        top_k: u32,
         #[arg(long)]
-        resync: bool,
+        json: bool,
     },
-    Push {
+    Inspect {
+        id: String,
         #[arg(long)]
-        vault_path: PathBuf,
-        #[arg(long, default_value = DEFAULT_MIRROR_ROOT)]
-        mirror_root: String,
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    RecordRun {
+        id: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long, value_enum)]
+        outcome: SkillRunOutcomeArg,
+        #[arg(long)]
+        notes_file: PathBuf,
+        #[arg(long, default_value = "cli")]
+        agent: String,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    SetStatus {
+        id: String,
+        #[arg(long, value_enum)]
+        status: SkillStatusArg,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Import {
+        #[command(subcommand)]
+        source: SkillImportCommand,
+    },
+    ProposeImprovement {
+        id: String,
+        #[arg(long = "runs", required = true)]
+        runs: Vec<String>,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        diff_file: PathBuf,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    ApproveProposal {
+        id: String,
+        proposal_path: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillImportCommand {
+    Github {
+        source: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long = "ref", default_value = "HEAD")]
+        reference: String,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        prune: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillStatusArg {
+    Draft,
+    Reviewed,
+    Promoted,
+    Deprecated,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillRunOutcomeArg {
+    Success,
+    Partial,
+    Fail,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum GitHubCommand {
+    Ingest {
+        #[command(subcommand)]
+        command: GitHubIngestCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum GitHubIngestCommand {
+    Issue {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Pr {
+        target: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
 impl Command {
+    pub fn requires_identity(&self) -> bool {
+        match self {
+            Self::Database { command } => matches!(
+                command,
+                DatabaseCommand::Create
+                    | DatabaseCommand::Grant { .. }
+                    | DatabaseCommand::Revoke { .. }
+                    | DatabaseCommand::Members { .. }
+            ),
+            Self::Skill { command } => !matches!(
+                command,
+                SkillCommand::Find { .. } | SkillCommand::Inspect { .. }
+            ),
+            Self::Github { .. }
+            | Self::RebuildIndex
+            | Self::RebuildScopeIndex { .. }
+            | Self::GenerateConversationWiki { .. }
+            | Self::WriteNode { .. }
+            | Self::AppendNode { .. }
+            | Self::EditNode { .. }
+            | Self::DeleteNode { .. }
+            | Self::DeleteTree { .. }
+            | Self::MkdirNode { .. }
+            | Self::MoveNode { .. }
+            | Self::MultiEditNode { .. } => true,
+            Self::ReadNode { .. }
+            | Self::ListNodes { .. }
+            | Self::ListChildren { .. }
+            | Self::GlobNodes { .. }
+            | Self::RecentNodes { .. }
+            | Self::ReadNodeContext { .. }
+            | Self::GraphNeighborhood { .. }
+            | Self::GraphLinks { .. }
+            | Self::IncomingLinks { .. }
+            | Self::OutgoingLinks { .. }
+            | Self::SearchRemote { .. }
+            | Self::SearchPathRemote { .. }
+            | Self::Status { .. } => false,
+        }
+    }
+
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
             Self::Database { command } => Some(VfsCommand::Database {
@@ -457,7 +621,7 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillImportCommand, SkillStatusArg};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -514,5 +678,141 @@ mod tests {
         assert_eq!(depth, 2);
         assert_eq!(limit, 9);
         assert!(!json);
+    }
+
+    #[test]
+    fn main_cli_parses_database_link_commands() {
+        let cli = Cli::parse_from(["vfs-cli", "database", "link", "team-db"]);
+        let Command::Database {
+            command: DatabaseCommand::Link { database_id },
+        } = cli.command
+        else {
+            panic!("expected database link command");
+        };
+        assert_eq!(database_id, "team-db");
+
+        let cli = Cli::parse_from(["vfs-cli", "database", "current", "--json"]);
+        let Command::Database {
+            command: DatabaseCommand::Current { json },
+        } = cli.command
+        else {
+            panic!("expected database current command");
+        };
+        assert!(json);
+    }
+
+    #[test]
+    fn command_identity_requirement_keeps_reads_anonymous() {
+        let read = Cli::parse_from(["vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
+        assert!(!read.command.requires_identity());
+
+        let status = Cli::parse_from(["vfs-cli", "status"]);
+        assert!(!status.command.requires_identity());
+
+        let write = Cli::parse_from([
+            "vfs-cli",
+            "write-node",
+            "--path",
+            "/Wiki/index.md",
+            "--input",
+            "index.md",
+        ]);
+        assert!(write.command.requires_identity());
+    }
+
+    #[test]
+    fn main_cli_parses_skill_commands() {
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "find",
+            "contract review",
+            "--include-deprecated",
+            "--json",
+        ]);
+        let Command::Skill {
+            command:
+                SkillCommand::Find {
+                    query,
+                    include_deprecated,
+                    json,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected skill find command");
+        };
+        assert_eq!(query, "contract review");
+        assert!(include_deprecated);
+        assert!(json);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "upsert",
+            "--source-dir",
+            "./skills/legal-review",
+            "--id",
+            "legal-review",
+            "--prune",
+            "--json",
+        ]);
+        let Command::Skill {
+            command: SkillCommand::Upsert { prune, json, .. },
+        } = cli.command
+        else {
+            panic!("expected skill upsert command");
+        };
+        assert!(prune);
+        assert!(json);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "set-status",
+            "legal-review",
+            "--status",
+            "deprecated",
+        ]);
+        let Command::Skill {
+            command: SkillCommand::SetStatus { status, .. },
+        } = cli.command
+        else {
+            panic!("expected skill set-status command");
+        };
+        assert_eq!(status, SkillStatusArg::Deprecated);
+
+        let cli = Cli::parse_from([
+            "vfs-cli",
+            "skill",
+            "import",
+            "github",
+            "owner/repo:skills/foo",
+            "--id",
+            "foo",
+            "--ref",
+            "main",
+            "--prune",
+        ]);
+        let Command::Skill {
+            command:
+                SkillCommand::Import {
+                    source:
+                        SkillImportCommand::Github {
+                            source,
+                            id,
+                            reference,
+                            prune,
+                            ..
+                        },
+                },
+        } = cli.command
+        else {
+            panic!("expected skill import github command");
+        };
+        assert_eq!(source, "owner/repo:skills/foo");
+        assert_eq!(id, "foo");
+        assert_eq!(reference, "main");
+        assert!(prune);
     }
 }

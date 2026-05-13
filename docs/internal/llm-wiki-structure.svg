@@ -29,7 +29,7 @@
   <rect class="box" x="82" y="210" width="256" height="90" fill="#ffffff"/>
   <text class="label" x="102" y="240">vfs_cli_app</text>
   <text class="body" x="102" y="265">human / agent CLI</text>
-  <text class="small" x="102" y="288">pull, push, lint-local, status, mirror sync</text>
+  <text class="small" x="102" y="288">status, node ops, maintenance, skill registry</text>
   <rect class="box" x="82" y="320" width="256" height="76" fill="#ffffff"/>
   <text class="label" x="102" y="350">vfs_cli_core</text>
   <text class="body" x="102" y="375">generic CLI core</text>
@@ -49,7 +49,7 @@
   <text class="small" x="462" y="408">thin orchestration around FsStore</text>
   <rect class="box" x="442" y="438" width="286" height="50" fill="#ffffff"/>
   <text class="label" x="462" y="470">wiki_domain</text>
-  <text class="body" x="582" y="470">/Wiki and /Sources path policy</text>
+  <text class="body" x="582" y="470">wiki/source path validation</text>
 
   <rect class="box" x="810" y="150" width="360" height="360" fill="#fdecc8"/>
   <text class="section" x="832" y="186">Storage Core</text>
@@ -87,8 +87,8 @@
   <text class="section" x="82" y="618">Key Flows</text>
   <text class="label" x="100" y="658">Read / Write Path</text>
   <text class="body" x="280" y="658">agent or CLI → vfs_client → vfs_canister → VfsService → FsStore → SQLite/FTS</text>
-  <text class="label" x="100" y="694">Sync Path</text>
-  <text class="body" x="280" y="694">pull/push uses snapshot revision, change log, removed_paths, changed_nodes, and etag conflict control</text>
+  <text class="label" x="100" y="694">Snapshot APIs</text>
+  <text class="body" x="280" y="694">snapshot revision, change log, removed_paths, changed_nodes, and etag conflict control</text>
   <text class="label" x="100" y="730">Knowledge Policy</text>
   <text class="body" x="280" y="730">wiki note schema authority lives in docs/internal/WIKI_CANONICALITY.md, not in generic VFS crates</text>
 
@@ -97,7 +97,7 @@
   <text class="body" x="100" y="874">README.md: public entry and quick start</text>
   <text class="body" x="100" y="904">crates/: runtime implementation core</text>
   <text class="body" x="100" y="934">docs/: internal policy and validation docs</text>
-  <text class="body" x="100" y="964">fixtures/: mirror spec and beam samples</text>
+  <text class="body" x="100" y="964">fixtures/: beam samples</text>
   <text class="body" x="100" y="994">artifacts/: benchmark output and wiki backups</text>
 
   <rect class="box" x="820" y="800" width="720" height="230" fill="#f4e9dd"/>

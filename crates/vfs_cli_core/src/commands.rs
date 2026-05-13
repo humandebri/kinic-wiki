@@ -1,5 +1,5 @@
 // Where: crates/vfs_cli_core/src/commands.rs
-// What: Generic VFS command execution and sync paging helpers.
+// What: Generic VFS command execution helpers.
 // Why: The app-facing CLI package should delegate shared VFS command behavior instead of owning it.
 use std::borrow::Cow;
 use std::fs;
@@ -7,33 +7,31 @@ use std::fs;
 use anyhow::{Result, anyhow};
 use vfs_client::VfsApi;
 use vfs_types::{
-    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest,
-    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodesRequest,
-    GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
-    MultiEditNodeRequest, NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest,
-    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DeleteNodeRequest, EditNodeRequest, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest,
+    NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest,
+    SearchNodesRequest, WriteNodeRequest,
 };
-use wiki_domain::{WIKI_ROOT_PATH, validate_source_path_for_kind};
+use wiki_domain::validate_source_path_for_kind;
 
 use crate::cli::{DatabaseCommand, VfsCommand};
-
-pub const SYNC_PAGE_LIMIT: u32 = 100;
-pub const SNAPSHOT_UNAVAILABLE_ERROR: &str = "known_snapshot_revision is no longer available";
-pub const SNAPSHOT_INVALID_ERROR: &str = "known_snapshot_revision is invalid";
-pub const SNAPSHOT_NO_LONGER_CURRENT_ERROR: &str = "snapshot_revision is no longer current";
+use crate::connection::{
+    ResolvedConnection, ResolvedConnectionPreview, link_workspace_database,
+    unlink_workspace_database, workspace_config_path,
+};
 
 pub async fn run_vfs_command(
     client: &impl VfsApi,
-    database_id: Option<&str>,
+    connection: &ResolvedConnection,
     command: VfsCommand,
 ) -> Result<()> {
     if let VfsCommand::Database { command } = command {
-        run_database_command(client, command).await?;
+        run_database_command(client, connection, command).await?;
         return Ok(());
     }
-    let database_id = database_id_or_env(database_id)?;
-    let database_id = database_id.as_ref();
+    let database_id = connection.database_id.as_deref();
+    let database_id = require_database_id(database_id)?;
     match command {
         VfsCommand::Database { .. } => {
             unreachable!("database command handled before db requirement")
@@ -444,7 +442,11 @@ fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) -> Result<()> {
+async fn run_database_command(
+    client: &impl VfsApi,
+    connection: &ResolvedConnection,
+    command: DatabaseCommand,
+) -> Result<()> {
     match command {
         DatabaseCommand::Create => {
             let database_id = client.create_database().await?;
@@ -465,6 +467,16 @@ async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) ->
                     );
                 }
             }
+        }
+        DatabaseCommand::Link { database_id } => {
+            let path = link_workspace_database(connection, &database_id)?;
+            println!("{}", path.display());
+        }
+        DatabaseCommand::Current { json } => {
+            print_database_current(&ResolvedConnectionPreview::from(connection), json)?
+        }
+        DatabaseCommand::Unlink => {
+            run_database_unlink()?;
         }
         DatabaseCommand::Grant {
             database_id,
@@ -502,6 +514,52 @@ async fn run_database_command(client: &impl VfsApi, command: DatabaseCommand) ->
     Ok(())
 }
 
+pub fn print_database_current(connection: &ResolvedConnectionPreview, json: bool) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "canister_id": connection.canister_id,
+                "canister_id_source": connection.canister_id_source,
+                "database_id": connection.database_id,
+                "database_id_source": connection.database_id_source,
+                "replica_host": connection.replica_host,
+                "replica_host_source": connection.replica_host_source
+            }))?
+        );
+    } else {
+        println!(
+            "canister_id: {}",
+            connection.canister_id.as_deref().unwrap_or("")
+        );
+        println!(
+            "database_id: {}",
+            connection.database_id.as_deref().unwrap_or("")
+        );
+        println!("replica_host: {}", connection.replica_host);
+        println!(
+            "source: {}",
+            connection
+                .database_id_source
+                .as_deref()
+                .unwrap_or("unresolved")
+        );
+    }
+    Ok(())
+}
+
+pub fn run_database_unlink() -> Result<()> {
+    let path = unlink_workspace_database()?.unwrap_or(workspace_config_path()?);
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn require_database_id(database_id: Option<&str>) -> Result<&str> {
+    database_id
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"))
+}
+
 pub fn database_id_or_env(database_id: Option<&str>) -> Result<Cow<'_, str>> {
     if let Some(database_id) = database_id.filter(|value| !value.is_empty()) {
         return Ok(Cow::Borrowed(database_id));
@@ -509,7 +567,7 @@ pub fn database_id_or_env(database_id: Option<&str>) -> Result<Cow<'_, str>> {
     let env_database_id = std::env::var("VFS_DATABASE_ID").unwrap_or_default();
     if env_database_id.is_empty() {
         Err(anyhow!(
-            "--database-id is required for DB-backed VFS operations"
+            "database id is required; set --database-id, VFS_DATABASE_ID, or run database link <database-id>"
         ))
     } else {
         Ok(Cow::Owned(env_database_id))
@@ -523,92 +581,6 @@ fn print_link_summary(label: &str, links: &[LinkEdge]) {
             "{label}\t{}\t{}\t{}\t{}",
             link.source_path, link.target_path, link.link_kind, link.link_text
         );
-    }
-}
-
-pub async fn collect_paged_snapshot(
-    client: &impl VfsApi,
-    database_id: &str,
-) -> Result<ExportSnapshotResponse> {
-    let mut cursor = None;
-    let mut snapshot_revision = None;
-    let mut nodes = Vec::new();
-    loop {
-        let page = client
-            .export_snapshot(ExportSnapshotRequest {
-                database_id: database_id.to_string(),
-                prefix: Some(WIKI_ROOT_PATH.to_string()),
-                limit: SYNC_PAGE_LIMIT,
-                cursor: cursor.clone(),
-                snapshot_revision: snapshot_revision.clone(),
-                snapshot_session_id: None,
-            })
-            .await?;
-        snapshot_revision = Some(page.snapshot_revision.clone());
-        nodes.extend(page.nodes);
-        let Some(next_cursor) = page.next_cursor else {
-            return Ok(ExportSnapshotResponse {
-                snapshot_revision: snapshot_revision.unwrap_or_default(),
-                snapshot_session_id: None,
-                nodes,
-                next_cursor: None,
-            });
-        };
-        cursor = Some(next_cursor);
-    }
-}
-
-pub async fn collect_paged_updates(
-    client: &impl VfsApi,
-    database_id: &str,
-    known_snapshot_revision: &str,
-    target_snapshot_revision: Option<String>,
-) -> Result<FetchUpdatesResponse> {
-    let mut cursor = None;
-    let mut target_snapshot_revision = target_snapshot_revision;
-    let mut changed_nodes = Vec::new();
-    let mut removed_paths = Vec::new();
-    loop {
-        let page = client
-            .fetch_updates(FetchUpdatesRequest {
-                database_id: database_id.to_string(),
-                known_snapshot_revision: known_snapshot_revision.to_string(),
-                prefix: Some(WIKI_ROOT_PATH.to_string()),
-                limit: SYNC_PAGE_LIMIT,
-                cursor: cursor.clone(),
-                target_snapshot_revision: target_snapshot_revision.clone(),
-            })
-            .await?;
-        target_snapshot_revision = Some(page.snapshot_revision.clone());
-        changed_nodes.extend(page.changed_nodes);
-        removed_paths.extend(page.removed_paths);
-        let Some(next_cursor) = page.next_cursor else {
-            return Ok(FetchUpdatesResponse {
-                snapshot_revision: target_snapshot_revision.unwrap_or_default(),
-                changed_nodes,
-                removed_paths,
-                next_cursor: None,
-            });
-        };
-        cursor = Some(next_cursor);
-    }
-}
-
-pub fn resync_required_error(error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if message.contains(SNAPSHOT_UNAVAILABLE_ERROR) || message.contains(SNAPSHOT_INVALID_ERROR) {
-        anyhow!("{message}; run pull --resync")
-    } else {
-        error
-    }
-}
-
-pub fn snapshot_restart_required_error(error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if message.contains(SNAPSHOT_NO_LONGER_CURRENT_ERROR) {
-        anyhow!("{message}; rerun pull")
-    } else {
-        error
     }
 }
 
@@ -654,6 +626,7 @@ fn read_multi_edit_file(path: &std::path::Path) -> Result<Vec<MultiEdit>> {
 mod tests {
     use super::run_vfs_command;
     use crate::cli::{NodeKindArg, VfsCommand};
+    use crate::connection::ResolvedConnection;
     use anyhow::Result;
     use async_trait::async_trait;
     use std::path::PathBuf;
@@ -672,6 +645,17 @@ mod tests {
         child_lists: Mutex<Vec<ListChildrenRequest>>,
         contexts: Mutex<Vec<NodeContextRequest>>,
         neighborhoods: Mutex<Vec<GraphNeighborhoodRequest>>,
+    }
+
+    fn test_connection() -> ResolvedConnection {
+        ResolvedConnection {
+            replica_host: "http://127.0.0.1:8000".to_string(),
+            canister_id: "aaaaa-aa".to_string(),
+            database_id: Some("alpha".to_string()),
+            replica_host_source: "test".to_string(),
+            canister_id_source: "test".to_string(),
+            database_id_source: Some("test".to_string()),
+        }
     }
 
     #[async_trait]
@@ -811,7 +795,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::WriteNode {
                 path: "/Sources/raw/source/source.md".to_string(),
                 kind: NodeKindArg::Source,
@@ -831,7 +815,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::ListChildren {
                 path: "/Wiki".to_string(),
                 json: true,
@@ -847,7 +831,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            None,
+            &test_connection(),
             VfsCommand::Database {
                 command: super::DatabaseCommand::Create,
             },
@@ -862,7 +846,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            None,
+            &test_connection(),
             VfsCommand::Database {
                 command: super::DatabaseCommand::List { json: false },
             },
@@ -909,7 +893,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::ReadNodeContext {
                 path: "/Wiki/a.md".to_string(),
                 link_limit: 7,
@@ -928,7 +912,7 @@ mod tests {
         let client = MockClient::default();
         run_vfs_command(
             &client,
-            Some("alpha"),
+            &test_connection(),
             VfsCommand::GraphNeighborhood {
                 center_path: "/Wiki/a.md".to_string(),
                 depth: 2,

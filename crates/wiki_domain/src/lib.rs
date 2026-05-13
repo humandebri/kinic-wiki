@@ -1,5 +1,5 @@
 // Where: crates/wiki_domain/src/lib.rs
-// What: Wiki-specific path policy and mirror defaults layered on top of the reusable VFS.
+// What: Wiki-specific path validation layered on top of the reusable VFS.
 // Why: `/Wiki` and `/Sources/...` semantics must stay centralized outside the generic VFS crates.
 use vfs_types::NodeKind;
 
@@ -8,10 +8,12 @@ pub const WIKI_INDEX_PATH: &str = "/Wiki/index.md";
 pub const WIKI_SOURCES_PREFIX: &str = "/Wiki/sources";
 pub const WIKI_ENTITIES_PREFIX: &str = "/Wiki/entities";
 pub const WIKI_CONCEPTS_PREFIX: &str = "/Wiki/concepts";
+pub const SKILL_REGISTRY_ROOT: &str = "/Wiki/skills";
+pub const PUBLIC_SKILL_REGISTRY_ROOT: &str = "/Wiki/public-skills";
 pub const WIKI_BEAM_SECTION_TITLE: &str = "Benchmarks";
-pub const DEFAULT_MIRROR_ROOT: &str = "Wiki";
 pub const RAW_SOURCES_PREFIX: &str = "/Sources/raw";
 pub const SESSION_SOURCES_PREFIX: &str = "/Sources/sessions";
+pub const SKILL_RUNS_PREFIX: &str = "/Sources/skill-runs";
 
 pub fn validate_source_path_for_kind(path: &str, kind: &NodeKind) -> Result<(), String> {
     let is_source_path = path_matches_prefix_boundary(path, RAW_SOURCES_PREFIX)
@@ -34,8 +36,11 @@ pub fn validate_canonical_source_path(path: &str) -> Result<(), String> {
     if path_matches_prefix_boundary(path, SESSION_SOURCES_PREFIX) {
         return validate_source_path_under_prefix(path, SESSION_SOURCES_PREFIX);
     }
+    if path_matches_prefix_boundary(path, SKILL_RUNS_PREFIX) {
+        return validate_skill_run_source_path(path);
+    }
     Err(format!(
-        "source path must stay under {RAW_SOURCES_PREFIX} or {SESSION_SOURCES_PREFIX}: {path}"
+        "source path must stay under {RAW_SOURCES_PREFIX}, {SESSION_SOURCES_PREFIX}, or {SKILL_RUNS_PREFIX}: {path}"
     ))
 }
 
@@ -95,10 +100,37 @@ fn validate_source_path_under_prefix(path: &str, prefix: &str) -> Result<(), Str
     Ok(())
 }
 
+fn validate_skill_run_source_path(path: &str) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(SKILL_RUNS_PREFIX)
+        .ok_or_else(|| format!("source path must stay under {SKILL_RUNS_PREFIX}: {path}"))?;
+    let segments = relative
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() != 2 {
+        return Err(format!(
+            "skill run source path must use canonical form {SKILL_RUNS_PREFIX}/<name>/<timestamp>.md: {path}"
+        ));
+    }
+    let [name, file_name] = segments.as_slice() else {
+        unreachable!();
+    };
+    if name.is_empty()
+        || !file_name.ends_with(".md")
+        || file_name.trim_end_matches(".md").is_empty()
+    {
+        return Err(format!(
+            "skill run source path must use canonical form {SKILL_RUNS_PREFIX}/<name>/<timestamp>.md: {path}"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        RAW_SOURCES_PREFIX, WIKI_ROOT_PATH, normalize_wiki_remote_path,
+        RAW_SOURCES_PREFIX, SKILL_RUNS_PREFIX, WIKI_ROOT_PATH, normalize_wiki_remote_path,
         validate_canonical_source_path, wiki_relative_path,
     };
 
@@ -120,6 +152,24 @@ mod tests {
         let error = validate_canonical_source_path("/Sources/rawfoo/alpha.md")
             .expect_err("prefix lookalike should fail");
         assert!(error.contains("source path must stay under"));
+    }
+
+    #[test]
+    fn canonical_source_path_accepts_skill_runs() {
+        let path = format!("{SKILL_RUNS_PREFIX}/legal-review/1700000000000.md");
+        assert!(validate_canonical_source_path(&path).is_ok());
+    }
+
+    #[test]
+    fn canonical_source_path_rejects_malformed_skill_runs() {
+        for path in [
+            "/Sources/skill-runs/legal-review",
+            "/Sources/skill-runs/legal-review/",
+            "/Sources/skill-runs/legal-review/run.txt",
+            "/Sources/skill-runsfoo/legal-review/run.md",
+        ] {
+            assert!(validate_canonical_source_path(path).is_err());
+        }
     }
 
     #[test]

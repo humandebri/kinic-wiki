@@ -36,8 +36,8 @@ async function main() {
   assertSnapshotIncludes("Full text");
   run("open", [`${url}?tab=recent`]);
   assertSnapshotIncludes("Recent");
-  run("open", [`${url}?tab=lint`]);
-  assertSnapshotIncludes("Lint Hints");
+  run("open", [`${url}?tab=sources`]);
+  assertSnapshotIncludes("Save source URL");
   run("open", [graphUrl]);
   assertSnapshotIncludes("Local link graph");
   assertSnapshotIncludes(target.nodePath);

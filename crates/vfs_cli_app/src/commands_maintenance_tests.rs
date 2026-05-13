@@ -5,6 +5,7 @@ use crate::cli::{Cli, Command, ConnectionArgs};
 use crate::commands::run_command;
 use crate::commands_fs_tests::MockClient;
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
+use vfs_cli::connection::ResolvedConnection;
 
 fn node(path: &str, kind: NodeKind, content: &str) -> Node {
     Node {
@@ -26,6 +27,17 @@ fn test_cli(command: Command) -> Cli {
             canister_id: Some("aaaaa-aa".to_string()),
         },
         command,
+    }
+}
+
+fn test_connection() -> ResolvedConnection {
+    ResolvedConnection {
+        replica_host: "http://127.0.0.1:8000".to_string(),
+        canister_id: "aaaaa-aa".to_string(),
+        database_id: Some("default".to_string()),
+        replica_host_source: "test".to_string(),
+        canister_id_source: "test".to_string(),
+        database_id_source: Some("test".to_string()),
     }
 }
 
@@ -134,7 +146,7 @@ async fn rebuild_index_renders_sections_from_existing_wiki_nodes() {
 async fn rebuild_index_command_dispatches() {
     let client = MockClient::default();
 
-    run_command(&client, test_cli(Command::RebuildIndex))
+    run_command(&client, test_cli(Command::RebuildIndex), &test_connection())
         .await
         .expect("rebuild index command should succeed");
 
@@ -233,6 +245,7 @@ async fn rebuild_scope_index_command_dispatches_for_canonical_path() {
         test_cli(Command::RebuildScopeIndex {
             scope: "/Wiki/foo".to_string(),
         }),
+        &test_connection(),
     )
     .await
     .expect("rebuild scope index command should succeed");
@@ -251,6 +264,7 @@ async fn rebuild_scope_index_command_dispatches_for_nested_scope() {
         test_cli(Command::RebuildScopeIndex {
             scope: "/Wiki/foo/child".to_string(),
         }),
+        &test_connection(),
     )
     .await
     .expect("nested rebuild scope index command should succeed");

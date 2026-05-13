@@ -34,7 +34,7 @@ Load `extensions/conversation-capture` as an unpacked extension after `dist/serv
 The extension only writes raw evidence. Generate wiki pages later:
 
 ```bash
-cargo run -p vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/<source_id>/<source_id>.md
+cargo run -p vfs-cli --bin vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/<source_id>/<source_id>.md
 ```
 
 The CLI creates a conversation wiki scaffold. Re-running it preserves hand-edited scaffold pages unless `--force` is supplied.

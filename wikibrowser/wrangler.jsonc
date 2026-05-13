@@ -4,6 +4,11 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-05-11",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "NEXT_PUBLIC_WIKI_IC_HOST": "https://icp0.io",
+    "NEXT_PUBLIC_II_PROVIDER_URL": "https://id.ai",
+    "NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID": "xis3j-paaaa-aaaai-axumq-cai"
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

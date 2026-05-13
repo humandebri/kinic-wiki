@@ -55,6 +55,9 @@ async function saveSource(capture, overrideConfig, sender) {
   if (!config.canisterId) {
     throw new Error("canister id is required");
   }
+  if (!config.databaseId) {
+    throw new Error("database id is required");
+  }
   const raw = buildRawSource(capture);
   const actor = await vfsActorFactory(config);
   const existing = await actor.read_node(config.databaseId, raw.path);

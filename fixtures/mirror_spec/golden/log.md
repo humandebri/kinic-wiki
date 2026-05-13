@@ -1,3 +1,0 @@
-# Log
-
-- [[alpha]] — Updated page

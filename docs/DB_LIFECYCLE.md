@@ -106,7 +106,7 @@ Restore finalize also hashes the whole restored SQLite file in one update, so la
 
 Paged snapshot sync uses `snapshot_revision` plus cursor instead of canister-side snapshot sessions.
 If a DB changes during a multi-page snapshot, later pages can fail with `snapshot_revision is no longer current`.
-Busy DBs may require caller retry; the CLI reports this as a resync condition and expects `pull --resync`.
+Busy DBs may require caller retry by restarting the snapshot export flow.
 
 ## Current Limits
 

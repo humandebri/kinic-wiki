@@ -14,18 +14,22 @@ use vfs_types::{
 };
 
 use crate::cli::DEFAULT_VFS_ROOT_PATH;
+use crate::skill_kb;
 
 pub struct ToolResult {
     pub text: String,
     pub is_error: bool,
 }
 
-pub const READ_ONLY_TOOL_NAMES: [&str; 10] = [
+pub const READ_ONLY_TOOL_NAMES: [&str; 13] = [
     "read",
     "read_context",
     "ls",
     "search",
     "search_paths",
+    "skill_find",
+    "skill_inspect",
+    "skill_read",
     "recent",
     "graph_neighborhood",
     "graph_links",
@@ -249,6 +253,63 @@ async fn dispatch_tool_call_impl(
                 json!({ "hits": client.search_node_paths(SearchNodePathsRequest { database_id: database_id(args.database_id)?, query_text: args.query_text, prefix: Some(args.prefix.unwrap_or_else(|| DEFAULT_VFS_ROOT_PATH.to_string())), top_k: args.top_k.unwrap_or(10), preview_mode: args.preview_mode }).await? }),
             )
         }
+        "skill_find" => {
+            let args: SkillFindArgs = serde_json::from_value(input)?;
+            tool_ok(
+                skill_kb::find_skills(
+                    client,
+                    &database_id(args.database_id)?,
+                    &args.query_text,
+                    args.include_deprecated.unwrap_or(false),
+                    args.top_k.unwrap_or(5),
+                )
+                .await?,
+            )
+        }
+        "skill_inspect" => {
+            let args: SkillInspectArgs = serde_json::from_value(input)?;
+            tool_ok(
+                skill_kb::inspect_skill(
+                    client,
+                    &database_id(args.database_id)?,
+                    &args.id,
+                    args.public.unwrap_or(false),
+                )
+                .await?,
+            )
+        }
+        "skill_read" => {
+            let args: SkillReadArgs = serde_json::from_value(input)?;
+            tool_ok(
+                skill_kb::read_skill_file(
+                    client,
+                    &database_id(args.database_id)?,
+                    &args.id,
+                    &args.file,
+                    args.public.unwrap_or(false),
+                )
+                .await?,
+            )
+        }
+        "skill_record_run" => {
+            let args: SkillRecordRunArgs = serde_json::from_value(input)?;
+            let database_id = database_id(args.database_id)?;
+            tool_ok(
+                skill_kb::record_skill_run(
+                    client,
+                    skill_kb::SkillRunRecord {
+                        database_id: &database_id,
+                        id: &args.id,
+                        task: &args.task,
+                        outcome: skill_run_outcome(&args.outcome)?,
+                        notes: &args.notes,
+                        agent: &args.agent,
+                        public: args.public.unwrap_or(false),
+                    },
+                )
+                .await?,
+            )
+        }
         other => return Ok(tool_error(format!("unknown tool: {other}"))),
     };
     Ok(result)
@@ -274,6 +335,10 @@ fn tool_names_slice() -> &'static [&'static str] {
         "rm",
         "search",
         "search_paths",
+        "skill_find",
+        "skill_inspect",
+        "skill_read",
+        "skill_record_run",
     ]
 }
 fn tool_ok(value: Value) -> ToolResult {
@@ -350,6 +415,26 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Search node paths and basenames by case-insensitive substring recall.",
             search_schema(),
         ),
+        ToolSpec::new(
+            "skill_find",
+            "Find Skill KB packages for a task query. Deprecated skills are hidden unless requested.",
+            skill_find_schema(),
+        ),
+        ToolSpec::new(
+            "skill_inspect",
+            "Inspect one Skill KB package manifest, files, and recent run evidence.",
+            skill_id_schema(),
+        ),
+        ToolSpec::new(
+            "skill_read",
+            "Read a package-local file from a Skill KB package.",
+            skill_read_schema(),
+        ),
+        ToolSpec::new(
+            "skill_record_run",
+            "Record Skill KB run evidence after an agent uses a skill.",
+            skill_record_run_schema(),
+        ),
     ]
 }
 
@@ -400,6 +485,18 @@ fn delete_schema() -> Value {
 }
 fn search_schema() -> Value {
     json!({"type":"object","properties":{"database_id":{"type":"string"},"query_text":{"type":"string"},"prefix":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":100},"preview_mode":{"type":"string","enum":["none","light","content_start"]}},"required":["database_id","query_text"],"additionalProperties":false})
+}
+fn skill_find_schema() -> Value {
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"query_text":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":20},"include_deprecated":{"type":"boolean"}},"required":["database_id","query_text"],"additionalProperties":false})
+}
+fn skill_id_schema() -> Value {
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"id":{"type":"string"},"public":{"type":"boolean"}},"required":["database_id","id"],"additionalProperties":false})
+}
+fn skill_read_schema() -> Value {
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"id":{"type":"string"},"file":{"type":"string"},"public":{"type":"boolean"}},"required":["database_id","id","file"],"additionalProperties":false})
+}
+fn skill_record_run_schema() -> Value {
+    json!({"type":"object","properties":{"database_id":{"type":"string"},"id":{"type":"string"},"task":{"type":"string"},"outcome":{"type":"string","enum":["success","partial","fail"]},"notes":{"type":"string"},"agent":{"type":"string"},"public":{"type":"boolean"}},"required":["database_id","id","task","outcome","notes","agent"],"additionalProperties":false})
 }
 
 fn database_id(value: Option<String>) -> Result<String> {
@@ -518,6 +615,45 @@ struct SearchArgs {
     prefix: Option<String>,
     top_k: Option<u32>,
     preview_mode: Option<SearchPreviewMode>,
+}
+#[derive(Deserialize)]
+struct SkillFindArgs {
+    database_id: Option<String>,
+    query_text: String,
+    top_k: Option<u32>,
+    include_deprecated: Option<bool>,
+}
+#[derive(Deserialize)]
+struct SkillInspectArgs {
+    database_id: Option<String>,
+    id: String,
+    public: Option<bool>,
+}
+#[derive(Deserialize)]
+struct SkillReadArgs {
+    database_id: Option<String>,
+    id: String,
+    file: String,
+    public: Option<bool>,
+}
+#[derive(Deserialize)]
+struct SkillRecordRunArgs {
+    database_id: Option<String>,
+    id: String,
+    task: String,
+    outcome: String,
+    notes: String,
+    agent: String,
+    public: Option<bool>,
+}
+
+fn skill_run_outcome(value: &str) -> Result<skill_kb::SkillRunOutcome> {
+    match value {
+        "success" => Ok(skill_kb::SkillRunOutcome::Success),
+        "partial" => Ok(skill_kb::SkillRunOutcome::Partial),
+        "fail" => Ok(skill_kb::SkillRunOutcome::Fail),
+        _ => anyhow::bail!("invalid skill run outcome: {value}"),
+    }
 }
 
 struct ToolSpec {

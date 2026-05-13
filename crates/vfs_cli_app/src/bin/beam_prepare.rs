@@ -28,16 +28,21 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let connection = resolve_connection(cli.connection.local, cli.connection.canister_id.clone())?;
+    let connection = resolve_connection(
+        cli.connection.local,
+        cli.connection.canister_id.clone(),
+        cli.connection.database_id.clone(),
+    )?;
+    let database_id = connection
+        .database_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?;
     let summary = run_beam_prepare(
         connection,
         BeamPrepareArgs {
             dataset_path: cli.dataset_path,
             split: cli.split,
-            database_id: cli
-                .connection
-                .database_id
-                .ok_or_else(|| anyhow::anyhow!("--database-id is required"))?,
+            database_id,
             limit: cli.limit,
             namespace: cli.namespace,
         },

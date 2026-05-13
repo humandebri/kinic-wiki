@@ -16,7 +16,7 @@ Open a database with:
 http://localhost:3000/<database-id>/Wiki
 ```
 
-The browser is read-only and does not create databases. Prepare the target DB first:
+The dashboard can create databases after Internet Identity login. CLI setup is still useful for scripted local setup:
 
 ```bash
 cargo run -p vfs-cli -- --canister-id <canister-id> database create
@@ -40,6 +40,7 @@ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 ## Scope
 
 - Browse `/Wiki` and `/Sources`
+- Create URL ingest requests under `/Sources/ingest-requests` from the current database browser route
 - Render Markdown preview and raw content
 - Search by path or full text
 - Show recent nodes
@@ -49,7 +50,24 @@ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 - Read canister health and Agent Memory API metadata through the hand-written Candid subset
 - Show route-level 404 and VFS not-found states
 
-No editing, write UI, or full lint workflow is included.
+No full editing or lint workflow is included.
+
+## URL Ingest
+
+Open a database route and select the `ingest` left-pane tab:
+
+```text
+/<database-id>/Wiki?tab=ingest
+```
+
+Submitting a URL writes one request node to the same database:
+
+```text
+/Sources/ingest-requests/<request-id>.md
+```
+
+`workers/wiki-generator` scans those requests, fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
+The generator Worker principal must have writer access to the target database.
 
 ## Checks
 

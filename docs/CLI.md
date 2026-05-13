@@ -4,21 +4,21 @@
 
 The canister also exposes read-only Agent Memory API methods such as `memory_manifest`, `query_context`, and `source_evidence`.
 Those are direct canister/client methods, not CLI commands in this document.
-Use the CLI commands below for shell workflows and local mirror operations.
+Use the CLI commands below for shell workflows against the remote VFS.
 
 ## Connection
 
-Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` database is created implicitly.
+Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require an explicit database selection from `--database-id`, `VFS_DATABASE_ID`, `.kinic/config.toml`, or user config. No production `default` database is created implicitly.
 This is a breaking change for older single-DB clients that omitted `database_id`.
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
 ```
 
 Use `--local` for the local replica host.
 
 ```bash
-cargo run -p vfs-cli -- --local --database-id <database-id> status
+cargo run -p vfs-cli --bin vfs-cli -- --local --database-id <database-id> status
 ```
 
 `--database-id` takes precedence over `VFS_DATABASE_ID`.
@@ -29,17 +29,29 @@ Pass `--prefix /Wiki` or `--path /Wiki` when the human-facing wiki tree is the i
 Without `--canister-id`, the CLI reads configuration from:
 
 - `VFS_CANISTER_ID`
+- `.kinic/config.toml`
 - `~/.config/vfs-cli/config.toml`
 - `~/.vfs-cli.toml`
+
+Link a workspace once to avoid repeating `--database-id`:
+
+```bash
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database link <database-id>
+cargo run -p vfs-cli --bin vfs-cli -- database current
+cargo run -p vfs-cli --bin vfs-cli -- skill find "contract review"
+```
+
+Resolution priority is CLI flag, env, `.kinic/config.toml`, user config, then host default. Use `database unlink` to remove the workspace DB link.
 
 Create a database before reading or writing:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database create
-cargo run -p vfs-cli -- --canister-id <canister-id> database list
-cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
-cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/file.md --input file.md
-cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> search-remote "budget" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database create
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database list
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database link <database-id>
+cargo run -p vfs-cli --bin vfs-cli -- write-node --path /Wiki/file.md --input file.md
+cargo run -p vfs-cli --bin vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
 `database create` prints the generated database ID.
@@ -48,25 +60,23 @@ cargo run -p vfs-cli -- --canister-id <canister-id> --database-id <database-id> 
 For public browser reads, grant anonymous reader access explicitly:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
 Archive and restore are low-level canister APIs for snapshot bytes. The CLI does not yet persist archive bytes for you. See [`DB_LIFECYCLE.md`](DB_LIFECYCLE.md) for status, slot reuse, and restore validation details.
-
-If `pull` or `push` reports a snapshot revision resync condition, run `pull --resync` before retrying the workflow.
 
 ## Search
 
 Full-text search uses `search-remote`.
 
 ```bash
-cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli --bin vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
 Path search uses `search-path-remote`.
 
 ```bash
-cargo run -p vfs-cli -- search-path-remote "meeting" --prefix /Wiki --top-k 10 --json
+cargo run -p vfs-cli --bin vfs-cli -- search-path-remote "meeting" --prefix /Wiki --top-k 10 --json
 ```
 
 `--preview-mode` is optional. If omitted, canister defaults are preserved:
@@ -83,8 +93,8 @@ Available preview modes:
 Use `content-start` when the caller needs the first 200 normalized body characters without an extra `read-node` call.
 
 ```bash
-cargo run -p vfs-cli -- search-path-remote "meeting" --prefix /Wiki --preview-mode content-start --json
-cargo run -p vfs-cli -- search-remote "budget" --prefix /Wiki --preview-mode content-start --json
+cargo run -p vfs-cli --bin vfs-cli -- search-path-remote "meeting" --prefix /Wiki --preview-mode content-start --json
+cargo run -p vfs-cli --bin vfs-cli -- search-remote "budget" --prefix /Wiki --preview-mode content-start --json
 ```
 
 ## Node Operations
@@ -107,23 +117,14 @@ Common read and write commands:
 Use `read-node-context` when the caller needs a node plus incoming and outgoing links in one response.
 
 ```bash
-cargo run -p vfs-cli -- read-node-context --path /Wiki/file.md --link-limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- read-node-context --path /Wiki/file.md --link-limit 20 --json
 ```
 
 Use graph commands for explicit link inspection.
 
 ```bash
-cargo run -p vfs-cli -- graph-neighborhood --center-path /Wiki/file.md --depth 1 --limit 100 --json
-cargo run -p vfs-cli -- graph-links --prefix /Wiki --limit 100 --json
-cargo run -p vfs-cli -- incoming-links --path /Wiki/file.md --limit 20 --json
-cargo run -p vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
-```
-
-## Mirror Operations
-
-Use `pull` and `push` for local mirror sync.
-
-```bash
-cargo run -p vfs-cli -- pull --vault-path ./vault
-cargo run -p vfs-cli -- push --vault-path ./vault
+cargo run -p vfs-cli --bin vfs-cli -- graph-neighborhood --center-path /Wiki/file.md --depth 1 --limit 100 --json
+cargo run -p vfs-cli --bin vfs-cli -- graph-links --prefix /Wiki --limit 100 --json
+cargo run -p vfs-cli --bin vfs-cli -- incoming-links --path /Wiki/file.md --limit 20 --json
+cargo run -p vfs-cli --bin vfs-cli -- outgoing-links --path /Wiki/file.md --limit 20 --json
 ```

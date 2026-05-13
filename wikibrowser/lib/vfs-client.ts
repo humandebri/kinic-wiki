@@ -251,6 +251,17 @@ export async function listDatabasesAuthenticated(canisterId: string, identity: I
   });
 }
 
+export async function listDatabasesPublic(canisterId: string): Promise<DatabaseSummary[]> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.list_databases();
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
+    return result.Ok.map(normalizeDatabaseSummary);
+  });
+}
+
 export async function createDatabaseAuthenticated(canisterId: string, identity: Identity): Promise<string> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
@@ -348,10 +359,10 @@ export async function listChildren(canisterId: string, databaseId: string, path:
   });
 }
 
-export async function recentNodes(canisterId: string, databaseId: string, limit: number, identity?: Identity): Promise<RecentNode[]> {
+export async function recentNodes(canisterId: string, databaseId: string, limit: number, identity?: Identity, path: string | null = null): Promise<RecentNode[]> {
   return callVfs(async () => {
     const actor = await createReadActor(canisterId, identity);
-    const result = await actor.recent_nodes({ database_id: databaseId, path: [], limit });
+    const result = await actor.recent_nodes({ database_id: databaseId, path: path ? [path] : [], limit });
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }

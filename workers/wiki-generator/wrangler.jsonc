@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "kinic-wiki-generator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "vars": {
+    "KINIC_WIKI_CANISTER_ID": "xis3j-paaaa-aaaai-axumq-cai",
+    "KINIC_WIKI_IC_HOST": "https://icp0.io",
+    "KINIC_WIKI_DATABASE_IDS": "db_l2wldrknfcl2",
+    "KINIC_WIKI_WORKER_MODEL": "deepseek-v4-flash",
+    "KINIC_WIKI_WORKER_TARGET_ROOT": "/Wiki/conversations",
+    "KINIC_WIKI_WORKER_SOURCE_PREFIX": "/Sources/raw",
+    "KINIC_WIKI_WORKER_INGEST_REQUEST_PREFIX": "/Sources/ingest-requests",
+    "KINIC_WIKI_WORKER_CONTEXT_PREFIX": "/Wiki"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kinic-wiki-generator",
+      "database_id": "c82cdeed-424c-474a-8552-23b2b7e74a7a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "WIKI_GENERATION_QUEUE",
+        "queue": "kinic-wiki-generation"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "kinic-wiki-generation",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30
+      }
+    ]
+  }
+}
