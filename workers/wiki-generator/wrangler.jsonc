@@ -8,7 +8,7 @@
     "enabled": true
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["0 * * * *"]
   },
   "vars": {
     "KINIC_WIKI_CANISTER_ID": "xis3j-paaaa-aaaai-axumq-cai",
