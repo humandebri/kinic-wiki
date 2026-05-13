@@ -236,6 +236,8 @@ export function WikiBrowser() {
         readMode={readMode}
         readIdentity={readIdentity}
         selectedPath={selectedPath}
+        authReady={Boolean(authClient)}
+        onLogin={login}
         onLogout={logout}
       />
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
@@ -352,6 +354,8 @@ function TopBar({
   readMode,
   readIdentity,
   selectedPath,
+  authReady,
+  onLogin,
   onLogout
 }: {
   canisterId: string;
@@ -367,6 +371,8 @@ function TopBar({
   readMode: "anonymous" | null;
   readIdentity: Identity | null;
   selectedPath: string;
+  authReady: boolean;
+  onLogin: () => void;
   onLogout: () => void;
 }) {
   const router = useRouter();
@@ -451,10 +457,20 @@ function TopBar({
       <div className="flex min-w-[280px] flex-1 basis-full items-center justify-end gap-2 sm:basis-auto">
         {visibleError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{visibleError}</span> : null}
         {principal ? (
-          <button className="hidden rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink md:block" type="button" onClick={onLogout}>
+          <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" type="button" onClick={onLogout}>
             Logout
           </button>
-        ) : null}
+        ) : (
+          <button
+            className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            data-tid="header-login-button"
+            disabled={!authReady}
+            type="button"
+            onClick={onLogin}
+          >
+            Login
+          </button>
+        )}
         <Link
           className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
           href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}

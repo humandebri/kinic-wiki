@@ -10,6 +10,7 @@ const dashboardAccessControl = readFileSync(new URL("../app/dashboard/access-con
 const dashboardMemberTable = readFileSync(new URL("../app/dashboard/member-table.tsx", import.meta.url), "utf8");
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+const wikiLayout = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
 const ingestPanel = readFileSync(new URL("../components/ingest-panel.tsx", import.meta.url), "utf8");
 const nextConfig = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -26,7 +27,8 @@ assert.match(dashboardClient, /export function DashboardDatabaseClient\(\{ datab
 assert.doesNotMatch(dashboardClient, /useSearchParams/);
 assert.doesNotMatch(dashboardClient, /usePathname/);
 
-assert.match(wikiRoute, /<WikiBrowser \/>/);
+assert.match(wikiLayout, /<WikiBrowser \/>/);
+assert.match(wikiRoute, /return null;/);
 assert.equal(existsSync(new URL("../app/w/page.tsx", import.meta.url)), false);
 assert.equal(existsSync(new URL("../vercel.json", import.meta.url)), false);
 assert.doesNotMatch(nextConfig, /output:\s*"export"/);
@@ -65,6 +67,12 @@ assert.match(ingestPanel, /Queue URL/);
 assert.match(urlIngest, /\/Sources\/ingest-requests/);
 assert.match(urlIngest, /kinic\.url_ingest_request/);
 assert.match(dashboardClient, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
+assert.match(dashboardClient, /listDatabasesPublic/);
+assert.match(dashboardClient, /mergeDatabaseRows/);
+assert.match(dashboardClient, /Promise\.allSettled/);
+assert.match(dashboardClient, /Public database list unavailable/);
+assert.match(dashboardClient, /await refresh\(null, databaseId\);/);
+assert.match(dashboardClient, /<SummaryPanel database=\{database\} databaseId=\{databaseId\} principal=\{principal \?\? "anonymous"\} publicReadable=\{database\.publicReadable\} \/>/);
 assert.doesNotMatch(homePage, /process\.env\.KINIC_WIKI_CANISTER_ID/);
 assert.doesNotMatch(dashboardClient, /process\.env\.KINIC_WIKI_CANISTER_ID/);
 

@@ -32,7 +32,18 @@ export function AuthControls(props: { authReady: boolean; loading: boolean; prin
   );
 }
 
-export function SummaryPanel({ database, databaseId, principal }: { database: DatabaseSummary | null; databaseId: string; principal: string }) {
+export function SummaryPanel({
+  database,
+  databaseId,
+  principal,
+  publicReadable
+}: {
+  database: DatabaseSummary | null;
+  databaseId: string;
+  principal: string;
+  publicReadable: boolean;
+}) {
+  const openHref = publicReadable ? `/${encodeURIComponent(databaseId)}/Wiki?read=anonymous` : `/${encodeURIComponent(databaseId)}/Wiki`;
   return (
     <section className="grid gap-3 rounded-lg border border-line bg-paper p-4 text-sm shadow-sm sm:grid-cols-2 lg:grid-cols-5">
       <Field label="Principal" value={principal} />
@@ -40,7 +51,7 @@ export function SummaryPanel({ database, databaseId, principal }: { database: Da
       <Field label="Role" value={database?.role ?? "-"} />
       <Field label="Status" value={database?.status ?? "-"} />
       <Field label="Logical size" value={database ? formatBytes(database.logicalSizeBytes) : "-"} />
-      <Link className="text-accent no-underline hover:underline" href={`/${encodeURIComponent(databaseId)}/Wiki`}>
+      <Link className="text-accent no-underline hover:underline" href={openHref}>
         Open
       </Link>
     </section>

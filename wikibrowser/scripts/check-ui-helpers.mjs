@@ -13,11 +13,14 @@ const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
 const { buildSourceClipDocument, normalizeClipUrl, parseTags, sourceClipPath, renderSourceClipMarkdown } = await importTs("../lib/source-clips.ts");
 const explorerTreeSource = readFileSync(new URL("../components/explorer-tree.tsx", import.meta.url), "utf8");
 const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
+const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 assert.match(explorerTreeSource, /childNodesCache\.current\.get\(requestKey\)/);
 assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, data\)/);
 assert.match(explorerTreeSource, /key=\{`\$\{canisterId\}:\$\{databaseId\}:\/Wiki:/);
+assert.match(wikiBrowserSource, /data-tid="header-login-button"/);
+assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
 assert.match(globalsCss, /button:not\(:disabled\):active/);
 assert.match(globalsCss, /transform: scale\(0\.98\)/);
 assert.match(globalsCss, /button\[aria-busy="true"\]/);

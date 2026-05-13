@@ -10,21 +10,24 @@ import {
   grantDatabaseAccessAuthenticated,
   listDatabaseMembersAuthenticated,
   listDatabasesAuthenticated,
+  listDatabasesPublic,
   revokeDatabaseAccessAuthenticated
 } from "@/lib/vfs-client";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type BusyAction = { kind: "grant"; principalText: string; role: DatabaseRole } | { kind: "revoke"; principalText: string };
+type DatabaseAccessSummary = DatabaseSummary & { publicReadable: boolean };
 
 export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) {
   const canisterId = process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "";
   const refreshSeqRef = useRef(0);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [principal, setPrincipal] = useState<string | null>(null);
-  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [databases, setDatabases] = useState<DatabaseAccessSummary[]>([]);
   const [members, setMembers] = useState<DatabaseMember[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [memberError, setMemberError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionTone, setActionTone] = useState<"error" | "info">("info");
@@ -35,7 +38,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
   const canManage = database?.role === "owner" && !memberError;
 
   const refresh = useCallback(
-    async (client: AuthClient, nextDatabaseId: string) => {
+    async (client: AuthClient | null, nextDatabaseId: string) => {
       const refreshSeq = (refreshSeqRef.current += 1);
       const isCurrentRefresh = () => refreshSeq === refreshSeqRef.current;
       if (!canisterId) {
@@ -50,16 +53,35 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
       }
       setLoadState("loading");
       setError(null);
+      setWarning(null);
       setMemberError(null);
       try {
-        const identity = client.getIdentity();
-        const nextDatabases = await listDatabasesAuthenticated(canisterId, identity);
+        const identity = client?.getIdentity() ?? null;
+        const [publicResult, memberResult] = await Promise.allSettled([
+          listDatabasesPublic(canisterId),
+          identity ? listDatabasesAuthenticated(canisterId, identity) : Promise.resolve<DatabaseSummary[]>([])
+        ]);
+        if (publicResult.status === "rejected" && !identity) {
+          throw new Error(errorMessage(publicResult.reason));
+        }
+        if (publicResult.status === "rejected" && memberResult.status === "rejected") {
+          throw new Error(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
+        }
+        const publicDatabases = publicResult.status === "fulfilled" ? publicResult.value : [];
+        const memberDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
+        const nextDatabases = mergeDatabaseRows(memberDatabases, publicDatabases);
         if (!isCurrentRefresh()) return;
         const nextDatabase = nextDatabases.find((item) => item.databaseId === nextDatabaseId) ?? null;
-        setPrincipal(identity.getPrincipal().toText());
+        setPrincipal(identity?.getPrincipal().toText() ?? null);
         setDatabases(nextDatabases);
         setMembers([]);
-        if (nextDatabase?.role === "owner") {
+        if (publicResult.status === "rejected") {
+          setWarning(`Public database list unavailable: ${errorMessage(publicResult.reason)}`);
+        }
+        if (memberResult.status === "rejected") {
+          setMemberError(`Member database list unavailable: ${errorMessage(memberResult.reason)}`);
+        }
+        if (identity && nextDatabase?.role === "owner") {
           try {
             const nextMembers = await listDatabaseMembersAuthenticated(canisterId, identity, nextDatabaseId);
             if (!isCurrentRefresh()) return;
@@ -88,6 +110,8 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
         setAuthClient(client);
         if (await client.isAuthenticated()) {
           await refresh(client, databaseId);
+        } else {
+          await refresh(null, databaseId);
         }
       })
       .catch((cause) => {
@@ -124,8 +148,9 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
     setDatabases([]);
     setMembers([]);
     setError(null);
+    setWarning(null);
     setMemberError(null);
-    setLoadState("idle");
+    await refresh(null, databaseId);
   }
 
   async function grantAccess(principalText: string, role: DatabaseRole) {
@@ -186,24 +211,26 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
         </header>
 
         {error ? <StatusPanel tone="error" message={error} /> : null}
+        {warning ? <StatusPanel tone="info" message={warning} /> : null}
         {actionMessage ? <StatusPanel tone={actionTone} message={actionMessage} /> : null}
 
+        {database ? <SummaryPanel database={database} databaseId={databaseId} principal={principal ?? "anonymous"} publicReadable={database.publicReadable} /> : null}
+
         {principal ? (
-          <>
-            <SummaryPanel database={database} databaseId={databaseId} principal={principal} />
-            {database ? (
-              canManage ? (
-                <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal} onGrant={grantAccess} onRevoke={revokeAccess} />
-              ) : (
-                <StatusPanel tone="info" message={memberError ?? "No management permission for this database."} />
-              )
+          database ? (
+            canManage ? (
+              <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal} onGrant={grantAccess} onRevoke={revokeAccess} />
             ) : (
-              <StatusPanel tone="error" message="Database is not linked to this principal." />
-            )}
-          </>
+              <StatusPanel tone="info" message={memberError ?? "No management permission for this database."} />
+            )
+          ) : (
+            <StatusPanel tone="error" message="Database is not linked to this principal or public anonymous reads." />
+          )
+        ) : database ? (
+          <StatusPanel tone="info" message="Login with Internet Identity to manage database access." />
         ) : (
           <section className="rounded-lg border border-line bg-paper p-8 shadow-sm">
-            <p className="text-sm leading-6 text-muted">Login with Internet Identity to manage database access.</p>
+            <p className="text-sm leading-6 text-muted">Public anonymous read is not available for this database. Login with Internet Identity to manage database access.</p>
           </section>
         )}
       </section>
@@ -213,4 +240,16 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Unexpected error";
+}
+
+function mergeDatabaseRows(memberDatabases: DatabaseSummary[], publicDatabases: DatabaseSummary[]): DatabaseAccessSummary[] {
+  const publicIds = new Set(publicDatabases.map((database) => database.databaseId));
+  const rows = new Map<string, DatabaseAccessSummary>();
+  for (const database of publicDatabases) {
+    rows.set(database.databaseId, { ...database, publicReadable: true });
+  }
+  for (const database of memberDatabases) {
+    rows.set(database.databaseId, { ...database, publicReadable: publicIds.has(database.databaseId) });
+  }
+  return [...rows.values()].sort((left, right) => left.databaseId.localeCompare(right.databaseId));
 }
