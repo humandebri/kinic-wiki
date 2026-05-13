@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { DatabaseSummary } from "@/lib/types";
 
 export type DatabaseRow = DatabaseSummary & {
+  member: boolean;
   publicReadable: boolean;
 };
 
@@ -48,11 +49,58 @@ export function AuthControls({
   );
 }
 
-export function DatabaseBody({ databases, loading }: { databases: DatabaseRow[]; loading: boolean }) {
+export function DatabaseBody({
+  loading,
+  myDatabases,
+  principal,
+  publicDatabases
+}: {
+  loading: boolean;
+  myDatabases: DatabaseRow[];
+  principal: string | null;
+  publicDatabases: DatabaseRow[];
+}) {
   if (loading) return <div className="p-6 text-sm text-muted">Loading databases...</div>;
-  if (databases.length === 0) return <div className="p-6 text-sm text-muted">No databases are available.</div>;
+  if (!principal) {
+    return <DatabaseSection emptyMessage="No public databases are available." mode="public" rows={publicDatabases} showTitle={false} title="Public databases" />;
+  }
   return (
-    <div className="overflow-x-auto">
+    <div className="divide-y divide-line">
+      <DatabaseSection emptyMessage="No databases are linked to this principal." mode="member" rows={myDatabases} title="My databases" />
+      {publicDatabases.length > 0 ? <DatabaseSection emptyMessage="No public databases are available." mode="public" rows={publicDatabases} title="Public databases" /> : null}
+    </div>
+  );
+}
+
+function DatabaseSection({
+  emptyMessage,
+  mode,
+  rows,
+  showTitle = true,
+  title
+}: {
+  emptyMessage: string;
+  mode: "member" | "public";
+  rows: DatabaseRow[];
+  showTitle?: boolean;
+  title: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <section className="p-4">
+        {showTitle ? <h3 className="text-sm font-semibold text-ink">{title}</h3> : null}
+        <p className="mt-2 text-sm text-muted">{emptyMessage}</p>
+      </section>
+    );
+  }
+  return (
+    <section>
+      {showTitle ? (
+        <div className="px-4 py-3">
+          <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        </div>
+      ) : null}
+      <div className="overflow-x-auto">
       <table className="w-full border-collapse text-left text-sm">
         <thead className="bg-white/70 text-xs uppercase tracking-[0.12em] text-muted">
           <tr>
@@ -62,14 +110,19 @@ export function DatabaseBody({ databases, loading }: { databases: DatabaseRow[];
             <th className="px-4 py-3 font-medium">Logical size</th>
             <th className="px-4 py-3 font-medium">Archive</th>
             <th className="px-4 py-3 font-medium">Open</th>
-            <th className="px-4 py-3 font-medium">Skills</th>
-            <th className="px-4 py-3 font-medium">Manage</th>
+            {mode === "member" ? <th className="px-4 py-3 font-medium">Skills</th> : null}
+            {mode === "member" ? <th className="px-4 py-3 font-medium">Manage</th> : null}
           </tr>
         </thead>
         <tbody>
-          {databases.map((database) => (
+          {rows.map((database) => (
             <tr key={database.databaseId} className="border-t border-line">
-              <td className="px-4 py-3 font-mono text-xs text-ink">{database.databaseId}</td>
+              <td className="px-4 py-3">
+                <div className="flex min-w-[180px] flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs text-ink">{database.databaseId}</span>
+                  {mode === "member" && database.publicReadable ? <span className="rounded border border-line bg-white px-1.5 py-0.5 text-[11px] font-medium text-muted">Public</span> : null}
+                </div>
+              </td>
               <td className="px-4 py-3 capitalize text-ink">{database.role}</td>
               <td className="px-4 py-3 capitalize text-ink">{database.status}</td>
               <td className="px-4 py-3 text-ink">{formatBytes(database.logicalSizeBytes)}</td>
@@ -79,21 +132,26 @@ export function DatabaseBody({ databases, loading }: { databases: DatabaseRow[];
                   Open
                 </Link>
               </td>
-              <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(database.databaseId)}`}>
-                  Registry
-                </Link>
-              </td>
-              <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={`/dashboard/${encodeURIComponent(database.databaseId)}`}>
-                  Manage
-                </Link>
-              </td>
+              {mode === "member" ? (
+                <td className="px-4 py-3">
+                  <Link className="text-accent no-underline hover:underline" href={`/skills/${encodeURIComponent(database.databaseId)}`}>
+                    Registry
+                  </Link>
+                </td>
+              ) : null}
+              {mode === "member" ? (
+                <td className="px-4 py-3">
+                  <Link className="text-accent no-underline hover:underline" href={`/dashboard/${encodeURIComponent(database.databaseId)}`}>
+                    Manage
+                  </Link>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+    </section>
   );
 }
 
@@ -135,7 +193,7 @@ function databaseMarker(database: DatabaseSummary): string {
 
 function openDatabaseHref(database: DatabaseRow): string {
   const base = `/${encodeURIComponent(database.databaseId)}/Wiki`;
-  return database.publicReadable ? `${base}?read=anonymous` : base;
+  return !database.member && database.publicReadable ? `${base}?read=anonymous` : base;
 }
 
 function formatTimestamp(value: string): string {

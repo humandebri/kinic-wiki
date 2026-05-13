@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GitBranch, Network, PanelRight, Search } from "lucide-react";
+import { GitBranch, LayoutDashboard, Network, PanelRight, Search } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -434,7 +434,10 @@ function TopBar({
   return (
     <header className="flex min-h-[52px] flex-wrap items-center gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur sm:flex-nowrap sm:gap-4">
       <div className="w-[168px] shrink-0">
-        <h1 className="text-base font-semibold leading-tight tracking-[-0.03em]">Knowledge IDE</h1>
+        <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
+          <LayoutDashboard size={15} />
+          Knowledge IDE
+        </Link>
       </div>
       <div className="flex min-w-0 shrink-0 items-center gap-1 text-xs text-muted">
         <label className="hidden font-mono sm:inline" htmlFor="database-switcher">

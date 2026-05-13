@@ -21,6 +21,8 @@ assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, dat
 assert.match(explorerTreeSource, /key=\{`\$\{canisterId\}:\$\{databaseId\}:\/Wiki:/);
 assert.match(wikiBrowserSource, /data-tid="header-login-button"/);
 assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
+assert.match(wikiBrowserSource, /LayoutDashboard/);
+assert.match(wikiBrowserSource, /aria-label="Back to database dashboard"/);
 assert.match(globalsCss, /button:not\(:disabled\):active/);
 assert.match(globalsCss, /transform: scale\(0\.98\)/);
 assert.match(globalsCss, /button\[aria-busy="true"\]/);

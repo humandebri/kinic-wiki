@@ -125,6 +125,9 @@ export default function HomePage() {
     }
   }
 
+  const myDatabases = databases.filter((database) => database.member);
+  const publicDatabases = databases.filter((database) => !database.member && database.publicReadable);
+
   return (
     <main className="min-h-screen px-6 py-8">
       <section className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -171,7 +174,7 @@ export default function HomePage() {
               <p className="mt-1 text-sm leading-6 text-muted">Login with Internet Identity to list databases where your principal has membership.</p>
             </div>
           )}
-          <DatabaseBody databases={databases} loading={loadState === "loading"} />
+          <DatabaseBody loading={loadState === "loading"} myDatabases={myDatabases} principal={principal} publicDatabases={publicDatabases} />
         </section>
       </section>
     </main>
@@ -182,10 +185,10 @@ function mergeDatabaseRows(memberDatabases: DatabaseSummary[], publicDatabases: 
   const publicIds = new Set(publicDatabases.map((database) => database.databaseId));
   const rows = new Map<string, DatabaseRow>();
   for (const database of publicDatabases) {
-    rows.set(database.databaseId, { ...database, publicReadable: true });
+    rows.set(database.databaseId, { ...database, member: false, publicReadable: true });
   }
   for (const database of memberDatabases) {
-    rows.set(database.databaseId, { ...database, publicReadable: publicIds.has(database.databaseId) });
+    rows.set(database.databaseId, { ...database, member: true, publicReadable: publicIds.has(database.databaseId) });
   }
   return [...rows.values()].sort((left, right) => left.databaseId.localeCompare(right.databaseId));
 }
