@@ -228,9 +228,8 @@ The browser provides the team operation surface:
 - Proposal diffs can be previewed and applied only when they target package-local Markdown files and the current node etag still matches.
 - Browser operations record audit events under `/Sources/skill-events/<skill-id>/...`.
 
-The wiki browser also shows a read-only Skill card in the Inspector for registry paths.
-When viewing `manifest.md`, the card is parsed from the current node.
-When viewing package files such as `SKILL.md`, `ingest.md`, `provenance.md`, or `evals.md`, the browser reads the sibling `manifest.md` and displays the same skill metadata.
+The wiki browser treats registry paths as ordinary wiki nodes.
+Skill-specific metadata, evidence, proposals, and status actions live only in `/skills/<database-id>`.
 Registry access follows the selected database role.
 
 ## Agent Runtime

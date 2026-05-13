@@ -42,7 +42,7 @@ provenance:
 ## Current Surface
 
 - CLI: `skill upsert`, `skill find`, `skill inspect`, `skill record-run`, and `skill set-status` with explicit `database_id`.
-- Browser: read-only Inspector card for `kind: kinic.skill` manifests under `/Wiki/skills`.
+- Browser: dedicated `/skills/<database-id>` catalog and operations UI. The wiki browser treats registry paths as ordinary wiki nodes.
 - Storage: existing VFS nodes only. No canister migration or dedicated registry API.
 - Import: `skill upsert` writes package files as wiki nodes, including direct package-local `.md` links from `SKILL.md`; GitHub remains provenance/source context.
 - Parsing: CLI parses YAML frontmatter for updates. Browser uses a small v1 subset parser for display only.

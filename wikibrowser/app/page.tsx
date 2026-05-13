@@ -18,6 +18,7 @@ export default function HomePage() {
   const [databases, setDatabases] = useState<DatabaseRow[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [publicError, setPublicError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [createdDatabaseId, setCreatedDatabaseId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -33,6 +34,7 @@ export default function HomePage() {
       }
       setLoadState("loading");
       setError(null);
+      setPublicError(null);
       setWarning(null);
       try {
         const identity = client?.getIdentity() ?? null;
@@ -49,6 +51,7 @@ export default function HomePage() {
         if (!isCurrentRefresh()) return;
         setDatabases(nextDatabases);
         setPrincipal(identity?.getPrincipal().toText() ?? null);
+        setPublicError(publicResult.status === "rejected" ? `Public database list unavailable: ${errorMessage(publicResult.reason)}` : null);
         setWarning(listWarning(publicResult, memberResult));
         setLoadState("ready");
       } catch (cause) {
@@ -106,6 +109,7 @@ export default function HomePage() {
     setPrincipal(null);
     setCreatedDatabaseId(null);
     setError(null);
+    setPublicError(null);
     await refreshDatabases(null);
   }
 
@@ -174,7 +178,7 @@ export default function HomePage() {
               <p className="mt-1 text-sm leading-6 text-muted">Login with Internet Identity to list databases where your principal has membership.</p>
             </div>
           )}
-          <DatabaseBody loading={loadState === "loading"} myDatabases={myDatabases} principal={principal} publicDatabases={publicDatabases} />
+          <DatabaseBody loading={loadState === "loading"} myDatabases={myDatabases} principal={principal} publicDatabases={publicDatabases} publicError={publicError} />
         </section>
       </section>
     </main>
@@ -194,7 +198,6 @@ function mergeDatabaseRows(memberDatabases: DatabaseSummary[], publicDatabases: 
 }
 
 function listWarning(publicResult: PromiseSettledResult<DatabaseSummary[]>, memberResult: PromiseSettledResult<DatabaseSummary[]>): string | null {
-  if (publicResult.status === "rejected") return `Public database list unavailable: ${errorMessage(publicResult.reason)}`;
   if (memberResult.status === "rejected") return `Member database list unavailable: ${errorMessage(memberResult.reason)}`;
   return null;
 }

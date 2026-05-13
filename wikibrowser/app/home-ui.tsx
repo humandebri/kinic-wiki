@@ -53,21 +53,23 @@ export function DatabaseBody({
   loading,
   myDatabases,
   principal,
+  publicError,
   publicDatabases
 }: {
   loading: boolean;
   myDatabases: DatabaseRow[];
   principal: string | null;
+  publicError: string | null;
   publicDatabases: DatabaseRow[];
 }) {
   if (loading) return <div className="p-6 text-sm text-muted">Loading databases...</div>;
   if (!principal) {
-    return <DatabaseSection emptyMessage="No public databases are available." mode="public" rows={publicDatabases} showTitle={false} title="Public databases" />;
+    return <DatabaseSection emptyMessage="No public databases are available." mode="public" publicError={publicError} rows={publicDatabases} showTitle={false} title="Public databases" />;
   }
   return (
     <div className="divide-y divide-line">
       <DatabaseSection emptyMessage="No databases are linked to this principal." mode="member" rows={myDatabases} title="My databases" />
-      {publicDatabases.length > 0 ? <DatabaseSection emptyMessage="No public databases are available." mode="public" rows={publicDatabases} title="Public databases" /> : null}
+      {publicDatabases.length > 0 || publicError ? <DatabaseSection emptyMessage="No public databases are available." mode="public" publicError={publicError} rows={publicDatabases} title="Public databases" /> : null}
     </div>
   );
 }
@@ -75,16 +77,26 @@ export function DatabaseBody({
 function DatabaseSection({
   emptyMessage,
   mode,
+  publicError = null,
   rows,
   showTitle = true,
   title
 }: {
   emptyMessage: string;
   mode: "member" | "public";
+  publicError?: string | null;
   rows: DatabaseRow[];
   showTitle?: boolean;
   title: string;
 }) {
+  if (publicError && mode === "public") {
+    return (
+      <section className="p-4">
+        {showTitle ? <h3 className="text-sm font-semibold text-ink">{title}</h3> : null}
+        <p className="mt-2 text-sm text-muted">{publicError}</p>
+      </section>
+    );
+  }
   if (rows.length === 0) {
     return (
       <section className="p-4">
@@ -128,9 +140,16 @@ function DatabaseSection({
               <td className="px-4 py-3 text-ink">{formatBytes(database.logicalSizeBytes)}</td>
               <td className="px-4 py-3 text-muted">{databaseMarker(database)}</td>
               <td className="px-4 py-3">
-                <Link className="text-accent no-underline hover:underline" href={openDatabaseHref(database)}>
-                  Open
-                </Link>
+                <div className="flex flex-wrap gap-2">
+                  <Link className="text-accent no-underline hover:underline" href={openDatabaseHref(database)}>
+                    Open
+                  </Link>
+                  {mode === "member" && database.publicReadable ? (
+                    <Link className="text-accent no-underline hover:underline" href={openPublicDatabaseHref(database)}>
+                      Open public
+                    </Link>
+                  ) : null}
+                </div>
               </td>
               {mode === "member" ? (
                 <td className="px-4 py-3">
@@ -194,6 +213,10 @@ function databaseMarker(database: DatabaseSummary): string {
 function openDatabaseHref(database: DatabaseRow): string {
   const base = `/${encodeURIComponent(database.databaseId)}/Wiki`;
   return !database.member && database.publicReadable ? `${base}?read=anonymous` : base;
+}
+
+function openPublicDatabaseHref(database: DatabaseRow): string {
+  return `/${encodeURIComponent(database.databaseId)}/Wiki?read=anonymous`;
 }
 
 function formatTimestamp(value: string): string {

@@ -6,17 +6,12 @@ import Link from "next/link";
 import { AlertTriangle, GitBranch, Info, Sparkles } from "lucide-react";
 import { collectLintHints, provenancePathFor, rawSourceLinksFor } from "@/lib/lint-hints";
 import { hrefForPath } from "@/lib/paths";
-import { manifestPathForSkillRegistryFile, parseSkillManifest } from "@/lib/skill-manifest";
 import type { ChildNode, LinkEdge, WikiNode } from "@/lib/types";
 import { InspectorCard, Meta } from "@/components/panel";
 
 type ProvenanceState = {
   path: string | null;
   links: string[];
-};
-type SkillState = {
-  path: string | null;
-  manifest: ReturnType<typeof parseSkillManifest>;
 };
 export function Inspector({
   canisterId,
@@ -48,15 +43,10 @@ export function Inspector({
   const hints = node ? collectLintHints(path, node.content) : [];
   const directRawSourceLinks = node ? rawSourceLinksFor(path, node.content) : [];
   const expectedProvenancePath = node && directRawSourceLinks.length === 0 ? provenancePathFor(path) : null;
-  const expectedSkillManifestPath = node ? manifestPathForSkillRegistryFile(path) : null;
-  const directSkillManifest = node && path.endsWith("/manifest.md") ? parseSkillManifest(node.content) : null;
   const [provenance, setProvenance] = useState<ProvenanceState>({ path: null, links: [] });
-  const [skill, setSkill] = useState<SkillState>({ path: null, manifest: null });
   const inferredRawSourceLinks = provenance.path === expectedProvenancePath ? provenance.links : [];
   const rawSourceLinks = directRawSourceLinks.length > 0 ? directRawSourceLinks : inferredRawSourceLinks;
   const loadingRawSource = Boolean(expectedProvenancePath && provenance.path !== expectedProvenancePath);
-  const loadedSiblingSkillManifest = skill.path === expectedSkillManifestPath ? skill.manifest : null;
-  const skillManifest = directSkillManifest ?? loadedSiblingSkillManifest;
 
   useEffect(() => {
     if (!expectedProvenancePath) {
@@ -83,31 +73,6 @@ export function Inspector({
     };
   }, [canisterId, databaseId, expectedProvenancePath, readIdentity]);
 
-  useEffect(() => {
-    if (!expectedSkillManifestPath) {
-      return;
-    }
-    let cancelled = false;
-    import("@/lib/vfs-client")
-      .then(({ readNode }) => readNode(canisterId, databaseId, expectedSkillManifestPath))
-      .then((manifestNode) => {
-        if (!cancelled) {
-          setSkill({
-            path: expectedSkillManifestPath,
-            manifest: manifestNode ? parseSkillManifest(manifestNode.content) : null
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSkill({ path: expectedSkillManifestPath, manifest: null });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canisterId, databaseId, expectedSkillManifestPath]);
-
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-sm">
       <InspectorCard title="Identity" icon={<Info size={15} />}>
@@ -120,18 +85,6 @@ export function Inspector({
         <Meta label="updated_at" value={node?.updatedAt ?? "virtual"} />
         <Meta label="etag" value={node?.etag ?? "virtual"} />
       </InspectorCard>
-      {skillManifest ? (
-        <InspectorCard title="Skill" icon={<Sparkles size={15} />}>
-          <Meta label="id" value={skillManifest.id} />
-          {skillManifest.title ? <Meta label="title" value={skillManifest.title} /> : null}
-          <Meta label="status" value={skillManifest.status ?? "draft"} />
-          <Meta label="version" value={skillManifest.version} />
-          {skillManifest.summary ? <Meta label="summary" value={skillManifest.summary} /> : null}
-          {skillManifest.tags.length > 0 ? <Meta label="tags" value={skillManifest.tags.join(", ")} /> : null}
-          {skillManifest.useCases.length > 0 ? <Meta label="use_cases" value={skillManifest.useCases.join(" | ")} /> : null}
-          {skillManifest.related.length > 0 ? <Meta label="related" value={skillManifest.related.join(" | ")} /> : null}
-        </InspectorCard>
-      ) : null}
       <InspectorCard title="Lint Hints" icon={<AlertTriangle size={15} />}>
         {hints.length > 0 ? (
           <ul className="space-y-2">

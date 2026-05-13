@@ -12,6 +12,7 @@ const diff = readFileSync(new URL("../lib/skill-registry-diff.ts", import.meta.u
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const dashboardClient = readFileSync(new URL("../app/dashboard/dashboard-client.tsx", import.meta.url), "utf8");
+const inspector = readFileSync(new URL("../components/inspector.tsx", import.meta.url), "utf8");
 const skillManifest = readFileSync(new URL("../lib/skill-manifest.ts", import.meta.url), "utf8");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -56,6 +57,9 @@ assert.match(client, /PackageManager/);
 assert.match(homeUi, /href=\{`\/skills\/\$\{encodeURIComponent\(database\.databaseId\)\}`\}/);
 assert.match(homePage, /DatabaseBody/);
 assert.match(dashboardClient, /href=\{`\/skills\/\$\{encodeURIComponent\(databaseId\)\}`\}/);
+assert.doesNotMatch(inspector, /skill-manifest/);
+assert.doesNotMatch(inspector, /parseSkillManifest|manifestPathForSkillRegistryFile/);
+assert.doesNotMatch(inspector, /title="Skill"/);
 assert.match(skillManifest, /kind: "kinic.skill"/);
 assert.match(packageJson.scripts.test, /check-skill-registry\.mjs/);
 
