@@ -66,7 +66,10 @@ Submitting a URL writes one request node to the same database:
 /Sources/ingest-requests/<request-id>.md
 ```
 
-`workers/wiki-generator` scans those requests, fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
+Ingest request nodes are regular `file` nodes. Only fetched raw web evidence under `/Sources/raw/<id>/<id>.md` is stored as `source`.
+
+When `NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL` is set, the browser triggers `workers/wiki-generator` after writing the request by posting `databaseId` and `requestPath` to `/url-ingest`.
+The worker fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
 The generator Worker principal must have writer access to the target database.
 
 ## Checks

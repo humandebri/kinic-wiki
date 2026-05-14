@@ -49,6 +49,10 @@ pub enum Command {
         #[arg(long)]
         path: String,
         #[arg(long)]
+        metadata_only: bool,
+        #[arg(long)]
+        fields: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     ListNodes {
@@ -123,6 +127,20 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    PurgeUrlIngest {
+        #[arg(
+            long,
+            conflicts_with = "source_path",
+            required_unless_present = "source_path"
+        )]
+        url: Option<String>,
+        #[arg(long, conflicts_with = "url", required_unless_present = "url")]
+        source_path: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
     MkdirNode {
         #[arg(long)]
         path: String,
@@ -153,7 +171,7 @@ pub enum Command {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, alias = "prefix", default_value = WIKI_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -210,6 +228,7 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(alias = "search-nodes")]
     SearchRemote {
         query_text: String,
         #[arg(long, default_value = WIKI_ROOT_PATH)]
@@ -404,6 +423,7 @@ impl Command {
             | Self::EditNode { .. }
             | Self::DeleteNode { .. }
             | Self::DeleteTree { .. }
+            | Self::PurgeUrlIngest { .. }
             | Self::MkdirNode { .. }
             | Self::MoveNode { .. }
             | Self::MultiEditNode { .. } => true,
@@ -428,8 +448,15 @@ impl Command {
             Self::Database { command } => Some(VfsCommand::Database {
                 command: command.clone(),
             }),
-            Self::ReadNode { path, json } => Some(VfsCommand::ReadNode {
+            Self::ReadNode {
+                path,
+                metadata_only,
+                fields,
+                json,
+            } => Some(VfsCommand::ReadNode {
                 path: path.clone(),
+                metadata_only: *metadata_only,
+                fields: fields.clone(),
                 json: *json,
             }),
             Self::ListNodes {
@@ -505,6 +532,7 @@ impl Command {
                 path: path.clone(),
                 json: *json,
             }),
+            Self::PurgeUrlIngest { .. } => None,
             Self::MkdirNode { path, json } => Some(VfsCommand::MkdirNode {
                 path: path.clone(),
                 json: *json,
@@ -718,6 +746,64 @@ mod tests {
             "index.md",
         ]);
         assert!(write.command.requires_identity());
+    }
+
+    #[test]
+    fn main_cli_parses_accident_response_aliases() {
+        let search = Cli::parse_from([
+            "vfs-cli",
+            "search-nodes",
+            "incident",
+            "--prefix",
+            "/Wiki/run",
+            "--json",
+        ]);
+        let Command::SearchRemote {
+            query_text,
+            prefix,
+            json,
+            ..
+        } = search.command
+        else {
+            panic!("expected search-remote command");
+        };
+        assert_eq!(query_text, "incident");
+        assert_eq!(prefix, "/Wiki/run");
+        assert!(json);
+
+        let recent = Cli::parse_from([
+            "vfs-cli",
+            "recent-nodes",
+            "--limit",
+            "7",
+            "--prefix",
+            "/Sources",
+        ]);
+        let Command::RecentNodes { limit, path, .. } = recent.command else {
+            panic!("expected recent-nodes command");
+        };
+        assert_eq!(limit, 7);
+        assert_eq!(path, "/Sources");
+
+        let read = Cli::parse_from([
+            "vfs-cli",
+            "read-node",
+            "--path",
+            "/Wiki/index.md",
+            "--metadata-only",
+            "--fields",
+            "path,kind,etag",
+        ]);
+        let Command::ReadNode {
+            metadata_only,
+            fields,
+            ..
+        } = read.command
+        else {
+            panic!("expected read-node command");
+        };
+        assert!(metadata_only);
+        assert_eq!(fields.as_deref(), Some("path,kind,etag"));
     }
 
     #[test]

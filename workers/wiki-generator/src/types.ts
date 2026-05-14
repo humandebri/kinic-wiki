@@ -29,6 +29,12 @@ export type WriteNodeRequest = {
   expectedEtag: string | null;
 };
 
+export type WriteNodeAck = {
+  path: string;
+  kind: NodeKind;
+  etag: string;
+};
+
 export type ExportSnapshotPage = {
   snapshotRevision: string;
   nodes: WikiNode[];
@@ -110,5 +116,11 @@ export type UrlIngestRequest = {
   requestedAt: string;
   sourcePath: string | null;
   targetPath: string | null;
+  finishedAt: string | null;
   error: string | null;
+};
+
+export type UrlIngestTriggerInput = {
+  databaseId: string;
+  requestPath: string;
 };

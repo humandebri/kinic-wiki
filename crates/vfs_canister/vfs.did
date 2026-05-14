@@ -115,6 +115,19 @@ type GraphNeighborhoodRequest = record {
   database_id : text;
   depth : nat32;
 };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+  certificate_version : opt nat16;
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
 type IncomingLinksRequest = record {
   path : text;
   limit : nat32;
@@ -322,6 +335,7 @@ service : () -> {
   grant_database_access : (text, text, DatabaseRole) -> (Result_2);
   graph_links : (GraphLinksRequest) -> (Result_9) query;
   graph_neighborhood : (GraphNeighborhoodRequest) -> (Result_9) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
   incoming_links : (IncomingLinksRequest) -> (Result_9) query;
   list_children : (ListChildrenRequest) -> (Result_10) query;
   list_database_members : (text) -> (Result_11) query;

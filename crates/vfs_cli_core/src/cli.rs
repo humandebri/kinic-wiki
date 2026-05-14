@@ -40,6 +40,10 @@ pub enum VfsCommand {
         #[arg(long)]
         path: String,
         #[arg(long)]
+        metadata_only: bool,
+        #[arg(long)]
+        fields: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     ListNodes {
@@ -144,7 +148,7 @@ pub enum VfsCommand {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, alias = "prefix", default_value = DEFAULT_VFS_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -201,6 +205,7 @@ pub enum VfsCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(alias = "search-nodes")]
     SearchRemote {
         query_text: String,
         #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]

@@ -10,6 +10,15 @@ Set `DEEPSEEK_API_KEY` as a Cloudflare secret. `KINIC_WIKI_WORKER_TOKEN` is only
 ## URL Ingest
 
 The worker scans `/Sources/ingest-requests` for `kinic.url_ingest_request` nodes.
+Those request nodes are VFS `file` nodes and act as both the authorization gate and request audit log: they record `requested_by`, `requested_at`, `status`, `source_path`, `target_path`, `finished_at`, and `error`.
+The fetched raw web evidence written to `/Sources/raw/<id>/<id>.md` remains a VFS `source` node.
+Raw web sources keep URL provenance only. Request/source correspondence is tracked from the request node's `source_path`, not by writing `request_path` back into the raw source.
+The browser can also trigger a single request immediately with `POST /url-ingest`:
+
+```json
+{ "databaseId": "db_...", "requestPath": "/Sources/ingest-requests/<request-id>.md" }
+```
+
 For each queued request it:
 
 1. fetches one `http` or `https` URL with a bounded response size,
@@ -18,7 +27,8 @@ For each queued request it:
 4. writes the generated draft under `/Wiki/conversations`,
 5. updates the request status to `completed` or `failed`.
 
-The worker identity in `KINIC_WIKI_WORKER_IDENTITY_PEM` must have writer access to every database listed in `KINIC_WIKI_DATABASE_IDS`.
+The worker identity in `KINIC_WIKI_WORKER_IDENTITY_PEM` must have writer access to the target database.
+`KINIC_WIKI_DATABASE_IDS` is only for cron polling and can be omitted when requests are triggered by `/url-ingest`.
 Use the exact PEM output from `icp identity export <identity-name>`.
 
 ## Cloudflare Setup

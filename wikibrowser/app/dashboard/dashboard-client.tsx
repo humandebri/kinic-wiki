@@ -4,7 +4,7 @@ import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthControls, OwnerPanel, StatusPanel, SummaryPanel } from "./dashboard-ui";
-import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types";
 import {
   grantDatabaseAccessAuthenticated,
@@ -104,7 +104,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
 
   useEffect(() => {
     let cancelled = false;
-    AuthClient.create()
+    AuthClient.create(AUTH_CLIENT_CREATE_OPTIONS)
       .then(async (client) => {
         if (cancelled) return;
         setAuthClient(client);
@@ -128,8 +128,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
     if (!authClient) return;
     setError(null);
     await authClient.login({
-      identityProvider: identityProviderUrl(),
-      maxTimeToLive: DELEGATION_TTL_NS,
+      ...authLoginOptions(),
       onSuccess: () => {
         void refresh(authClient, databaseId);
       },

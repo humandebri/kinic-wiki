@@ -8,7 +8,7 @@ import { RefreshCw, Search } from "lucide-react";
 import { PackageManager, RoleBanner } from "@/app/skills/skill-registry-management-ui";
 import { usePackageManager } from "@/app/skills/skill-registry-package-state";
 import { EmptyState, SkillCard, StatusPanel, SummaryStrip } from "@/app/skills/skill-registry-ui";
-import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import { filterSkills, loadSkillCatalog, summarizeSkills, type CatalogSkill, type StatusFilter } from "@/lib/skill-registry-catalog";
 import { loadSkillCatalogDetails } from "@/lib/skill-registry-details";
 import { applyProposalDiff, previewApplyProposalDiff, type ProposalDiffPreview } from "@/lib/skill-registry-diff";
@@ -101,7 +101,7 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    AuthClient.create()
+    AuthClient.create(AUTH_CLIENT_CREATE_OPTIONS)
       .then(async (client) => {
         if (cancelled) return;
         setAuthClient(client);
@@ -128,8 +128,7 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
     if (!authClient) return;
     setError(null);
     await authClient.login({
-      identityProvider: identityProviderUrl(),
-      maxTimeToLive: DELEGATION_TTL_NS,
+      ...authLoginOptions(),
       onSuccess: () => {
         const identity = authClient.getIdentity();
         setPrincipal(identity.getPrincipal().toText());

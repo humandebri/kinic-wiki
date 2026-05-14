@@ -16,7 +16,7 @@ import { IngestPanel } from "@/components/ingest-panel";
 import { PanelHeader } from "@/components/panel";
 import { RecentPanel } from "@/components/recent-panel";
 import { SourcesPanel } from "@/components/sources-panel";
-import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import { readBrowserNodeCache } from "@/lib/browser-node-cache";
 import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
@@ -84,7 +84,7 @@ export function WikiBrowser() {
 
   useEffect(() => {
     let cancelled = false;
-    AuthClient.create()
+    AuthClient.create(AUTH_CLIENT_CREATE_OPTIONS)
       .then(async (client) => {
         if (cancelled) return;
         setAuthClient(client);
@@ -177,8 +177,7 @@ export function WikiBrowser() {
     if (!authClient) return;
     setAuthError(null);
     await authClient.login({
-      identityProvider: identityProviderUrl(),
-      maxTimeToLive: DELEGATION_TTL_NS,
+      ...authLoginOptions(),
       onSuccess: () => {
         setReadIdentity(authClient.getIdentity());
       },

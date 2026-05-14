@@ -3,6 +3,8 @@ import { writeNodeAuthenticated } from "@/lib/vfs-client";
 
 export type CreatedUrlIngestRequest = {
   requestPath: string;
+  triggered: boolean;
+  triggerError: string | null;
 };
 
 export async function createUrlIngestRequest(canisterId: string, databaseId: string, identity: Identity, url: string): Promise<CreatedUrlIngestRequest> {
@@ -14,7 +16,7 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
   await writeNodeAuthenticated(canisterId, identity, {
     databaseId,
     path: requestPath,
-    kind: "source",
+    kind: "file",
     content: [
       "---",
       "kind: kinic.url_ingest_request",
@@ -25,6 +27,7 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
       `requested_at: ${JSON.stringify(requestedAt)}`,
       "source_path: null",
       "target_path: null",
+      "finished_at: null",
       "error: null",
       "---",
       "",
@@ -34,7 +37,8 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
     metadataJson: JSON.stringify({ request_type: "url_ingest", url: normalizedUrl }),
     expectedEtag: null
   });
-  return { requestPath };
+  const trigger = await triggerWorker(databaseId, requestPath);
+  return { requestPath, triggered: trigger.ok, triggerError: trigger.error };
 }
 
 function normalizedHttpUrl(value: string): string {
@@ -49,4 +53,28 @@ function normalizedHttpUrl(value: string): string {
   }
   url.hash = "";
   return url.toString();
+}
+
+async function triggerWorker(databaseId: string, requestPath: string): Promise<{ ok: boolean; error: string | null }> {
+  const baseUrl = process.env.NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL?.trim();
+  if (!baseUrl) return { ok: false, error: "NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL is not configured" };
+  let endpoint: URL;
+  try {
+    endpoint = new URL("/url-ingest", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  } catch {
+    return { ok: false, error: "NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL is invalid" };
+  }
+  try {
+    const response = await fetch(endpoint.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ databaseId, requestPath })
+    });
+    if (!response.ok) {
+      return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };
+    }
+    return { ok: true, error: null };
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : "worker trigger failed" };
+  }
 }

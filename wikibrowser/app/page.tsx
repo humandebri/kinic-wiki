@@ -3,7 +3,7 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthControls, CreatedDatabasePanel, DatabaseBody, StatusPanel } from "./home-ui";
-import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseSummary } from "@/lib/types";
 import { createDatabaseAuthenticated, listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
 import type { DatabaseRow } from "./home-ui";
@@ -66,7 +66,7 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
 
-    AuthClient.create()
+    AuthClient.create(AUTH_CLIENT_CREATE_OPTIONS)
       .then(async (client) => {
         if (cancelled) return;
         setAuthClient(client);
@@ -91,8 +91,7 @@ export default function HomePage() {
     if (!authClient) return;
     setError(null);
     await authClient.login({
-      identityProvider: identityProviderUrl(),
-      maxTimeToLive: DELEGATION_TTL_NS,
+      ...authLoginOptions(),
       onSuccess: () => {
         void refreshDatabases(authClient);
       },

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Kinic Capture Settings</title>
+  </head>
+  <body>
+    <main>
+      <section class="auth-card">
+        <div>
+          <strong>Internet Identity</strong>
+          <p id="principal">Checking...</p>
+        </div>
+        <div class="auth-actions">
+          <button id="login" type="button">Login</button>
+          <button id="logout" type="button">Logout</button>
+        </div>
+      </section>
+      <label>
+        Database
+        <select id="database-id"></select>
+      </label>
+      <button id="refresh-databases" type="button">Refresh databases</button>
+      <button id="save-settings" type="button">Save settings</button>
+      <section class="latest-card">
+        <strong>Latest URL ingest</strong>
+        <p id="latest-status">No run yet.</p>
+      </section>
+      <p id="status"></p>
+    </main>
+    <script src="../dist/popup.js" type="module"></script>
+  </body>
+</html>

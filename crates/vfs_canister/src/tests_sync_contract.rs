@@ -9,9 +9,10 @@ use vfs_types::{
 };
 
 use super::{
-    SERVICE, delete_node, export_snapshot, fetch_updates, search_node_paths, search_nodes,
-    write_node,
+    HttpRequest, II_ALTERNATIVE_ORIGINS_PATH, SERVICE, delete_node, export_snapshot, fetch_updates,
+    http_request, search_node_paths, search_nodes, write_node,
 };
+use ic_http_certification::CERTIFICATE_EXPRESSION_HEADER_NAME;
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
@@ -24,6 +25,46 @@ fn install_test_service() {
         .create_database("default", "2vxsx-fae", 1_700_000_000_000)
         .expect("default database should create");
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+}
+
+#[test]
+fn http_request_serves_certified_ii_alternative_origins() {
+    let response = http_request(test_http_get(II_ALTERNATIVE_ORIGINS_PATH));
+
+    assert_eq!(response.status_code, 200);
+    let body = String::from_utf8(response.body).expect("body should be utf8");
+    assert!(body.contains(r#""alternativeOrigins""#));
+    assert!(body.contains("https://wiki.kinic.xyz"));
+    assert!(body.contains("https://kinic.xyz"));
+    assert!(body.contains("chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj"));
+    assert!(body.contains("chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"));
+
+    let headers = response.headers;
+    assert!(headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("Content-Type") && value == "application/json; charset=utf-8"
+    }));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, _)| { name.eq_ignore_ascii_case(CERTIFICATE_EXPRESSION_HEADER_NAME) })
+    );
+}
+
+#[test]
+fn http_request_rejects_unknown_paths() {
+    let response = http_request(test_http_get("/not-found"));
+
+    assert_eq!(response.status_code, 404);
+}
+
+fn test_http_get(url: &str) -> HttpRequest {
+    HttpRequest {
+        method: "GET".to_string(),
+        url: url.to_string(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        certificate_version: Some(2),
+    }
 }
 
 #[test]

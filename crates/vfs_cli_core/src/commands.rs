@@ -36,12 +36,26 @@ pub async fn run_vfs_command(
         VfsCommand::Database { .. } => {
             unreachable!("database command handled before db requirement")
         }
-        VfsCommand::ReadNode { path, json } => {
+        VfsCommand::ReadNode {
+            path,
+            metadata_only,
+            fields,
+            json,
+        } => {
             let node = client
                 .read_node(database_id, &path)
                 .await?
                 .ok_or_else(|| anyhow!("node not found: {path}"))?;
-            if json {
+            if metadata_only || fields.is_some() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&node_field_view(
+                        &node,
+                        metadata_only,
+                        fields.as_deref()
+                    )?)?
+                );
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&node)?);
             } else {
                 println!("{}", node.content);
@@ -440,6 +454,50 @@ fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn node_field_view(
+    node: &vfs_types::Node,
+    metadata_only: bool,
+    fields: Option<&str>,
+) -> Result<serde_json::Value> {
+    let value = serde_json::to_value(node)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("node did not serialize to an object"))?;
+    let selected_fields = if let Some(fields) = fields {
+        fields
+            .split(',')
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else if metadata_only {
+        [
+            "path",
+            "kind",
+            "etag",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    } else {
+        Vec::new()
+    };
+    if selected_fields.is_empty() {
+        return Err(anyhow!("at least one field is required"));
+    }
+    let mut output = serde_json::Map::new();
+    for field in selected_fields {
+        let Some(next_value) = object.get(&field) else {
+            return Err(anyhow!("unknown node field: {field}"));
+        };
+        output.insert(field, next_value.clone());
+    }
+    Ok(serde_json::Value::Object(output))
 }
 
 async fn run_database_command(
@@ -871,6 +929,30 @@ mod tests {
                 super::database_id_or_env(Some("flag-db")).expect("flag database id should load");
             assert_eq!(database_id.as_ref(), "flag-db");
         });
+    }
+
+    #[test]
+    fn node_field_view_can_omit_content() {
+        let node = vfs_types::Node {
+            path: "/Wiki/index.md".to_string(),
+            kind: vfs_types::NodeKind::File,
+            content: "large body".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag".to_string(),
+            metadata_json: "{}".to_string(),
+        };
+        let metadata = super::node_field_view(&node, true, None).expect("metadata view");
+        assert!(metadata.get("content").is_none());
+        assert_eq!(metadata["path"], "/Wiki/index.md");
+
+        let fields =
+            super::node_field_view(&node, false, Some("path,kind,etag")).expect("field view");
+        assert!(fields.get("content").is_none());
+        assert_eq!(
+            fields.as_object().expect("fields should be object").len(),
+            3
+        );
     }
 
     fn with_vfs_database_id(value: &str, assert_fn: impl FnOnce()) {

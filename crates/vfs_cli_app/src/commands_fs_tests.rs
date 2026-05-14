@@ -358,3 +358,419 @@ async fn write_node_rejects_non_canonical_source_paths() {
     let writes = client.writes.lock().expect("writes should lock");
     assert!(writes.is_empty());
 }
+
+#[tokio::test]
+async fn purge_url_ingest_dry_run_does_not_delete() {
+    let client = MockClient {
+        nodes: url_ingest_nodes(),
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: Some("https://example.com/page#fragment".to_string()),
+                source_path: None,
+                yes: false,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("dry-run purge should succeed");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags() {
+    let client = MockClient {
+        nodes: url_ingest_nodes(),
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("purge should succeed");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    let deleted = deletes
+        .iter()
+        .map(|request| (request.path.as_str(), request.expected_etag.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(deleted.contains(&("/Sources/ingest-requests/r1.md", Some("etag-request"))));
+    assert!(deleted.contains(&("/Sources/raw/web-1/web-1.md", Some("etag-source"))));
+    assert!(deleted.contains(&("/Wiki/conversations/web-1/index.md", Some("etag-index"))));
+    assert!(deleted.contains(&("/Wiki/conversations/web-1/facts.md", Some("etag-facts"))));
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
+    let client = MockClient {
+        nodes: vec![Node {
+            path: "/Wiki/foo.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Foo".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag-wiki".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Wiki/foo.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("invalid source-path purge should report safely");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_requires_matching_request() {
+    let client = MockClient {
+        nodes: vec![Node {
+            path: "/Sources/raw/web-2/web-2.md".to_string(),
+            kind: NodeKind::Source,
+            content: [
+                "---",
+                "kind: kinic.raw_web_source",
+                "schema_version: 1",
+                "---",
+                "",
+            ]
+            .join("\n"),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag-source".to_string(),
+            metadata_json: "{}".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-2/web-2.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("orphan raw source purge should report safely");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_requires_request_source_path() {
+    let mut nodes = url_ingest_nodes();
+    nodes[0].content = [
+        "---",
+        "kind: kinic.url_ingest_request",
+        "schema_version: 1",
+        "status: completed",
+        "url: https://example.com/page",
+        "target_path: /Wiki/conversations/web-1",
+        "---",
+        "",
+    ]
+    .join("\n");
+    let client = MockClient {
+        nodes,
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("missing request source_path should report safely");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
+    let mut nodes = url_ingest_nodes();
+    nodes[0].content = [
+        "---",
+        "kind: kinic.url_ingest_request",
+        "schema_version: 1",
+        "status: completed",
+        "url: https://example.com/page",
+        "source_path: /Sources/raw/other/other.md",
+        "target_path: /Wiki/conversations/web-1",
+        "---",
+        "",
+    ]
+    .join("\n");
+    let client = MockClient {
+        nodes,
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("mismatched request source_path should report safely");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(deletes.is_empty());
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_uses_request_side_source_path() {
+    let client = MockClient {
+        nodes: url_ingest_nodes(),
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("matching request source_path should purge");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/ingest-requests/r1.md")
+    );
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/raw/web-1/web-1.md")
+    );
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Wiki/conversations/web-1/index.md")
+    );
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Wiki/conversations/web-1/facts.md")
+    );
+}
+
+#[tokio::test]
+async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
+    let mut nodes = url_ingest_nodes();
+    nodes.push(Node {
+        path: "/Sources/ingest-requests/r2.md".to_string(),
+        kind: NodeKind::File,
+        content: [
+            "---",
+            "kind: kinic.url_ingest_request",
+            "schema_version: 1",
+            "status: completed",
+            "url: https://example.com/page",
+            "source_path: /Sources/raw/web-1/web-1.md",
+            "target_path: /Wiki/conversations/web-1-copy",
+            "---",
+            "",
+        ]
+        .join("\n"),
+        created_at: 1,
+        updated_at: 6,
+        etag: "etag-request-2".to_string(),
+        metadata_json: "{}".to_string(),
+    });
+    let client = MockClient {
+        nodes,
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("source-path purge should delete all matching requests");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/ingest-requests/r1.md")
+    );
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/ingest-requests/r2.md")
+    );
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/raw/web-1/web-1.md")
+    );
+}
+
+fn url_ingest_nodes() -> Vec<Node> {
+    vec![
+        Node {
+            path: "/Sources/ingest-requests/r1.md".to_string(),
+            kind: NodeKind::File,
+            content: [
+                "---",
+                "kind: kinic.url_ingest_request",
+                "schema_version: 1",
+                "status: completed",
+                "url: https://example.com/page",
+                "source_path: /Sources/raw/web-1/web-1.md",
+                "target_path: /Wiki/conversations/web-1",
+                "---",
+                "",
+            ]
+            .join("\n"),
+            created_at: 1,
+            updated_at: 2,
+            etag: "etag-request".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+        Node {
+            path: "/Sources/raw/web-1/web-1.md".to_string(),
+            kind: NodeKind::Source,
+            content: [
+                "---",
+                "kind: kinic.raw_web_source",
+                "schema_version: 1",
+                "---",
+                "",
+            ]
+            .join("\n"),
+            created_at: 1,
+            updated_at: 3,
+            etag: "etag-source".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+        Node {
+            path: "/Wiki/conversations/web-1/index.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Index".to_string(),
+            created_at: 1,
+            updated_at: 4,
+            etag: "etag-index".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+        Node {
+            path: "/Wiki/conversations/web-1/facts.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Facts".to_string(),
+            created_at: 1,
+            updated_at: 5,
+            etag: "etag-facts".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+    ]
+}

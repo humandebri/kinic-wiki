@@ -11,6 +11,7 @@ const dashboardMemberTable = readFileSync(new URL("../app/dashboard/member-table
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const wikiLayout = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
+const iiAlternativeOrigins = readFileSync(new URL("../app/.well-known/ii-alternative-origins/route.ts", import.meta.url), "utf8");
 const ingestPanel = readFileSync(new URL("../components/ingest-panel.tsx", import.meta.url), "utf8");
 const nextConfig = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -28,6 +29,9 @@ assert.doesNotMatch(dashboardClient, /useSearchParams/);
 assert.doesNotMatch(dashboardClient, /usePathname/);
 
 assert.match(wikiLayout, /<WikiBrowser \/>/);
+assert.match(iiAlternativeOrigins, /chrome-extension:\/\/jcfniiflikojmbfnaoamlbbddlikchaj/);
+assert.match(iiAlternativeOrigins, /chrome-extension:\/\/hbnicbmdodpmihmcnfgejcdgbfmemoci/);
+assert.match(iiAlternativeOrigins, /access-control-allow-origin/);
 assert.match(wikiRoute, /return null;/);
 assert.equal(existsSync(new URL("../app/w/page.tsx", import.meta.url)), false);
 assert.equal(existsSync(new URL("../vercel.json", import.meta.url)), false);
@@ -38,6 +42,7 @@ assert.match(wranglerConfig, /"main": ".open-next\/worker.js"/);
 assert.match(wranglerConfig, /"nodejs_compat"/);
 assert.match(wranglerConfig, /"global_fetch_strictly_public"/);
 assert.match(wranglerConfig, /"WORKER_SELF_REFERENCE"/);
+assert.match(wranglerConfig, /"NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL": "https:\/\/wiki-generator\.kinic\.xyz"/);
 
 assert.equal(packageJson.scripts.preview, "opennextjs-cloudflare build && opennextjs-cloudflare preview");
 assert.equal(packageJson.scripts["build:worker"], "opennextjs-cloudflare build");
@@ -48,6 +53,7 @@ assert.equal(packageJson.scripts["e2e:ii:headed"], "scripts/run-ii-e2e.sh --head
 assert.equal(packageJson.scripts["e2e:ii:setup"], "../scripts/setup-wikibrowser-ii-e2e.sh");
 assert.match(nextConfig, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.match(nextConfig, /NEXT_PUBLIC_II_PROVIDER_URL/);
+assert.match(nextConfig, /NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL/);
 assert.match(homePage, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.doesNotMatch(homePage, /createUrlIngestRequest/);
 assert.doesNotMatch(homeUi, /Queue URL/);
@@ -81,9 +87,11 @@ assert.match(wikiBrowser, /effectiveReadIdentity/);
 assert.match(wikiBrowser, /hrefForCurrentReadRoute/);
 assert.match(wikiBrowser, /router\.replace\(anonymousHref\)/);
 assert.match(ingestPanel, /createUrlIngestRequest/);
-assert.match(ingestPanel, /Queue URL/);
+assert.match(ingestPanel, /Queued and started/);
 assert.match(urlIngest, /\/Sources\/ingest-requests/);
 assert.match(urlIngest, /kinic\.url_ingest_request/);
+assert.match(urlIngest, /finished_at: null/);
+assert.match(urlIngest, /NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL/);
 assert.match(dashboardClient, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.match(dashboardClient, /listDatabasesPublic/);
 assert.match(dashboardClient, /mergeDatabaseRows/);
