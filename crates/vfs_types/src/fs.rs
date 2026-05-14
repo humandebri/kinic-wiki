@@ -154,10 +154,16 @@ pub struct WriteNodeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
-pub struct UrlIngestTriggerGrantRequest {
+pub struct UrlIngestTriggerSessionRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct UrlIngestTriggerSessionCheckRequest {
     pub database_id: String,
     pub request_path: String,
-    pub nonce: String,
+    pub session_nonce: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

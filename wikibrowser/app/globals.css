@@ -113,3 +113,13 @@ code {
   background: transparent;
   padding: 0;
 }
+
+.cm-editor {
+  height: 100%;
+  font-family: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+
+.cm-scroller {
+  line-height: 1.6;
+}

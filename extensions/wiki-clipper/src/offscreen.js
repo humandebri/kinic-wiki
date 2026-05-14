@@ -6,10 +6,13 @@ import { buildUrlIngestRequest } from "./url-ingest-request.js";
 import { createVfsActor as defaultCreateVfsActor } from "./vfs-actor.js";
 
 const URL_INGEST_TRIGGER_URL = "https://wiki.kinic.xyz/api/url-ingest/trigger";
+const TRIGGER_SESSION_TTL_MS = 30 * 60 * 1000;
+const TRIGGER_SESSION_REFRESH_MS = 2 * 60 * 1000;
 
 let authSnapshotFactory = defaultAuthSnapshot;
 let vfsActorFactory = defaultCreateVfsActor;
 let fetchFactory = (...args) => fetch(...args);
+const triggerSessionCache = new Map();
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -36,11 +39,12 @@ export async function queueUrlIngest(tab, config) {
   if (!config?.canisterId) throw new Error("canister id is required");
   if (!config?.databaseId) throw new Error("database id is required");
   const snapshot = await authenticatedSnapshot();
+  const actor = await vfsActorFactory({ ...config, identity: snapshot.identity });
+  const session = await ensureTriggerSession(actor, config.databaseId, snapshot.principal);
   const request = buildUrlIngestRequest({
     url: tab.url,
     requestedBy: snapshot.principal
   });
-  const actor = await vfsActorFactory({ ...config, identity: snapshot.identity });
   const result = await actor.write_node({
     database_id: config.databaseId,
     path: request.writeRequest.path,
@@ -50,20 +54,7 @@ export async function queueUrlIngest(tab, config) {
     expected_etag: request.writeRequest.expectedEtag
   });
   if ("Err" in result) throw new Error(result.Err);
-  const nonce = crypto.randomUUID();
-  const grant = await authorizeTriggerGrant(actor, config.databaseId, request.requestPath, nonce);
-  if (!grant.ok) {
-    return {
-      requestPath: request.requestPath,
-      url: tab.url,
-      title: tab.title || "",
-      principal: snapshot.principal,
-      etag: result.Ok.node.etag,
-      triggered: false,
-      triggerError: grant.error
-    };
-  }
-  const trigger = await triggerUrlIngest(config.databaseId, request.requestPath, nonce);
+  const trigger = await triggerUrlIngest(config.databaseId, request.requestPath, session);
   return {
     requestPath: request.requestPath,
     url: tab.url,
@@ -116,6 +107,7 @@ export function setOffscreenDepsForTest(deps = {}) {
   authSnapshotFactory = deps.authSnapshot || defaultAuthSnapshot;
   vfsActorFactory = deps.createVfsActor || defaultCreateVfsActor;
   fetchFactory = deps.fetch || ((...args) => fetch(...args));
+  triggerSessionCache.clear();
 }
 
 async function authenticatedSnapshot() {
@@ -126,28 +118,48 @@ async function authenticatedSnapshot() {
   return snapshot;
 }
 
-async function authorizeTriggerGrant(actor, databaseId, requestPath, nonce) {
-  try {
-    const result = await actor.authorize_url_ingest_trigger({
-      database_id: databaseId,
-      request_path: requestPath,
-      nonce
-    });
-    if ("Err" in result) {
-      return { ok: false, error: result.Err };
-    }
-    return { ok: true, error: null };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "worker trigger grant failed" };
+async function ensureTriggerSession(actor, databaseId, principal) {
+  const key = `${databaseId}:${principal}`;
+  const now = Date.now();
+  const cached = triggerSessionCache.get(key);
+  if (cached && cached.expiresAtMs - now > TRIGGER_SESSION_REFRESH_MS) {
+    return cached.sessionNonce;
   }
+  if (cached?.promise) {
+    return cached.promise;
+  }
+  const sessionNonce = crypto.randomUUID();
+  const promise = actor
+    .authorize_url_ingest_trigger_session({
+      database_id: databaseId,
+      session_nonce: sessionNonce
+    })
+    .then((result) => {
+      if ("Err" in result) throw new Error(result.Err);
+      triggerSessionCache.set(key, {
+        sessionNonce,
+        expiresAtMs: now + TRIGGER_SESSION_TTL_MS
+      });
+      return sessionNonce;
+    })
+    .catch((error) => {
+      triggerSessionCache.delete(key);
+      throw error;
+    });
+  triggerSessionCache.set(key, {
+    sessionNonce,
+    expiresAtMs: now,
+    promise
+  });
+  return promise;
 }
 
-async function triggerUrlIngest(databaseId, requestPath, nonce) {
+async function triggerUrlIngest(databaseId, requestPath, sessionNonce) {
   try {
     const response = await fetchFactory(URL_INGEST_TRIGGER_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ databaseId, requestPath, nonce })
+      body: JSON.stringify({ databaseId, requestPath, sessionNonce })
     });
     if (!response.ok) {
       return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };

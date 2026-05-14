@@ -12,7 +12,8 @@ use vfs_runtime::{
 };
 use vfs_types::{
     AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, NodeKind,
-    SearchNodesRequest, SearchPreviewMode, UrlIngestTriggerGrantRequest, WriteNodeRequest,
+    SearchNodesRequest, SearchPreviewMode, UrlIngestTriggerSessionCheckRequest,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest,
 };
 
 fn service() -> VfsService {
@@ -117,15 +118,25 @@ fn mount_history_row(root: &std::path::Path, mount_id: u16) -> (String, String) 
     .expect("mount history row should exist")
 }
 
-fn url_ingest_grant_request(
+fn url_ingest_session_request(
+    database_id: &str,
+    session_nonce: &str,
+) -> UrlIngestTriggerSessionRequest {
+    UrlIngestTriggerSessionRequest {
+        database_id: database_id.to_string(),
+        session_nonce: session_nonce.to_string(),
+    }
+}
+
+fn url_ingest_session_check_request(
     database_id: &str,
     request_path: &str,
-    nonce: &str,
-) -> UrlIngestTriggerGrantRequest {
-    UrlIngestTriggerGrantRequest {
+    session_nonce: &str,
+) -> UrlIngestTriggerSessionCheckRequest {
+    UrlIngestTriggerSessionCheckRequest {
         database_id: database_id.to_string(),
         request_path: request_path.to_string(),
-        nonce: nonce.to_string(),
+        session_nonce: session_nonce.to_string(),
     }
 }
 
@@ -260,7 +271,7 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
     for table_name in [
         "usage_events",
         "database_mount_history",
-        "url_ingest_trigger_grants",
+        "url_ingest_trigger_sessions",
     ] {
         let table_exists: i64 = conn
             .query_row(
@@ -280,7 +291,7 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         1
     );
     assert_eq!(
-        schema_migration_count(&root, "database_index:006_url_ingest_trigger_grants"),
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_sessions"),
         1
     );
 
@@ -296,13 +307,13 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         1
     );
     assert_eq!(
-        schema_migration_count(&root, "database_index:006_url_ingest_trigger_grants"),
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_sessions"),
         1
     );
 }
 
 #[test]
-fn url_ingest_trigger_grant_requires_request_owner_and_consumes_once() {
+fn url_ingest_trigger_session_requires_writer_and_allows_replay() {
     let service = service();
     service
         .create_database("alpha", "owner", 1)
@@ -311,29 +322,28 @@ fn url_ingest_trigger_grant_requires_request_owner_and_consumes_once() {
     write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
 
     service
-        .authorize_url_ingest_trigger(
+        .authorize_url_ingest_trigger_session(
             "owner",
-            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            url_ingest_session_request("alpha", "session-1"),
             100,
         )
-        .expect("owner should authorize grant");
+        .expect("owner should authorize session");
     service
-        .consume_url_ingest_trigger(
-            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
             101,
         )
-        .expect("grant should consume once");
-    let error = service
-        .consume_url_ingest_trigger(
-            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+        .expect("session should check");
+    service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
             102,
         )
-        .expect_err("consumed grant should fail");
-    assert!(error.contains("missing, expired, or consumed"));
+        .expect("session check should allow replay");
 }
 
 #[test]
-fn url_ingest_trigger_grant_rejects_invalid_request_nodes() {
+fn url_ingest_trigger_session_rejects_invalid_request_nodes() {
     let service = service();
     service
         .create_database("alpha", "owner", 1)
@@ -344,42 +354,48 @@ fn url_ingest_trigger_grant_rejects_invalid_request_nodes() {
     let request_path = "/Sources/ingest-requests/1.md";
     write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
 
-    let caller_mismatch = service
-        .authorize_url_ingest_trigger(
+    let reader = service
+        .authorize_url_ingest_trigger_session(
             "other",
-            url_ingest_grant_request("alpha", request_path, "nonce-other"),
+            url_ingest_session_request("alpha", "session-reader"),
             100,
         )
-        .expect_err("different principal should fail");
-    assert!(caller_mismatch.contains("caller mismatch"));
+        .expect_err("reader principal should fail");
+    assert!(reader.contains("lacks required database role"));
 
     let anonymous = service
-        .authorize_url_ingest_trigger(
+        .authorize_url_ingest_trigger_session(
             "2vxsx-fae",
-            url_ingest_grant_request("alpha", request_path, "nonce-anonymous"),
+            url_ingest_session_request("alpha", "session-anonymous"),
             100,
         )
         .expect_err("anonymous principal should fail");
     assert!(anonymous.contains("anonymous caller not allowed"));
 
-    let invalid_path = service
-        .authorize_url_ingest_trigger(
+    service
+        .authorize_url_ingest_trigger_session(
             "owner",
-            url_ingest_grant_request("alpha", "/Wiki/not-request.md", "nonce-path"),
+            url_ingest_session_request("alpha", "session-owner"),
             100,
+        )
+        .expect("owner should authorize session");
+
+    let invalid_path = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", "/Wiki/not-request.md", "session-owner"),
+            101,
         )
         .expect_err("non request path should fail");
     assert!(invalid_path.contains("request_path must be a URL ingest request path"));
 
     let missing = service
-        .authorize_url_ingest_trigger(
-            "owner",
-            url_ingest_grant_request(
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request(
                 "alpha",
                 "/Sources/ingest-requests/missing.md",
-                "nonce-missing",
+                "session-owner",
             ),
-            100,
+            101,
         )
         .expect_err("missing node should fail");
     assert!(missing.contains("not found"));
@@ -394,10 +410,9 @@ fn url_ingest_trigger_grant_rejects_invalid_request_nodes() {
         "owner",
     );
     let completed = service
-        .authorize_url_ingest_trigger(
-            "owner",
-            url_ingest_grant_request("alpha", completed_path, "nonce-completed"),
-            100,
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", completed_path, "session-owner"),
+            101,
         )
         .expect_err("completed request should fail");
     assert!(completed.contains("not triggerable"));
@@ -418,17 +433,26 @@ fn url_ingest_trigger_grant_rejects_invalid_request_nodes() {
         )
         .expect("invalid request node should write");
     let invalid_frontmatter = service
-        .authorize_url_ingest_trigger(
-            "owner",
-            url_ingest_grant_request("alpha", invalid_frontmatter_path, "nonce-invalid"),
-            100,
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", invalid_frontmatter_path, "session-owner"),
+            101,
         )
         .expect_err("invalid frontmatter should fail");
     assert!(invalid_frontmatter.contains("frontmatter"));
+
+    let mismatch_path = "/Sources/ingest-requests/mismatch.md";
+    write_url_ingest_request(&service, "owner", "alpha", mismatch_path, "queued", "other");
+    let caller_mismatch = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", mismatch_path, "session-owner"),
+            101,
+        )
+        .expect_err("requested_by mismatch should fail");
+    assert!(caller_mismatch.contains("caller mismatch"));
 }
 
 #[test]
-fn url_ingest_trigger_grant_rejects_expired_and_unknown_nonce() {
+fn url_ingest_trigger_session_rejects_expired_and_unknown_nonce() {
     let service = service();
     service
         .create_database("alpha", "owner", 1)
@@ -437,27 +461,34 @@ fn url_ingest_trigger_grant_rejects_expired_and_unknown_nonce() {
     write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
 
     service
-        .authorize_url_ingest_trigger(
+        .authorize_url_ingest_trigger_session(
             "owner",
-            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            url_ingest_session_request("alpha", "session-1"),
             0,
         )
-        .expect("grant should authorize");
+        .expect("session should authorize");
     let unknown = service
-        .consume_url_ingest_trigger(
-            url_ingest_grant_request("alpha", request_path, "unknown"),
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "unknown"),
             1,
         )
         .expect_err("unknown nonce should fail");
-    assert!(unknown.contains("missing, expired, or consumed"));
+    assert!(unknown.contains("missing or expired"));
+
+    service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            1_800_000,
+        )
+        .expect("session should remain valid at ttl boundary");
 
     let expired = service
-        .consume_url_ingest_trigger(
-            url_ingest_grant_request("alpha", request_path, "nonce-1"),
-            300_001,
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            1_800_001,
         )
-        .expect_err("expired grant should fail");
-    assert!(expired.contains("missing, expired, or consumed"));
+        .expect_err("expired session should fail");
+    assert!(expired.contains("missing or expired"));
 }
 
 #[test]

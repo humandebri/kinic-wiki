@@ -17,7 +17,8 @@ import type {
   NodeKind,
   RecentNode,
   SearchNodeHit,
-  UrlIngestTriggerGrantRequest,
+  UrlIngestTriggerSessionCheckRequest,
+  UrlIngestTriggerSessionRequest,
   WikiNode,
   WriteNodeRequest,
   WriteNodeResult
@@ -88,10 +89,15 @@ type RawWriteNodeResult = {
   node: RawRecent;
 };
 
-type RawUrlIngestTriggerGrantRequest = {
+type RawUrlIngestTriggerSessionRequest = {
+  database_id: string;
+  session_nonce: string;
+};
+
+type RawUrlIngestTriggerSessionCheckRequest = {
   database_id: string;
   request_path: string;
-  nonce: string;
+  session_nonce: string;
 };
 
 type RawLinkEdge = {
@@ -110,9 +116,9 @@ type RawNodeContext = {
 };
 
 type VfsActor = {
-  authorize_url_ingest_trigger: (request: RawUrlIngestTriggerGrantRequest) => Promise<{ Ok: null } | { Err: string }>;
+  authorize_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   canister_health: () => Promise<RawCanisterHealth>;
-  consume_url_ingest_trigger: (request: RawUrlIngestTriggerGrantRequest) => Promise<{ Ok: null } | { Err: string }>;
+  check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
   list_databases: () => Promise<{ Ok: RawDatabaseSummary[] } | { Err: string }>;
@@ -303,24 +309,24 @@ export async function writeNodeAuthenticated(canisterId: string, identity: Ident
   });
 }
 
-export async function authorizeUrlIngestTrigger(
+export async function authorizeUrlIngestTriggerSession(
   canisterId: string,
   identity: Identity,
-  request: UrlIngestTriggerGrantRequest
+  request: UrlIngestTriggerSessionRequest
 ): Promise<void> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
-    const result = await actor.authorize_url_ingest_trigger(rawUrlIngestTriggerGrantRequest(request));
+    const result = await actor.authorize_url_ingest_trigger_session(rawUrlIngestTriggerSessionRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }
   });
 }
 
-export async function consumeUrlIngestTrigger(canisterId: string, request: UrlIngestTriggerGrantRequest): Promise<void> {
+export async function checkUrlIngestTriggerSession(canisterId: string, request: UrlIngestTriggerSessionCheckRequest): Promise<void> {
   return callVfs(async () => {
     const actor = await createVfsActor(canisterId);
-    const result = await actor.consume_url_ingest_trigger(rawUrlIngestTriggerGrantRequest(request));
+    const result = await actor.check_url_ingest_trigger_session(rawUrlIngestTriggerSessionCheckRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }
@@ -612,11 +618,18 @@ function nodeKindVariant(kind: NodeKind): Variant {
   return { File: null };
 }
 
-function rawUrlIngestTriggerGrantRequest(request: UrlIngestTriggerGrantRequest): RawUrlIngestTriggerGrantRequest {
+function rawUrlIngestTriggerSessionRequest(request: UrlIngestTriggerSessionRequest): RawUrlIngestTriggerSessionRequest {
+  return {
+    database_id: request.databaseId,
+    session_nonce: request.sessionNonce
+  };
+}
+
+function rawUrlIngestTriggerSessionCheckRequest(request: UrlIngestTriggerSessionCheckRequest): RawUrlIngestTriggerSessionCheckRequest {
   return {
     database_id: request.databaseId,
     request_path: request.requestPath,
-    nonce: request.nonce
+    session_nonce: request.sessionNonce
   };
 }
 

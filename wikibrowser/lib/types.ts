@@ -25,10 +25,15 @@ export type WriteNodeResult = {
   node: RecentNode;
 };
 
-export type UrlIngestTriggerGrantRequest = {
+export type UrlIngestTriggerSessionRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type UrlIngestTriggerSessionCheckRequest = {
   databaseId: string;
   requestPath: string;
-  nonce: string;
+  sessionNonce: string;
 };
 
 export type CanisterHealth = {

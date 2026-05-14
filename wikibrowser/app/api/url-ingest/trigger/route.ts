@@ -5,10 +5,10 @@
 type TriggerRequest = {
   databaseId: string;
   requestPath: string;
-  nonce: string;
+  sessionNonce: string;
 };
 
-type ConsumeGrant = (canisterId: string, input: TriggerRequest) => Promise<void>;
+type CheckSession = (canisterId: string, input: TriggerRequest) => Promise<void>;
 
 const ALLOWED_ORIGINS = new Set([
   "https://wiki.kinic.xyz",
@@ -17,10 +17,10 @@ const ALLOWED_ORIGINS = new Set([
   "chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"
 ]);
 
-let consumeGrant: ConsumeGrant = defaultConsumeGrant;
+let checkSession: CheckSession = defaultCheckSession;
 
-export function setUrlIngestTriggerDepsForTest(deps: { consumeGrant?: ConsumeGrant } = {}): void {
-  consumeGrant = deps.consumeGrant ?? defaultConsumeGrant;
+export function setUrlIngestTriggerDepsForTest(deps: { checkSession?: CheckSession } = {}): void {
+  checkSession = deps.checkSession ?? defaultCheckSession;
 }
 
 export function OPTIONS(request: Request): Response {
@@ -65,9 +65,9 @@ export async function POST(request: Request): Promise<Response> {
     return jsonError("NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID is not configured", 503, origin);
   }
   try {
-    await consumeGrant(canisterId, input);
+    await checkSession(canisterId, input);
   } catch {
-    return jsonError("url ingest trigger grant denied", 403, origin);
+    return jsonError("url ingest trigger session denied", 403, origin);
   }
 
   try {
@@ -92,15 +92,15 @@ function parseTriggerRequest(value: unknown): TriggerRequest | string {
   if (!isRecord(value)) return "databaseId and requestPath are required";
   const databaseId = value.databaseId;
   const requestPath = value.requestPath;
-  const nonce = value.nonce;
+  const sessionNonce = value.sessionNonce;
   if (typeof databaseId !== "string" || !databaseId) return "databaseId is required";
   if (typeof requestPath !== "string" || !requestPath) return "requestPath is required";
-  if (typeof nonce !== "string" || !nonce) return "nonce is required";
-  if (nonce.length > 128) return "nonce is too long";
+  if (typeof sessionNonce !== "string" || !sessionNonce) return "sessionNonce is required";
+  if (sessionNonce.length > 128) return "sessionNonce is too long";
   if (!requestPath.startsWith("/Sources/ingest-requests/") || !requestPath.endsWith(".md")) {
     return "requestPath must be a URL ingest request path";
   }
-  return { databaseId, requestPath, nonce };
+  return { databaseId, requestPath, sessionNonce };
 }
 
 function allowedOrigin(request: Request): string | null {
@@ -126,7 +126,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function defaultConsumeGrant(canisterId: string, input: TriggerRequest): Promise<void> {
-  const module: { consumeUrlIngestTrigger: ConsumeGrant } = await import("@/lib/vfs-client");
-  await module.consumeUrlIngestTrigger(canisterId, input);
+async function defaultCheckSession(canisterId: string, input: TriggerRequest): Promise<void> {
+  const vfsClient: { checkUrlIngestTriggerSession: CheckSession } = await import("@/lib/vfs-client");
+  await vfsClient.checkUrlIngestTriggerSession(canisterId, input);
 }

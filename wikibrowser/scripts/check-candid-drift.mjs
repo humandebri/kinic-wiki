@@ -182,7 +182,7 @@ function normalizeShape(value) {
 }
 
 function normalizeResultAlias(value) {
-  const normalized = normalizeShape(value);
+  const normalized = normalizeShape(value).replace(/,$/, "").trim();
   if (normalized === "Result_9") return "ResultLinks";
   if (normalized === "Result_10") return "ResultChildren";
   if (normalized === "Result_1") return "ResultUnit";

@@ -64,8 +64,13 @@ await withEnv(
     );
     assert.equal(invalidPath.status, 400);
 
+    const missingSessionNonce = await triggerRouteModule.POST(
+      triggerRequest("https://kinic.xyz", { sessionNonce: "" })
+    );
+    assert.equal(missingSessionNonce.status, 400);
+
     triggerRouteModule.setUrlIngestTriggerDepsForTest({
-      consumeGrant: async () => {
+      checkSession: async () => {
         throw new Error("denied");
       }
     });
@@ -77,12 +82,12 @@ await withEnv(
     });
 
     triggerRouteModule.setUrlIngestTriggerDepsForTest({
-      consumeGrant: async (canisterId, input) => {
+      checkSession: async (canisterId, input) => {
         assert.equal(canisterId, "aaaaa-aa");
         assert.deepEqual(input, {
           databaseId: "db_1",
           requestPath: "/Sources/ingest-requests/1.md",
-          nonce: "nonce-1"
+          sessionNonce: "session-1"
         });
       }
     });
@@ -159,7 +164,7 @@ function triggerRequest(origin, overrides = {}) {
     body: JSON.stringify({
       databaseId: "db_1",
       requestPath: "/Sources/ingest-requests/1.md",
-      nonce: "nonce-1",
+      sessionNonce: "session-1",
       ...overrides
     })
   });

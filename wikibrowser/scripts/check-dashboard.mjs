@@ -120,6 +120,7 @@ assert.match(dashboardUi, /loadingLabel="Granting\.\.\."/);
 assert.match(dashboardUi, /Enable LLM writer/);
 assert.match(dashboardUi, /Disable LLM writer/);
 assert.match(dashboardUi, /Set LLM writer/);
+assert.match(dashboardUi, /URL ingest trigger sessions are valid for 30 minutes/);
 assert.match(dashboardUi, /principalDisplayName\(props\.action\.principalText\)/);
 assert.match(dashboardMemberTable, /loadingLabel="Revoking\.\.\."/);
 assert.match(dashboardMemberTable, /onRoleChange/);

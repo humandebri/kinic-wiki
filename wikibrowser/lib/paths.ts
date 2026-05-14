@@ -23,8 +23,8 @@ export function hrefForPath(
     .map(encodeURIComponent)
     .join("/");
   const params = new URLSearchParams();
-  if (view === "raw") {
-    params.set("view", "raw");
+  if (view === "raw" || view === "edit") {
+    params.set("view", view);
   }
   if (tab) {
     params.set("tab", tab);

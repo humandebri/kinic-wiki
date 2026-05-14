@@ -3,13 +3,13 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import type { ChangeEvent, FormEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { GitBranch, LayoutDashboard, Network, PanelRight, Search } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
-import { DocumentHeader, DocumentPane } from "@/components/document-pane";
+import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
 import { IngestPanel } from "@/components/ingest-panel";
@@ -35,6 +35,8 @@ import {
 } from "@/lib/wiki-helpers";
 
 const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "ingest", "sources"];
+const EMPTY_EDIT_STATE: DocumentEditState = { dirty: false, saveState: "idle" };
+const UNSAVED_MARKDOWN_MESSAGE = "You have unsaved Markdown changes. Leave edit mode?";
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
   ssr: false,
   loading: () => <p className="min-h-0 flex-1 p-5 text-sm text-muted">Loading graph view...</p>
@@ -78,6 +80,10 @@ export function WikiBrowser() {
   const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
+  const [editState, setEditState] = useState<DocumentEditState>({ dirty: false, saveState: "idle" });
+  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [memberDatabases, setMemberDatabases] = useState<DatabaseSummary[]>([]);
+  const [databaseListError, setDatabaseListError] = useState<string | null>(null);
   const nodeContextCache = useRef(new Map<string, NodeContext>());
   const childNodesCache = useRef(new Map<string, ChildNode[]>());
   const invalidCanister = validateCanisterText(canisterId);
@@ -99,6 +105,45 @@ export function WikiBrowser() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!canisterId) return;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return null;
+        setDatabaseListError(null);
+        return Promise.allSettled([
+          listDatabasesPublic(canisterId),
+          readIdentity ? listDatabasesAuthenticated(canisterId, readIdentity) : Promise.resolve<DatabaseSummary[]>([])
+        ]);
+      })
+      .then((results) => {
+        if (cancelled || !results) return;
+        const [publicResult, memberResult] = results;
+        if (publicResult.status === "rejected" && memberResult.status === "rejected") {
+          setDatabases([]);
+          setMemberDatabases([]);
+          setDatabaseListError(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
+          return;
+        }
+        const publicDatabases = publicResult.status === "fulfilled" ? publicResult.value : [];
+        const authenticatedDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
+        setDatabases(mergeDatabaseSummaries(authenticatedDatabases, publicDatabases));
+        setMemberDatabases(authenticatedDatabases);
+        setDatabaseListError(databaseListWarning(publicResult, memberResult));
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setDatabases([]);
+          setMemberDatabases([]);
+          setDatabaseListError(errorMessage(cause));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canisterId, readIdentity, authPrincipal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,18 +232,45 @@ export function WikiBrowser() {
     });
   }
 
-  async function logout() {
+  const logout = useCallback(async () => {
     if (!authClient) return;
     await authClient.logout();
     setReadIdentity(null);
     setAuthError(null);
-  }
+  }, [authClient]);
+
+  const refreshSelectedNodeContext = useCallback(async (): Promise<WikiNode> => {
+    const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
+    const { readNodeContext } = await import("@/lib/vfs-client");
+    const data = await readNodeContext(canisterId, databaseId, selectedPath, 20, effectiveReadIdentity ?? undefined);
+    if (!data) {
+      throw new ApiError(`node not found: ${selectedPath}`, 404);
+    }
+    nodeContextCache.current.set(requestKey, data);
+    childNodesCache.current.delete(requestKey);
+    setNode({ requestKey, path: selectedPath, data: data.node, error: null, loading: false });
+    setNodeContext({ requestKey, path: selectedPath, data, error: null, loading: false });
+    setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+    return data.node;
+  }, [canisterId, databaseId, effectiveReadIdentity, readPrincipal, selectedPath]);
 
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
   const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
   const noteRole = inferNoteRole(selectedPath);
   const authPrompt = authPromptMode(tab, readIdentity, currentNode.error || currentChildren.error);
+  const activeEditState = view === "edit" ? editState : EMPTY_EDIT_STATE;
+  const canLeaveDirtyEdit = useCallback(() => !activeEditState.dirty || window.confirm(UNSAVED_MARKDOWN_MESSAGE), [activeEditState.dirty]);
+  const guardedLogout = useCallback(() => {
+    if (canLeaveDirtyEdit()) {
+      void logout();
+    }
+  }, [canLeaveDirtyEdit, logout]);
+  const databaseOptions = useMemo(() => withCurrentDatabase(databases, databaseId), [databaseId, databases]);
+  const currentDatabaseRole = useMemo(
+    () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
+    [databaseId, memberDatabases, readIdentity]
+  );
 
   useEffect(() => {
     const loadError = currentNode.error || currentChildren.error;
@@ -233,11 +305,13 @@ export function WikiBrowser() {
         isSearchPage={isSearchPage}
         graphCenter={graphCenter}
         readMode={readMode}
-        readIdentity={readIdentity}
+        databaseOptions={databaseOptions}
+        databaseListError={databaseListError}
         selectedPath={selectedPath}
         authReady={Boolean(authClient)}
         onLogin={login}
-        onLogout={logout}
+        onLogout={guardedLogout}
+        canLeaveDirtyEdit={canLeaveDirtyEdit}
       />
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
@@ -268,7 +342,11 @@ export function WikiBrowser() {
                 databaseId={databaseId}
                 path={selectedPath}
                 view={view}
+                editState={activeEditState}
                 onViewChange={(nextView) => {
+                  if (nextView !== "edit" && !canLeaveDirtyEdit()) {
+                    return;
+                  }
                   router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab, undefined, undefined, readMode));
                 }}
                 isDirectory={!currentNode.data && Boolean(currentChildren.data)}
@@ -282,6 +360,12 @@ export function WikiBrowser() {
                 authPrompt={authPrompt}
                 onLogin={login}
                 authReady={Boolean(authClient)}
+                writeIdentity={readIdentity}
+                currentDatabaseRole={currentDatabaseRole}
+                databaseRoleError={readIdentity && !currentDatabaseRole ? databaseListError : null}
+                onNodeSaved={refreshSelectedNodeContext}
+                onEditStateChange={setEditState}
+                tab={tab}
                 readMode={readMode}
               />
             </>
@@ -351,11 +435,13 @@ function TopBar({
   isSearchPage,
   graphCenter,
   readMode,
-  readIdentity,
+  databaseOptions,
+  databaseListError,
   selectedPath,
   authReady,
   onLogin,
-  onLogout
+  onLogout,
+  canLeaveDirtyEdit
 }: {
   canisterId: string;
   databaseId: string;
@@ -368,56 +454,22 @@ function TopBar({
   isSearchPage: boolean;
   graphCenter: string | null;
   readMode: "anonymous" | null;
-  readIdentity: Identity | null;
+  databaseOptions: DatabaseSummary[];
+  databaseListError: string | null;
   selectedPath: string;
   authReady: boolean;
   onLogin: () => void;
   onLogout: () => void;
+  canLeaveDirtyEdit: () => boolean;
 }) {
   const router = useRouter();
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
-  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
-  const [databaseListError, setDatabaseListError] = useState<string | null>(null);
-  const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   const visibleError = authError ?? databaseListError;
-  const databaseOptions = useMemo(() => withCurrentDatabase(databases, databaseId), [databaseId, databases]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!canisterId) return;
-    Promise.resolve()
-      .then(() => {
-        if (cancelled) return null;
-        setDatabaseListError(null);
-        return Promise.allSettled([
-          listDatabasesPublic(canisterId),
-          readIdentity ? listDatabasesAuthenticated(canisterId, readIdentity) : Promise.resolve<DatabaseSummary[]>([])
-        ]);
-      })
-      .then((results) => {
-        if (cancelled || !results) return;
-        const [publicResult, memberResult] = results;
-        if (publicResult.status === "rejected" && memberResult.status === "rejected") {
-          setDatabases([]);
-          setDatabaseListError(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
-          return;
-        }
-        const publicDatabases = publicResult.status === "fulfilled" ? publicResult.value : [];
-        const memberDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
-        setDatabases(mergeDatabaseSummaries(memberDatabases, publicDatabases));
-        setDatabaseListError(databaseListWarning(publicResult, memberResult));
-      })
-      .catch((cause) => {
-        if (!cancelled) setDatabaseListError(errorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canisterId, readIdentity, readPrincipal]);
 
   function switchDatabase(event: ChangeEvent<HTMLSelectElement>) {
     const nextDatabaseId = event.target.value;
     if (!nextDatabaseId || nextDatabaseId === databaseId) return;
+    if (!canLeaveDirtyEdit()) return;
     router.replace(
       hrefForDatabaseSwitch(canisterId, nextDatabaseId, {
         isSearchPage,
@@ -481,7 +533,7 @@ function TopBar({
           Graph
         </Link>
         <CycleBattery canisterId={canisterId} />
-        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} readMode={readMode} />
+        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} readMode={readMode} canLeaveDirtyEdit={canLeaveDirtyEdit} />
       </div>
     </header>
   );
@@ -530,13 +582,15 @@ function HeaderSearch({
   databaseId,
   query,
   searchKind,
-  readMode
+  readMode,
+  canLeaveDirtyEdit
 }: {
   canisterId: string;
   databaseId: string;
   query: string;
   searchKind: "path" | "full";
   readMode: "anonymous" | null;
+  canLeaveDirtyEdit: () => boolean;
 }) {
   const router = useRouter();
   const draftKey = `${query}\n${searchKind}`;
@@ -546,6 +600,7 @@ function HeaderSearch({
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canLeaveDirtyEdit()) return;
     router.replace(hrefForSearch(canisterId, databaseId, text.trim(), kind, readMode));
   }
 
@@ -633,6 +688,7 @@ function parseTab(value: string | null): ModeTab {
 }
 
 function parseView(value: string | null): ViewMode {
+  if (value === "edit") return "edit";
   return value === "raw" ? "raw" : "preview";
 }
 

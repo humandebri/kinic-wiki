@@ -49,10 +49,9 @@ function idlFactory({ IDL: idl }) {
     metadata_json: idl.Text,
     expected_etag: idl.Opt(idl.Text)
   });
-  const UrlIngestTriggerGrantRequest = idl.Record({
+  const UrlIngestTriggerSessionRequest = idl.Record({
     database_id: idl.Text,
-    request_path: idl.Text,
-    nonce: idl.Text
+    session_nonce: idl.Text
   });
   const NodeMutationAck = idl.Record({
     path: idl.Text,
@@ -62,7 +61,7 @@ function idlFactory({ IDL: idl }) {
   });
   const WriteNodeResult = idl.Record({ node: NodeMutationAck, created: idl.Bool });
   return idl.Service({
-    authorize_url_ingest_trigger: idl.Func([UrlIngestTriggerGrantRequest], [idl.Variant({ Ok: idl.Null, Err: idl.Text })], []),
+    authorize_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionRequest], [idl.Variant({ Ok: idl.Null, Err: idl.Text })], []),
     list_databases: idl.Func([], [idl.Variant({ Ok: idl.Vec(DatabaseSummary), Err: idl.Text })], ["query"]),
     read_node: idl.Func([idl.Text, idl.Text], [idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text })], ["query"]),
     write_node: idl.Func([WriteNodeRequest], [idl.Variant({ Ok: WriteNodeResult, Err: idl.Text })], [])

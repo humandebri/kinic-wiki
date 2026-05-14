@@ -2,8 +2,8 @@
 
 import type { Identity } from "@icp-sdk/core/agent";
 import type { FormEvent } from "react";
-import { useState } from "react";
-import { createUrlIngestRequest } from "@/lib/url-ingest";
+import { useEffect, useState } from "react";
+import { createUrlIngestRequest, ensureUrlIngestTriggerSession } from "@/lib/url-ingest";
 
 export function IngestPanel({
   canisterId,
@@ -18,6 +18,11 @@ export function IngestPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"error" | "info">("info");
+
+  useEffect(() => {
+    if (!readIdentity) return;
+    ensureUrlIngestTriggerSession(canisterId, databaseId, readIdentity).catch(() => {});
+  }, [canisterId, databaseId, readIdentity]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

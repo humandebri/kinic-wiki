@@ -17,13 +17,13 @@ test("queueUrlIngest writes request and triggers via wiki route", async () => {
     createVfsActor: async (config) => {
       calls.push(["create", config.identity, config.databaseId]);
       return {
+        async authorize_url_ingest_trigger_session(request) {
+          calls.push(["session", request.database_id, request.session_nonce]);
+          return { Ok: null };
+        },
         async write_node(request) {
           calls.push(["write", request.database_id, request.path, request.kind]);
           return { Ok: { created: true, node: { etag: "etag-request" } } };
-        },
-        async authorize_url_ingest_trigger(request) {
-          calls.push(["grant", request.database_id, request.request_path, request.nonce]);
-          return { Ok: null };
         }
       };
     }
@@ -36,20 +36,19 @@ test("queueUrlIngest writes request and triggers via wiki route", async () => {
     assert.equal(result.triggered, true);
     assert.equal(result.triggerError, null);
     assert.deepEqual(calls[0], ["create", { tag: "identity" }, "team-db"]);
-    assert.equal(calls[1][0], "write");
+    assert.equal(calls[1][0], "session");
     assert.equal(calls[1][1], "team-db");
-    assert.match(calls[1][2], /^\/Sources\/ingest-requests\/.+\.md$/);
-    assert.deepEqual(calls[1][3], { File: null });
-    assert.equal(calls[2][0], "grant");
+    assert.equal(typeof calls[1][2], "string");
+    assert.equal(calls[2][0], "write");
     assert.equal(calls[2][1], "team-db");
-    assert.equal(calls[2][2], result.requestPath);
-    assert.equal(typeof calls[2][3], "string");
+    assert.match(calls[2][2], /^\/Sources\/ingest-requests\/.+\.md$/);
+    assert.deepEqual(calls[2][3], { File: null });
     assert.equal(triggerCalls[0][0], "https://wiki.kinic.xyz/api/url-ingest/trigger");
     assert.equal(triggerCalls[0][1].method, "POST");
     assert.deepEqual(JSON.parse(triggerCalls[0][1].body), {
       databaseId: "team-db",
       requestPath: result.requestPath,
-      nonce: calls[2][3]
+      sessionNonce: calls[1][2]
     });
   } finally {
     setOffscreenDepsForTest();
@@ -64,7 +63,7 @@ test("queueUrlIngest keeps request result when trigger fails", async () => {
       async write_node() {
         return { Ok: { created: true, node: { etag: "etag-request" } } };
       },
-      async authorize_url_ingest_trigger() {
+      async authorize_url_ingest_trigger_session() {
         return { Ok: null };
       }
     })
@@ -80,8 +79,9 @@ test("queueUrlIngest keeps request result when trigger fails", async () => {
   }
 });
 
-test("queueUrlIngest keeps request result when grant authorize fails", async () => {
+test("queueUrlIngest rejects before writing when session authorize fails", async () => {
   const triggerCalls = [];
+  const calls = [];
   setOffscreenDepsForTest({
     authSnapshot: async () => ({ isAuthenticated: true, identity: { tag: "identity" }, principal: "principal-1" }),
     fetch: async (url, init) => {
@@ -90,20 +90,59 @@ test("queueUrlIngest keeps request result when grant authorize fails", async () 
     },
     createVfsActor: async () => ({
       async write_node() {
+        calls.push(["write"]);
         return { Ok: { created: true, node: { etag: "etag-request" } } };
       },
-      async authorize_url_ingest_trigger() {
+      async authorize_url_ingest_trigger_session() {
+        calls.push(["session"]);
         return { Err: "caller mismatch" };
       }
     })
   });
   try {
-    const result = await queueUrlIngest({ url: "https://example.com/#x", title: "Example" }, config());
+    await assert.rejects(
+      () => queueUrlIngest({ url: "https://example.com/#x", title: "Example" }, config()),
+      /caller mismatch/
+    );
 
-    assert.equal(result.etag, "etag-request");
-    assert.equal(result.triggered, false);
-    assert.equal(result.triggerError, "caller mismatch");
+    assert.deepEqual(calls, [["session"]]);
     assert.equal(triggerCalls.length, 0);
+  } finally {
+    setOffscreenDepsForTest();
+  }
+});
+
+test("queueUrlIngest reuses session nonce inside ttl", async () => {
+  const triggerCalls = [];
+  const calls = [];
+  setOffscreenDepsForTest({
+    authSnapshot: async () => ({ isAuthenticated: true, identity: { tag: "identity" }, principal: "principal-1" }),
+    fetch: async (url, init) => {
+      triggerCalls.push([url, init]);
+      return Response.json({ accepted: true });
+    },
+    createVfsActor: async () => ({
+      async authorize_url_ingest_trigger_session(request) {
+        calls.push(["session", request.session_nonce]);
+        return { Ok: null };
+      },
+      async write_node(request) {
+        calls.push(["write", request.path]);
+        return { Ok: { created: true, node: { etag: `etag-${calls.length}` } } };
+      }
+    })
+  });
+  try {
+    await queueUrlIngest({ url: "https://example.com/a", title: "A" }, config());
+    await queueUrlIngest({ url: "https://example.com/b", title: "B" }, config());
+
+    const sessionCalls = calls.filter((call) => call[0] === "session");
+    const writeCalls = calls.filter((call) => call[0] === "write");
+    assert.equal(sessionCalls.length, 1);
+    assert.equal(writeCalls.length, 2);
+    assert.equal(triggerCalls.length, 2);
+    assert.equal(JSON.parse(triggerCalls[0][1].body).sessionNonce, sessionCalls[0][1]);
+    assert.equal(JSON.parse(triggerCalls[1][1].body).sessionNonce, sessionCalls[0][1]);
   } finally {
     setOffscreenDepsForTest();
   }

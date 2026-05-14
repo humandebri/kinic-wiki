@@ -19,7 +19,8 @@ use vfs_types::{
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
     NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit,
     RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, UrlIngestTriggerGrantRequest, WriteNodeRequest, WriteNodeResult,
+    SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -29,8 +30,8 @@ const INDEX_SCHEMA_VERSION_RESTORE_SIZE: &str = "database_index:002_restore_size
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNKS: &str = "database_index:003_restore_chunks";
 const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events";
 const INDEX_SCHEMA_VERSION_MOUNT_HISTORY: &str = "database_index:005_mount_history";
-const INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS: &str =
-    "database_index:006_url_ingest_trigger_grants";
+const INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS: &str =
+    "database_index:006_url_ingest_trigger_sessions";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -39,7 +40,7 @@ pub const MAX_RESTORE_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
-const URL_INGEST_TRIGGER_GRANT_TTL_MS: i64 = 5 * 60 * 1000;
+const URL_INGEST_TRIGGER_SESSION_TTL_MS: i64 = 30 * 60 * 1000;
 const SHA256_DIGEST_BYTES: usize = 32;
 const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
 const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
@@ -773,33 +774,33 @@ impl VfsService {
         })
     }
 
-    pub fn authorize_url_ingest_trigger(
+    pub fn authorize_url_ingest_trigger_session(
         &self,
         caller: &str,
-        request: UrlIngestTriggerGrantRequest,
+        request: UrlIngestTriggerSessionRequest,
         now: i64,
     ) -> Result<(), String> {
-        validate_url_ingest_trigger_grant_request(&request)?;
+        validate_url_ingest_trigger_session_request(&request)?;
         if caller == "2vxsx-fae" {
             return Err("anonymous caller not allowed".to_string());
         }
-        let node = self
-            .read_node(&request.database_id, caller, &request.request_path)?
-            .ok_or_else(|| format!("url ingest request not found: {}", request.request_path))?;
-        validate_url_ingest_request_node(&node, caller)?;
+        self.require_role(&request.database_id, caller, RequiredRole::Writer)?;
         let conn = self.open_index()?;
-        purge_expired_url_ingest_trigger_grants(&conn, now)?;
+        purge_expired_url_ingest_trigger_sessions(&conn, now)?;
         conn.execute(
-            "INSERT INTO url_ingest_trigger_grants
-             (database_id, request_path, nonce, requested_by, expires_at_ms,
-              consumed_at_ms, created_at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            "INSERT INTO url_ingest_trigger_sessions
+             (database_id, session_nonce, principal, expires_at_ms, created_at_ms,
+              refreshed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(database_id, session_nonce) DO UPDATE SET
+               principal = excluded.principal,
+               expires_at_ms = excluded.expires_at_ms,
+               refreshed_at_ms = excluded.refreshed_at_ms",
             params![
                 request.database_id,
-                request.request_path,
-                request.nonce,
+                request.session_nonce,
                 caller,
-                now + URL_INGEST_TRIGGER_GRANT_TTL_MS,
+                now + URL_INGEST_TRIGGER_SESSION_TTL_MS,
                 now
             ],
         )
@@ -807,35 +808,29 @@ impl VfsService {
         Ok(())
     }
 
-    pub fn consume_url_ingest_trigger(
+    pub fn check_url_ingest_trigger_session(
         &self,
-        request: UrlIngestTriggerGrantRequest,
+        request: UrlIngestTriggerSessionCheckRequest,
         now: i64,
     ) -> Result<(), String> {
-        validate_url_ingest_trigger_grant_request(&request)?;
+        validate_url_ingest_trigger_session_check_request(&request)?;
         let conn = self.open_index()?;
-        let changed = conn
-            .execute(
-                "UPDATE url_ingest_trigger_grants
-                 SET consumed_at_ms = ?4
+        let principal: String = conn
+            .query_row(
+                "SELECT principal FROM url_ingest_trigger_sessions
                  WHERE database_id = ?1
-                   AND request_path = ?2
-                   AND nonce = ?3
-                   AND consumed_at_ms IS NULL
-                   AND expires_at_ms >= ?4",
-                params![
-                    request.database_id,
-                    request.request_path,
-                    request.nonce,
-                    now
-                ],
+                   AND session_nonce = ?2
+                   AND expires_at_ms >= ?3",
+                params![request.database_id, request.session_nonce, now],
+                |row| row.get(0),
             )
-            .map_err(|error| error.to_string())?;
-        if changed == 1 {
-            Ok(())
-        } else {
-            Err("url ingest trigger grant is missing, expired, or consumed".to_string())
-        }
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "url ingest trigger session is missing or expired".to_string())?;
+        let node = self
+            .read_node(&request.database_id, &principal, &request.request_path)?
+            .ok_or_else(|| format!("url ingest request not found: {}", request.request_path))?;
+        validate_url_ingest_request_node(&node, &principal)
     }
 
     pub fn list_nodes(
@@ -1402,27 +1397,26 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }
-    if !migration_applied(conn, INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS)? {
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS)? {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         tx.execute_batch(
-            "CREATE TABLE url_ingest_trigger_grants (
+            "CREATE TABLE url_ingest_trigger_sessions (
                database_id TEXT NOT NULL,
-               request_path TEXT NOT NULL,
-               nonce TEXT NOT NULL,
-               requested_by TEXT NOT NULL,
+               session_nonce TEXT NOT NULL,
+               principal TEXT NOT NULL,
                expires_at_ms INTEGER NOT NULL,
-               consumed_at_ms INTEGER,
                created_at_ms INTEGER NOT NULL,
-               PRIMARY KEY (database_id, request_path, nonce),
+               refreshed_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (database_id, session_nonce),
                FOREIGN KEY (database_id) REFERENCES databases(database_id)
              );
-             CREATE INDEX url_ingest_trigger_grants_expiry_idx
-               ON url_ingest_trigger_grants(expires_at_ms);",
+             CREATE INDEX url_ingest_trigger_sessions_expiry_idx
+               ON url_ingest_trigger_sessions(expires_at_ms);",
         )
         .map_err(|error| error.to_string())?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-            params![INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS],
+            params![INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS],
         )
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -1441,23 +1435,37 @@ fn migration_applied(conn: &Connection, version: &str) -> Result<bool, String> {
     .map_err(|error| error.to_string())
 }
 
-fn validate_url_ingest_trigger_grant_request(
-    request: &UrlIngestTriggerGrantRequest,
+fn validate_url_ingest_trigger_session_request(
+    request: &UrlIngestTriggerSessionRequest,
 ) -> Result<(), String> {
     if request.database_id.trim().is_empty() {
         return Err("database_id is required".to_string());
     }
-    if request.nonce.trim().is_empty() {
-        return Err("nonce is required".to_string());
+    validate_url_ingest_trigger_session_nonce(&request.session_nonce)
+}
+
+fn validate_url_ingest_trigger_session_check_request(
+    request: &UrlIngestTriggerSessionCheckRequest,
+) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
     }
-    if request.nonce.len() > 128 {
-        return Err("nonce is too long".to_string());
+    validate_url_ingest_trigger_session_nonce(&request.session_nonce)?;
+    validate_url_ingest_request_path(&request.request_path)
+}
+
+fn validate_url_ingest_trigger_session_nonce(session_nonce: &str) -> Result<(), String> {
+    if session_nonce.trim().is_empty() {
+        return Err("session_nonce is required".to_string());
     }
-    if !request
-        .request_path
-        .starts_with("/Sources/ingest-requests/")
-        || !request.request_path.ends_with(".md")
-    {
+    if session_nonce.len() > 128 {
+        return Err("session_nonce is too long".to_string());
+    }
+    Ok(())
+}
+
+fn validate_url_ingest_request_path(request_path: &str) -> Result<(), String> {
+    if !request_path.starts_with("/Sources/ingest-requests/") || !request_path.ends_with(".md") {
         return Err("request_path must be a URL ingest request path".to_string());
     }
     Ok(())
@@ -1537,9 +1545,9 @@ fn expect_frontmatter(
     }
 }
 
-fn purge_expired_url_ingest_trigger_grants(conn: &Connection, now: i64) -> Result<(), String> {
+fn purge_expired_url_ingest_trigger_sessions(conn: &Connection, now: i64) -> Result<(), String> {
     conn.execute(
-        "DELETE FROM url_ingest_trigger_grants WHERE expires_at_ms < ?1",
+        "DELETE FROM url_ingest_trigger_sessions WHERE expires_at_ms < ?1",
         params![now],
     )
     .map(|_| ())

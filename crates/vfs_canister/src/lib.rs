@@ -29,7 +29,8 @@ use vfs_types::{
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, UrlIngestTriggerGrantRequest, WriteNodeRequest, WriteNodeResult,
+    SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
 };
 
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
@@ -95,7 +96,7 @@ fn http_request(request: HttpRequest) -> HttpResponse {
         let witness = tree
             .witness(&entry, II_ALTERNATIVE_ORIGINS_PATH)
             .unwrap_or_else(|error| {
-                ic_cdk::trap(&format!("HTTP certification witness failed: {error}"))
+                ic_cdk::trap(format!("HTTP certification witness failed: {error}"))
             });
         add_v2_certificate_header(&certificate, &mut response, &witness, &path.to_expr_path());
     }
@@ -353,23 +354,22 @@ fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
 }
 
 #[update]
-fn authorize_url_ingest_trigger(request: UrlIngestTriggerGrantRequest) -> Result<(), String> {
+fn authorize_url_ingest_trigger_session(
+    request: UrlIngestTriggerSessionRequest,
+) -> Result<(), String> {
     let database_id = request.database_id.clone();
     with_usage(
-        "authorize_url_ingest_trigger",
+        "authorize_url_ingest_trigger_session",
         Some(database_id),
-        |service, caller, now| service.authorize_url_ingest_trigger(caller, request, now),
+        |service, caller, now| service.authorize_url_ingest_trigger_session(caller, request, now),
     )
 }
 
-#[update]
-fn consume_url_ingest_trigger(request: UrlIngestTriggerGrantRequest) -> Result<(), String> {
-    let database_id = request.database_id.clone();
-    with_usage(
-        "consume_url_ingest_trigger",
-        Some(database_id),
-        |service, _caller, now| service.consume_url_ingest_trigger(request, now),
-    )
+#[query]
+fn check_url_ingest_trigger_session(
+    request: UrlIngestTriggerSessionCheckRequest,
+) -> Result<(), String> {
+    with_service(|service| service.check_url_ingest_trigger_session(request, now_millis()))
 }
 
 #[update]
@@ -749,7 +749,7 @@ fn certified_alternative_origins_response() -> (
         .build();
     let response = alternative_origins_response(cel_expr.to_string());
     let certification = HttpCertification::response_only(&cel_expr, &response, None)
-        .unwrap_or_else(|error| ic_cdk::trap(&format!("HTTP certification failed: {error}")));
+        .unwrap_or_else(|error| ic_cdk::trap(format!("HTTP certification failed: {error}")));
     let path = HttpCertificationPath::exact(II_ALTERNATIVE_ORIGINS_PATH);
     let entry = HttpCertificationTreeEntry::new(path.clone(), certification);
     let mut tree = HttpCertificationTree::default();

@@ -308,9 +308,13 @@ type SourceEvidenceRef = record {
 };
 type SourceEvidenceRequest = record { node_path : text; database_id : text };
 type Status = record { source_count : nat64; file_count : nat64 };
-type UrlIngestTriggerGrantRequest = record {
+type UrlIngestTriggerSessionCheckRequest = record {
   request_path : text;
-  nonce : text;
+  session_nonce : text;
+  database_id : text;
+};
+type UrlIngestTriggerSessionRequest = record {
+  session_nonce : text;
   database_id : text;
 };
 type WriteNodeRequest = record {
@@ -324,12 +328,16 @@ type WriteNodeRequest = record {
 type WriteNodeResult = record { created : bool; node : RecentNodeHit };
 service : () -> {
   append_node : (AppendNodeRequest) -> (Result);
-  authorize_url_ingest_trigger : (UrlIngestTriggerGrantRequest) -> (Result_1);
+  authorize_url_ingest_trigger_session : (UrlIngestTriggerSessionRequest) -> (
+      Result_1,
+    );
   begin_database_archive : (text) -> (Result_2);
   begin_database_restore : (text, blob, nat64) -> (Result_1);
   cancel_database_archive : (text) -> (Result_1);
   canister_health : () -> (CanisterHealth) query;
-  consume_url_ingest_trigger : (UrlIngestTriggerGrantRequest) -> (Result_1);
+  check_url_ingest_trigger_session : (UrlIngestTriggerSessionCheckRequest) -> (
+      Result_1,
+    ) query;
   create_database : () -> (Result_3);
   delete_database : (text) -> (Result_1);
   delete_node : (DeleteNodeRequest) -> (Result_4);

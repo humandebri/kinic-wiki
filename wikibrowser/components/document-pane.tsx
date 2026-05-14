@@ -4,12 +4,15 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import type { Identity } from "@icp-sdk/core/agent";
 import { FileText, Folder, Loader2 } from "lucide-react";
 import { hrefForPath, hrefForSearch } from "@/lib/paths";
 import { splitMarkdownPreviewSections } from "@/lib/markdown-sections";
-import type { ChildNode, WikiNode } from "@/lib/types";
-import type { LoadState, PathLoadState, ViewMode } from "@/lib/wiki-helpers";
+import type { ChildNode, DatabaseRole, WikiNode } from "@/lib/types";
+import type { LoadState, ModeTab, PathLoadState, ViewMode } from "@/lib/wiki-helpers";
 import { ErrorBox } from "@/components/panel";
+import type { EditorSaveState } from "@/components/markdown-editor";
+import { MarkdownEditDocument } from "@/components/markdown-edit-document";
 
 const LARGE_CONTENT_BYTES = 1024 * 1024;
 const RAW_INITIAL_CHARS = 64 * 1024;
@@ -19,13 +22,19 @@ const MarkdownPreview = dynamic(() => import("@/components/markdown-preview").th
   loading: () => <p className="text-sm text-muted">Loading markdown preview...</p>
 });
 
+export type DocumentEditState = {
+  dirty: boolean;
+  saveState: EditorSaveState;
+};
+
 export function DocumentHeader({
   canisterId,
   databaseId,
   path,
   view,
   onViewChange,
-  isDirectory
+  isDirectory,
+  editState
 }: {
   canisterId: string;
   databaseId: string;
@@ -33,16 +42,24 @@ export function DocumentHeader({
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
   isDirectory: boolean;
+  editState: DocumentEditState;
 }) {
   return (
     <div className="flex min-h-[60px] flex-col gap-2 border-b border-line bg-paper/80 px-5 py-3 md:flex-row md:items-center md:justify-between">
       <div className="min-w-0">
         <p className="font-mono text-xs text-muted">{isDirectory ? "directory" : "node"}</p>
-        <h2 className="truncate text-lg font-semibold tracking-[-0.035em]">{displayPath(path)}</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="truncate text-lg font-semibold tracking-[-0.035em]">{displayPath(path)}</h2>
+          {view === "edit" ? <HeaderBadge label="Editing" tone="blue" /> : null}
+          {view === "edit" && editState.dirty ? <HeaderBadge label="Unsaved" tone="yellow" /> : null}
+          {view === "edit" && editState.saveState === "saving" ? <HeaderBadge label="Saving" tone="blue" /> : null}
+          {view === "edit" && editState.saveState === "saved" ? <HeaderBadge label="Saved" tone="green" /> : null}
+        </div>
       </div>
       <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
         <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
         <ViewButton active={view === "raw"} label="Raw" onClick={() => onViewChange("raw")} />
+        <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} />
       </div>
     </div>
   );
@@ -61,6 +78,12 @@ export function DocumentPane({
   authPrompt,
   authReady,
   onLogin,
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
+  onNodeSaved,
+  onEditStateChange,
+  tab,
   readMode = null
 }: {
   node: PathLoadState<WikiNode>;
@@ -71,13 +94,39 @@ export function DocumentPane({
   authPrompt?: "private" | "write" | null;
   authReady?: boolean;
   onLogin?: () => void;
+  writeIdentity?: Identity | null;
+  currentDatabaseRole?: DatabaseRole | null;
+  databaseRoleError?: string | null;
+  onNodeSaved?: () => Promise<WikiNode>;
+  onEditStateChange?: (state: DocumentEditState) => void;
+  tab?: ModeTab;
   readMode?: "anonymous" | null;
 }) {
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
   if (authPrompt && onLogin) {
     return <PaneBody className="p-6"><AuthRequiredState authReady={Boolean(authReady)} mode={authPrompt} onLogin={onLogin} /></PaneBody>;
   }
-  if (node.data) return <PaneBody><NodeDocument node={node.data} view={view} canisterId={canisterId} databaseId={databaseId} readMode={readMode} /></PaneBody>;
+  if (node.data) {
+    return (
+      <PaneBody>
+        <NodeDocument
+          node={node.data}
+          view={view}
+          canisterId={canisterId}
+          databaseId={databaseId}
+          readMode={readMode}
+          authReady={Boolean(authReady)}
+          onLogin={onLogin}
+          writeIdentity={writeIdentity ?? null}
+          currentDatabaseRole={currentDatabaseRole ?? null}
+          databaseRoleError={databaseRoleError ?? null}
+          onNodeSaved={onNodeSaved}
+          onEditStateChange={onEditStateChange}
+          tab={tab}
+        />
+      </PaneBody>
+    );
+  }
   if (childrenState.data) {
     return (
       <PaneBody>
@@ -165,9 +214,57 @@ function NotFoundState({
   );
 }
 
-function NodeDocument({ node, view, canisterId, databaseId, readMode }: { node: WikiNode; view: ViewMode; canisterId: string; databaseId: string; readMode: "anonymous" | null }) {
+function NodeDocument({
+  node,
+  view,
+  canisterId,
+  databaseId,
+  readMode,
+  tab,
+  authReady,
+  onLogin,
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
+  onNodeSaved,
+  onEditStateChange
+}: {
+  node: WikiNode;
+  view: ViewMode;
+  canisterId: string;
+  databaseId: string;
+  readMode: "anonymous" | null;
+  tab?: ModeTab;
+  authReady: boolean;
+  onLogin?: () => void;
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
+  onNodeSaved?: () => Promise<WikiNode>;
+  onEditStateChange?: (state: DocumentEditState) => void;
+}) {
   const contentBytes = new TextEncoder().encode(node.content).length;
   const isLargeContent = contentBytes > LARGE_CONTENT_BYTES;
+  if (view === "edit") {
+    return (
+      <EditDocument
+        canisterId={canisterId}
+        databaseId={databaseId}
+        node={node}
+        isLargeContent={isLargeContent}
+        contentBytes={contentBytes}
+        readMode={readMode}
+        tab={tab}
+        authReady={authReady}
+        onLogin={onLogin}
+        writeIdentity={writeIdentity}
+        currentDatabaseRole={currentDatabaseRole}
+        databaseRoleError={databaseRoleError}
+        onNodeSaved={onNodeSaved}
+        onEditStateChange={onEditStateChange}
+      />
+    );
+  }
   return (
     <article className="h-full overflow-auto px-6 py-6 md:px-10">
       {view === "raw" ? (
@@ -180,6 +277,98 @@ function NodeDocument({ node, view, canisterId, databaseId, readMode }: { node: 
         </div>
       )}
     </article>
+  );
+}
+
+function EditDocument({
+  canisterId,
+  databaseId,
+  node,
+  isLargeContent,
+  contentBytes,
+  readMode,
+  tab,
+  authReady,
+  onLogin,
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
+  onNodeSaved,
+  onEditStateChange
+}: {
+  canisterId: string;
+  databaseId: string;
+  node: WikiNode;
+  isLargeContent: boolean;
+  contentBytes: number;
+  readMode: "anonymous" | null;
+  tab?: ModeTab;
+  authReady: boolean;
+  onLogin?: () => void;
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
+  onNodeSaved?: () => Promise<WikiNode>;
+  onEditStateChange?: (state: DocumentEditState) => void;
+}) {
+  const editable = node.kind === "file" && node.path.endsWith(".md") && !node.path.startsWith("/Sources/raw/");
+  if (!editable) {
+    return <EditorUnavailable title="Read-only node" message="Only existing Markdown file nodes outside /Sources/raw can be edited in the browser." />;
+  }
+  if (readMode === "anonymous") {
+    return (
+      <EditorUnavailable
+        title="Authenticated mode required"
+        message="This page is using anonymous read mode. Switch to authenticated mode before editing."
+        actionHref={hrefForPath(canisterId, databaseId, node.path, "edit", tab)}
+        actionLabel="Use authenticated mode"
+      />
+    );
+  }
+  if (!writeIdentity) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <section className="max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Edit access</p>
+          <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
+          <p className="mt-3 text-sm leading-6 text-muted">Login with Internet Identity to save Markdown changes.</p>
+          {onLogin ? (
+            <button
+              className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!authReady}
+              type="button"
+              onClick={onLogin}
+            >
+              Login with Internet Identity
+            </button>
+          ) : null}
+        </section>
+      </div>
+    );
+  }
+  if (databaseRoleError) {
+    return <EditorUnavailable title="Database role unavailable" message={databaseRoleError} />;
+  }
+  if (!currentDatabaseRole) {
+    return <EditorUnavailable title="Database role unavailable" message="Reload database membership before editing this Markdown node." />;
+  }
+  if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") {
+    return <EditorUnavailable title="Writer or owner access required" message="This principal can read the database but cannot save Markdown changes." />;
+  }
+  if (!onNodeSaved) {
+    return <EditorUnavailable title="Save unavailable" message="The browser cannot refresh this node after saving." />;
+  }
+  return (
+    <MarkdownEditDocument
+      canisterId={canisterId}
+      databaseId={databaseId}
+      node={node}
+      isLargeContent={isLargeContent}
+      contentBytes={contentBytes}
+      writeIdentity={writeIdentity}
+      onNodeSaved={onNodeSaved}
+      onEditStateChange={onEditStateChange}
+    />
   );
 }
 
@@ -338,6 +527,16 @@ function DirectoryDocument({
   );
 }
 
+function HeaderBadge({ label, tone }: { label: string; tone: "blue" | "green" | "yellow" }) {
+  const className =
+    tone === "green"
+      ? "bg-emerald-100 text-emerald-900"
+      : tone === "yellow"
+        ? "bg-yellow-100 text-yellow-900"
+        : "bg-blue-100 text-blue-900";
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{label}</span>;
+}
+
 function ViewButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
   return (
     <button
@@ -347,6 +546,23 @@ function ViewButton({ active, label, onClick }: { active: boolean; label: string
     >
       {label}
     </button>
+  );
+}
+
+function EditorUnavailable({ title, message, actionHref, actionLabel }: { title: string; message: string; actionHref?: string; actionLabel?: string }) {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <section className="max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Edit unavailable</p>
+        <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">{title}</h3>
+        <p className="mt-3 text-sm leading-6 text-muted">{message}</p>
+        {actionHref && actionLabel ? (
+          <Link className="mt-5 inline-flex rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white no-underline" href={actionHref}>
+            {actionLabel}
+          </Link>
+        ) : null}
+      </section>
+    </div>
   );
 }
 

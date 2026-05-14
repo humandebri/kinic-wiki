@@ -69,9 +69,13 @@ export const expectedTypes = {
     kind: "record",
     fields: { created: "bool", node: "RecentNodeHit" }
   },
-  UrlIngestTriggerGrantRequest: {
+  UrlIngestTriggerSessionRequest: {
     kind: "record",
-    fields: { database_id: "text", request_path: "text", nonce: "text" }
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  UrlIngestTriggerSessionCheckRequest: {
+    kind: "record",
+    fields: { database_id: "text", request_path: "text", session_nonce: "text" }
   },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
@@ -227,9 +231,9 @@ export const didTypeAliases = {
 };
 
 export const expectedMethods = {
-  authorize_url_ingest_trigger: { input: ["UrlIngestTriggerGrantRequest"], output: "ResultUnit", mode: "update" },
+  authorize_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionRequest"], output: "ResultUnit", mode: "update" },
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
-  consume_url_ingest_trigger: { input: ["UrlIngestTriggerGrantRequest"], output: "ResultUnit", mode: "update" },
+  check_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionCheckRequest"], output: "ResultUnit", mode: "query" },
   create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
   grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },

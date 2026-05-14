@@ -1,6 +1,6 @@
 import type { ChildNode } from "@/lib/types";
 
-export type ViewMode = "preview" | "raw";
+export type ViewMode = "preview" | "raw" | "edit";
 export type ModeTab = "explorer" | "recent" | "ingest" | "sources";
 
 export type LoadState<T> = {
