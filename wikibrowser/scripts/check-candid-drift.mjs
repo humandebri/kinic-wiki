@@ -185,7 +185,7 @@ function normalizeResultAlias(value) {
   const normalized = normalizeShape(value);
   if (normalized === "Result_9") return "ResultLinks";
   if (normalized === "Result_10") return "ResultChildren";
-  if (normalized === "Result_2") return "ResultUnit";
+  if (normalized === "Result_1") return "ResultUnit";
   if (normalized === "Result_3") return "ResultCreateDatabase";
   if (normalized === "Result_11") return "ResultMembers";
   if (normalized === "Result_12") return "ResultDatabases";

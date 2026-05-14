@@ -140,6 +140,11 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     metadata_json: idl.Text,
     database_id: idl.Text
   });
+  const UrlIngestTriggerGrantRequest = idl.Record({
+    database_id: idl.Text,
+    request_path: idl.Text,
+    nonce: idl.Text
+  });
   const SearchNodePathsRequest = idl.Record({
     database_id: idl.Text,
     query_text: idl.Text,
@@ -180,7 +185,9 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
 
   return idl.Service({
+    authorize_url_ingest_trigger: idl.Func([UrlIngestTriggerGrantRequest], [ResultUnit], []),
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
+    consume_url_ingest_trigger: idl.Func([UrlIngestTriggerGrantRequest], [ResultUnit], []),
     create_database: idl.Func([], [ResultCreateDatabase], []),
     grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),

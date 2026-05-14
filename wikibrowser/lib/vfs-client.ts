@@ -17,6 +17,7 @@ import type {
   NodeKind,
   RecentNode,
   SearchNodeHit,
+  UrlIngestTriggerGrantRequest,
   WikiNode,
   WriteNodeRequest,
   WriteNodeResult
@@ -87,6 +88,12 @@ type RawWriteNodeResult = {
   node: RawRecent;
 };
 
+type RawUrlIngestTriggerGrantRequest = {
+  database_id: string;
+  request_path: string;
+  nonce: string;
+};
+
 type RawLinkEdge = {
   source_path: string;
   target_path: string;
@@ -103,7 +110,9 @@ type RawNodeContext = {
 };
 
 type VfsActor = {
+  authorize_url_ingest_trigger: (request: RawUrlIngestTriggerGrantRequest) => Promise<{ Ok: null } | { Err: string }>;
   canister_health: () => Promise<RawCanisterHealth>;
+  consume_url_ingest_trigger: (request: RawUrlIngestTriggerGrantRequest) => Promise<{ Ok: null } | { Err: string }>;
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
   list_databases: () => Promise<{ Ok: RawDatabaseSummary[] } | { Err: string }>;
@@ -291,6 +300,30 @@ export async function writeNodeAuthenticated(canisterId: string, identity: Ident
       created: result.Ok.created,
       node: normalizeRecentNode(result.Ok.node)
     };
+  });
+}
+
+export async function authorizeUrlIngestTrigger(
+  canisterId: string,
+  identity: Identity,
+  request: UrlIngestTriggerGrantRequest
+): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.authorize_url_ingest_trigger(rawUrlIngestTriggerGrantRequest(request));
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+  });
+}
+
+export async function consumeUrlIngestTrigger(canisterId: string, request: UrlIngestTriggerGrantRequest): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.consume_url_ingest_trigger(rawUrlIngestTriggerGrantRequest(request));
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
   });
 }
 
@@ -577,6 +610,14 @@ function databaseRoleVariant(role: DatabaseRole): Variant {
 function nodeKindVariant(kind: NodeKind): Variant {
   if (kind === "source") return { Source: null };
   return { File: null };
+}
+
+function rawUrlIngestTriggerGrantRequest(request: UrlIngestTriggerGrantRequest): RawUrlIngestTriggerGrantRequest {
+  return {
+    database_id: request.databaseId,
+    request_path: request.requestPath,
+    nonce: request.nonce
+  };
 }
 
 function normalizeDatabaseStatus(status: Variant): DatabaseStatus {

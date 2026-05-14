@@ -144,8 +144,7 @@ test("action click opens settings when database config is incomplete", async () 
       loadConfig: async () => ({
         canisterId: "xis3j-paaaa-aaaai-axumq-cai",
         databaseId: "",
-        host: "https://icp0.io",
-        generatorUrl: "https://wiki-generator.kinic.xyz"
+        host: "https://icp0.io"
       }),
       openSettings: async () => calls.push(["settings"]),
       writeStatus: async (status) => calls.push(["status", status.status, status.message]),
@@ -168,13 +167,41 @@ test("action click sends http tab to offscreen", async () => {
     actionDeps({
       sendOffscreen: async (message) => {
         messages.push(message);
-        return { ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: message.tab.url, title: message.tab.title } };
+        return { ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: message.tab.url, title: message.tab.title, triggered: true } };
       }
     })
   );
   assert.equal(response.ok, true);
   assert.equal(messages[0].tab.url, "https://example.com/");
   assert.equal(messages[0].config.databaseId, "team-db");
+});
+
+test("action click reports created request when trigger fails", async () => {
+  const calls = [];
+  const response = await handleActionClick(
+    { url: "https://example.com/#section", title: "Example" },
+    actionDeps({
+      sendOffscreen: async (message) => ({
+        ok: true,
+        result: {
+          requestPath: "/Sources/ingest-requests/1.md",
+          url: message.tab.url,
+          title: message.tab.title,
+          triggered: false,
+          triggerError: "worker trigger failed: HTTP 502"
+        }
+      }),
+      writeStatus: async (status) => calls.push(["status", status.status, status.message]),
+      setBadge: async (text) => calls.push(["badge", text])
+    })
+  );
+  assert.equal(response.ok, false);
+  assert.equal(response.result.requestPath, "/Sources/ingest-requests/1.md");
+  assert.deepEqual(calls, [
+    ["badge", "..."],
+    ["status", "error", "Queued, trigger failed: worker trigger failed: HTTP 502"],
+    ["badge", "ERR"]
+  ]);
 });
 
 test("context menu opens settings without starting URL ingest", async () => {
@@ -485,8 +512,7 @@ function actionDeps(overrides = {}) {
     loadConfig: async () => ({
       canisterId: "aaaaa-aa",
       databaseId: "team-db",
-      host: "https://icp0.io",
-      generatorUrl: "https://wiki-generator.kinic.xyz"
+      host: "https://icp0.io"
     }),
     ensureOffscreen: async () => {},
     sendOffscreen: async () => ({ ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: "https://example.com/" } }),

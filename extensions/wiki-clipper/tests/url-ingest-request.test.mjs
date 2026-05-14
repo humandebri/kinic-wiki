@@ -3,7 +3,7 @@
 // Why: Extension-created requests must match the worker/browser contract.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildUrlIngestRequest, generatorEndpoint, normalizedHttpUrl } from "../src/url-ingest-request.js";
+import { buildUrlIngestRequest, normalizedHttpUrl } from "../src/url-ingest-request.js";
 
 test("buildUrlIngestRequest creates a file request with frontmatter", () => {
   const request = buildUrlIngestRequest({
@@ -29,8 +29,4 @@ test("buildUrlIngestRequest creates a file request with frontmatter", () => {
 test("normalizedHttpUrl accepts only http and https", () => {
   assert.equal(normalizedHttpUrl("http://example.com/#x"), "http://example.com/");
   assert.throws(() => normalizedHttpUrl("chrome://extensions"), /http or https/);
-});
-
-test("generatorEndpoint appends url-ingest path", () => {
-  assert.equal(generatorEndpoint("https://wiki-generator.kinic.xyz"), "https://wiki-generator.kinic.xyz/url-ingest");
 });

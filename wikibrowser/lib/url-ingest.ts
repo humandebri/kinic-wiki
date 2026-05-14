@@ -1,5 +1,5 @@
 import type { Identity } from "@icp-sdk/core/agent";
-import { writeNodeAuthenticated } from "@/lib/vfs-client";
+import { authorizeUrlIngestTrigger, writeNodeAuthenticated } from "@/lib/vfs-client";
 
 export type CreatedUrlIngestRequest = {
   requestPath: string;
@@ -37,7 +37,12 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
     metadataJson: JSON.stringify({ request_type: "url_ingest", url: normalizedUrl }),
     expectedEtag: null
   });
-  const trigger = await triggerWorker(databaseId, requestPath);
+  const nonce = crypto.randomUUID();
+  const grant = await authorizeTriggerGrant(canisterId, databaseId, identity, requestPath, nonce);
+  if (!grant.ok) {
+    return { requestPath, triggered: false, triggerError: grant.error };
+  }
+  const trigger = await triggerWorker(databaseId, requestPath, nonce);
   return { requestPath, triggered: trigger.ok, triggerError: trigger.error };
 }
 
@@ -55,20 +60,27 @@ function normalizedHttpUrl(value: string): string {
   return url.toString();
 }
 
-async function triggerWorker(databaseId: string, requestPath: string): Promise<{ ok: boolean; error: string | null }> {
-  const baseUrl = process.env.NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL?.trim();
-  if (!baseUrl) return { ok: false, error: "NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL is not configured" };
-  let endpoint: URL;
+async function authorizeTriggerGrant(
+  canisterId: string,
+  databaseId: string,
+  identity: Identity,
+  requestPath: string,
+  nonce: string
+): Promise<{ ok: boolean; error: string | null }> {
   try {
-    endpoint = new URL("/url-ingest", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
-  } catch {
-    return { ok: false, error: "NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL is invalid" };
+    await authorizeUrlIngestTrigger(canisterId, identity, { databaseId, requestPath, nonce });
+    return { ok: true, error: null };
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : "worker trigger grant failed" };
   }
+}
+
+async function triggerWorker(databaseId: string, requestPath: string, nonce: string): Promise<{ ok: boolean; error: string | null }> {
   try {
-    const response = await fetch(endpoint.toString(), {
+    const response = await fetch("/api/url-ingest/trigger", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ databaseId, requestPath })
+      body: JSON.stringify({ databaseId, requestPath, nonce })
     });
     if (!response.ok) {
       return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };

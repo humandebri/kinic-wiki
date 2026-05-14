@@ -4,7 +4,7 @@ MV3 Chrome extension for creating Kinic Wiki pages from the active tab and savin
 
 See [USAGE.md](./USAGE.md) for local canister setup and Chrome loading steps.
 
-ChatGPT raw-source export writes with an anonymous IC actor. URL ingest uses Internet Identity and requires writer access for the selected database.
+ChatGPT raw-source export and URL ingest use Internet Identity and require writer access for the selected database.
 
 ## Build
 
@@ -39,9 +39,9 @@ Required settings:
 
 - `Database`: loaded from writable hot databases for the logged-in Internet Identity principal
 
-The active-tab flow writes `/Sources/ingest-requests/<request-id>.md` as a VFS `file`, then triggers `POST /url-ingest` on the generator Worker.
+The active-tab flow writes `/Sources/ingest-requests/<request-id>.md` as a VFS `file`, then asks WikiBrowser to trigger the generator Worker with its server-side token.
 
-The extension only writes raw evidence. Generate wiki pages later:
+ChatGPT export only writes raw evidence. Generate wiki pages later:
 
 ```bash
 cargo run -p vfs-cli --bin vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/<source_id>/<source_id>.md
@@ -53,10 +53,9 @@ The CLI creates a conversation wiki scaffold. Re-running it preserves hand-edite
 
 - Canister ID is fixed to `xis3j-paaaa-aaaai-axumq-cai`.
 - IC host is fixed to `https://icp0.io`.
-- Generator URL is fixed to `https://wiki-generator.kinic.xyz`.
 - Database ID is unset until explicitly saved. `KINIC_CAPTURE_DATABASE_ID` only preselects a matching settings option.
 - Mainnet hosts require explicit confirmation before export.
-- ChatGPT raw-source writes are anonymous and depend on the target canister accepting `write_node`.
-- URL ingest writes use Internet Identity and require writer access for that principal.
+- ChatGPT raw-source export and URL ingest writes use the logged-in Internet Identity principal and require writer access for that principal.
+- URL ingest needs WikiBrowser `KINIC_WIKI_WORKER_TOKEN` configured to trigger processing.
 - ChatGPT export uses private `/backend-api/*` endpoints. Endpoint shape can change without notice.
 - Public release requires owner, allowlist, token, delegation, or equivalent write authorization on the canister.

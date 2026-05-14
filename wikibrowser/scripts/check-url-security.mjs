@@ -6,6 +6,7 @@ const sourceExtractRoute = readFileSync(new URL("../app/api/sources/extract/rout
 const wikiBrowser = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
 const documentPane = readFileSync(new URL("../components/document-pane.tsx", import.meta.url), "utf8");
 const routeModule = await importTs("../app/api/sources/extract/route.ts");
+const triggerRouteModule = await importTs("../app/api/url-ingest/trigger/route.ts");
 
 assert.match(sourceExtractRoute, /redirect: "manual"/);
 assert.match(sourceExtractRoute, /MAX_REDIRECTS = 5/);
@@ -38,6 +39,71 @@ await withMockFetch(async (input, init) => {
   assert.equal(body.url, "https://example.com/final");
 });
 
+await withEnv({}, async () => {
+  const response = await triggerRouteModule.POST(triggerRequest("https://wiki.kinic.xyz"));
+  assert.equal(response.status, 503);
+  assert.match(await response.text(), /KINIC_WIKI_GENERATOR_URL is not configured/);
+});
+
+await withEnv(
+  {
+    NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa",
+    KINIC_WIKI_GENERATOR_URL: "https://worker.example",
+    KINIC_WIKI_WORKER_TOKEN: "secret-token"
+  },
+  async () => {
+    const forbidden = await triggerRouteModule.POST(triggerRequest("https://evil.example"));
+    assert.equal(forbidden.status, 403);
+
+    const preflight = triggerRouteModule.OPTIONS(triggerRequest("chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj"));
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj");
+
+    const invalidPath = await triggerRouteModule.POST(
+      triggerRequest("https://kinic.xyz", { requestPath: "/Sources/raw/1.md" })
+    );
+    assert.equal(invalidPath.status, 400);
+
+    triggerRouteModule.setUrlIngestTriggerDepsForTest({
+      consumeGrant: async () => {
+        throw new Error("denied");
+      }
+    });
+    await withMockFetch(async () => {
+      throw new Error("worker should not be called");
+    }, async () => {
+      const response = await triggerRouteModule.POST(triggerRequest("https://wiki.kinic.xyz"));
+      assert.equal(response.status, 403);
+    });
+
+    triggerRouteModule.setUrlIngestTriggerDepsForTest({
+      consumeGrant: async (canisterId, input) => {
+        assert.equal(canisterId, "aaaaa-aa");
+        assert.deepEqual(input, {
+          databaseId: "db_1",
+          requestPath: "/Sources/ingest-requests/1.md",
+          nonce: "nonce-1"
+        });
+      }
+    });
+    await withMockFetch(async (input, init) => {
+      assert.equal(inputUrl(input), "https://worker.example/url-ingest");
+      assert.equal(init?.headers?.authorization, "Bearer secret-token");
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(init?.body), {
+        databaseId: "db_1",
+        requestPath: "/Sources/ingest-requests/1.md"
+      });
+      return Response.json({ accepted: true }, { status: 202 });
+    }, async () => {
+      const response = await triggerRouteModule.POST(triggerRequest("https://wiki.kinic.xyz"));
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("access-control-allow-origin"), "https://wiki.kinic.xyz");
+    });
+    triggerRouteModule.setUrlIngestTriggerDepsForTest();
+  }
+);
+
 console.log("URL security checks OK");
 
 async function importTs(relativePath) {
@@ -63,11 +129,39 @@ async function withMockFetch(handler, run) {
   }
 }
 
+async function withEnv(values, run) {
+  const keys = ["NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID", "KINIC_WIKI_CANISTER_ID", "KINIC_WIKI_GENERATOR_URL", "KINIC_WIKI_WORKER_TOKEN"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  Object.assign(process.env, values);
+  try {
+    await run();
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+}
+
 function jsonRequest(url) {
   return new Request("https://local.test/api/sources/extract", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ url })
+  });
+}
+
+function triggerRequest(origin, overrides = {}) {
+  return new Request("https://local.test/api/url-ingest/trigger", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin },
+    body: JSON.stringify({
+      databaseId: "db_1",
+      requestPath: "/Sources/ingest-requests/1.md",
+      nonce: "nonce-1",
+      ...overrides
+    })
   });
 }
 

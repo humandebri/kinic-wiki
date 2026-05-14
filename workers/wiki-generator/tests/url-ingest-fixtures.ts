@@ -21,7 +21,6 @@ export function workerConfig(): WorkerConfig {
   return {
     canisterId: "xis3j-paaaa-aaaai-axumq-cai",
     icHost: "https://icp0.io",
-    databaseIds: ["db_1"],
     model: "deepseek-v4-flash",
     targetRoot: "/Wiki/conversations",
     sourcePrefix: "/Sources/raw",

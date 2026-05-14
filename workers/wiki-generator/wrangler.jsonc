@@ -7,9 +7,6 @@
   "observability": {
     "enabled": true
   },
-  "triggers": {
-    "crons": ["0 * * * *"]
-  },
   "routes": [
     {
       "pattern": "wiki-generator.kinic.xyz",

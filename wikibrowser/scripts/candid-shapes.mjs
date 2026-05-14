@@ -69,6 +69,10 @@ export const expectedTypes = {
     kind: "record",
     fields: { created: "bool", node: "RecentNodeHit" }
   },
+  UrlIngestTriggerGrantRequest: {
+    kind: "record",
+    fields: { database_id: "text", request_path: "text", nonce: "text" }
+  },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
     kind: "record",
@@ -211,7 +215,7 @@ export const didTypeAliases = {
   ResultCreateDatabase: "Result_3",
   ResultDatabases: "Result_12",
   ResultMembers: "Result_11",
-  ResultUnit: "Result_2",
+  ResultUnit: "Result_1",
   ResultWriteNode: "Result",
   ResultLinks: "Result_9",
   ResultNode: "Result_18",
@@ -223,7 +227,9 @@ export const didTypeAliases = {
 };
 
 export const expectedMethods = {
+  authorize_url_ingest_trigger: { input: ["UrlIngestTriggerGrantRequest"], output: "ResultUnit", mode: "update" },
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
+  consume_url_ingest_trigger: { input: ["UrlIngestTriggerGrantRequest"], output: "ResultUnit", mode: "update" },
   create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
   grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },

@@ -2,11 +2,14 @@
 // What: DOM-backed authenticated URL ingest worker for the MV3 extension.
 // Why: Internet Identity AuthClient requires a window-like context, not the service worker.
 import { authSnapshot as defaultAuthSnapshot } from "./auth-client.js";
-import { buildUrlIngestRequest, generatorEndpoint } from "./url-ingest-request.js";
+import { buildUrlIngestRequest } from "./url-ingest-request.js";
 import { createVfsActor as defaultCreateVfsActor } from "./vfs-actor.js";
+
+const URL_INGEST_TRIGGER_URL = "https://wiki.kinic.xyz/api/url-ingest/trigger";
 
 let authSnapshotFactory = defaultAuthSnapshot;
 let vfsActorFactory = defaultCreateVfsActor;
+let fetchFactory = (...args) => fetch(...args);
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -47,13 +50,28 @@ export async function queueUrlIngest(tab, config) {
     expected_etag: request.writeRequest.expectedEtag
   });
   if ("Err" in result) throw new Error(result.Err);
-  await triggerGenerator(config.generatorUrl, config.databaseId, request.requestPath);
+  const nonce = crypto.randomUUID();
+  const grant = await authorizeTriggerGrant(actor, config.databaseId, request.requestPath, nonce);
+  if (!grant.ok) {
+    return {
+      requestPath: request.requestPath,
+      url: tab.url,
+      title: tab.title || "",
+      principal: snapshot.principal,
+      etag: result.Ok.node.etag,
+      triggered: false,
+      triggerError: grant.error
+    };
+  }
+  const trigger = await triggerUrlIngest(config.databaseId, request.requestPath, nonce);
   return {
     requestPath: request.requestPath,
     url: tab.url,
     title: tab.title || "",
     principal: snapshot.principal,
-    etag: result.Ok.node.etag
+    etag: result.Ok.node.etag,
+    triggered: trigger.ok,
+    triggerError: trigger.error
   };
 }
 
@@ -97,6 +115,7 @@ export async function authStatus() {
 export function setOffscreenDepsForTest(deps = {}) {
   authSnapshotFactory = deps.authSnapshot || defaultAuthSnapshot;
   vfsActorFactory = deps.createVfsActor || defaultCreateVfsActor;
+  fetchFactory = deps.fetch || ((...args) => fetch(...args));
 }
 
 async function authenticatedSnapshot() {
@@ -107,13 +126,34 @@ async function authenticatedSnapshot() {
   return snapshot;
 }
 
-async function triggerGenerator(generatorUrl, databaseId, requestPath) {
-  const response = await fetch(generatorEndpoint(generatorUrl), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ databaseId, requestPath })
-  });
-  if (!response.ok) {
-    throw new Error(`worker trigger failed: HTTP ${response.status}`);
+async function authorizeTriggerGrant(actor, databaseId, requestPath, nonce) {
+  try {
+    const result = await actor.authorize_url_ingest_trigger({
+      database_id: databaseId,
+      request_path: requestPath,
+      nonce
+    });
+    if ("Err" in result) {
+      return { ok: false, error: result.Err };
+    }
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "worker trigger grant failed" };
+  }
+}
+
+async function triggerUrlIngest(databaseId, requestPath, nonce) {
+  try {
+    const response = await fetchFactory(URL_INGEST_TRIGGER_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ databaseId, requestPath, nonce })
+    });
+    if (!response.ok) {
+      return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };
+    }
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "worker trigger failed" };
   }
 }

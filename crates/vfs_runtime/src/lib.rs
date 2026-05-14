@@ -1,6 +1,7 @@
 // Where: crates/vfs_runtime/src/lib.rs
 // What: Service orchestration for multiple SQLite-backed VFS databases.
 // Why: One canister can host isolated databases while sharing one VFS store implementation.
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions, create_dir_all, metadata, remove_file};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ use vfs_types::{
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
     NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit,
     RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    SourceEvidenceRequest, Status, UrlIngestTriggerGrantRequest, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -28,6 +29,8 @@ const INDEX_SCHEMA_VERSION_RESTORE_SIZE: &str = "database_index:002_restore_size
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNKS: &str = "database_index:003_restore_chunks";
 const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events";
 const INDEX_SCHEMA_VERSION_MOUNT_HISTORY: &str = "database_index:005_mount_history";
+const INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS: &str =
+    "database_index:006_url_ingest_trigger_grants";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -36,6 +39,7 @@ pub const MAX_RESTORE_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
+const URL_INGEST_TRIGGER_GRANT_TTL_MS: i64 = 5 * 60 * 1000;
 const SHA256_DIGEST_BYTES: usize = 32;
 const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
 const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
@@ -769,6 +773,71 @@ impl VfsService {
         })
     }
 
+    pub fn authorize_url_ingest_trigger(
+        &self,
+        caller: &str,
+        request: UrlIngestTriggerGrantRequest,
+        now: i64,
+    ) -> Result<(), String> {
+        validate_url_ingest_trigger_grant_request(&request)?;
+        if caller == "2vxsx-fae" {
+            return Err("anonymous caller not allowed".to_string());
+        }
+        let node = self
+            .read_node(&request.database_id, caller, &request.request_path)?
+            .ok_or_else(|| format!("url ingest request not found: {}", request.request_path))?;
+        validate_url_ingest_request_node(&node, caller)?;
+        let conn = self.open_index()?;
+        purge_expired_url_ingest_trigger_grants(&conn, now)?;
+        conn.execute(
+            "INSERT INTO url_ingest_trigger_grants
+             (database_id, request_path, nonce, requested_by, expires_at_ms,
+              consumed_at_ms, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                request.database_id,
+                request.request_path,
+                request.nonce,
+                caller,
+                now + URL_INGEST_TRIGGER_GRANT_TTL_MS,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn consume_url_ingest_trigger(
+        &self,
+        request: UrlIngestTriggerGrantRequest,
+        now: i64,
+    ) -> Result<(), String> {
+        validate_url_ingest_trigger_grant_request(&request)?;
+        let conn = self.open_index()?;
+        let changed = conn
+            .execute(
+                "UPDATE url_ingest_trigger_grants
+                 SET consumed_at_ms = ?4
+                 WHERE database_id = ?1
+                   AND request_path = ?2
+                   AND nonce = ?3
+                   AND consumed_at_ms IS NULL
+                   AND expires_at_ms >= ?4",
+                params![
+                    request.database_id,
+                    request.request_path,
+                    request.nonce,
+                    now
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err("url ingest trigger grant is missing, expired, or consumed".to_string())
+        }
+    }
+
     pub fn list_nodes(
         &self,
         caller: &str,
@@ -1311,29 +1380,54 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }
-    if migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
-        return Ok(());
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE database_mount_history (
+               database_id TEXT NOT NULL,
+               mount_id INTEGER NOT NULL,
+               reason TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (mount_id)
+             );
+             INSERT OR IGNORE INTO database_mount_history
+               (database_id, mount_id, reason, created_at_ms)
+               SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
     }
-    let tx = conn.transaction().map_err(|error| error.to_string())?;
-    tx.execute_batch(
-        "CREATE TABLE database_mount_history (
-           database_id TEXT NOT NULL,
-           mount_id INTEGER NOT NULL,
-           reason TEXT NOT NULL,
-           created_at_ms INTEGER NOT NULL,
-           PRIMARY KEY (mount_id)
-         );
-         INSERT OR IGNORE INTO database_mount_history
-           (database_id, mount_id, reason, created_at_ms)
-           SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
-    )
-    .map_err(|error| error.to_string())?;
-    tx.execute(
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-        params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
-    )
-    .map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE url_ingest_trigger_grants (
+               database_id TEXT NOT NULL,
+               request_path TEXT NOT NULL,
+               nonce TEXT NOT NULL,
+               requested_by TEXT NOT NULL,
+               expires_at_ms INTEGER NOT NULL,
+               consumed_at_ms INTEGER,
+               created_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (database_id, request_path, nonce),
+               FOREIGN KEY (database_id) REFERENCES databases(database_id)
+             );
+             CREATE INDEX url_ingest_trigger_grants_expiry_idx
+               ON url_ingest_trigger_grants(expires_at_ms);",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_GRANTS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn migration_applied(conn: &Connection, version: &str) -> Result<bool, String> {
@@ -1344,6 +1438,111 @@ fn migration_applied(conn: &Connection, version: &str) -> Result<bool, String> {
     )
     .optional()
     .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
+}
+
+fn validate_url_ingest_trigger_grant_request(
+    request: &UrlIngestTriggerGrantRequest,
+) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
+    }
+    if request.nonce.trim().is_empty() {
+        return Err("nonce is required".to_string());
+    }
+    if request.nonce.len() > 128 {
+        return Err("nonce is too long".to_string());
+    }
+    if !request
+        .request_path
+        .starts_with("/Sources/ingest-requests/")
+        || !request.request_path.ends_with(".md")
+    {
+        return Err("request_path must be a URL ingest request path".to_string());
+    }
+    Ok(())
+}
+
+fn validate_url_ingest_request_node(node: &Node, caller: &str) -> Result<(), String> {
+    if node.kind != NodeKind::File {
+        return Err("url ingest request must be a file node".to_string());
+    }
+    let frontmatter = parse_frontmatter_fields(&node.content)?;
+    expect_frontmatter(&frontmatter, "kind", "kinic.url_ingest_request")?;
+    expect_frontmatter(&frontmatter, "schema_version", "1")?;
+    let status = frontmatter
+        .get("status")
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| "url ingest request status is required".to_string())?;
+    if status != "queued" && status != "fetching" && status != "source_written" {
+        return Err("url ingest request is not triggerable".to_string());
+    }
+    let requested_by = frontmatter
+        .get("requested_by")
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| "url ingest request requested_by is required".to_string())?;
+    if requested_by != caller {
+        return Err("url ingest request caller mismatch".to_string());
+    }
+    Ok(())
+}
+
+fn parse_frontmatter_fields(content: &str) -> Result<BTreeMap<String, Option<String>>, String> {
+    let rest = content
+        .strip_prefix("---\n")
+        .ok_or_else(|| "url ingest request frontmatter is required".to_string())?;
+    let (frontmatter, _body) = rest
+        .split_once("\n---")
+        .ok_or_else(|| "url ingest request frontmatter is not closed".to_string())?;
+    let mut fields = BTreeMap::new();
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            return Err("url ingest request frontmatter is invalid".to_string());
+        };
+        fields.insert(key.trim().to_string(), frontmatter_scalar(value.trim()));
+    }
+    Ok(fields)
+}
+
+fn frontmatter_scalar(value: &str) -> Option<String> {
+    if value == "null" || value == "~" {
+        return None;
+    }
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        return Some(value[1..value.len() - 1].to_string());
+    }
+    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+        return Some(value[1..value.len() - 1].to_string());
+    }
+    Some(value.to_string())
+}
+
+fn expect_frontmatter(
+    frontmatter: &BTreeMap<String, Option<String>>,
+    key: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let value = frontmatter
+        .get(key)
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| format!("url ingest request {key} is required"))?;
+    if value == expected {
+        Ok(())
+    } else {
+        Err(format!("url ingest request {key} is invalid"))
+    }
+}
+
+fn purge_expired_url_ingest_trigger_grants(conn: &Connection, now: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM url_ingest_trigger_grants WHERE expires_at_ms < ?1",
+        params![now],
+    )
+    .map(|_| ())
     .map_err(|error| error.to_string())
 }
 

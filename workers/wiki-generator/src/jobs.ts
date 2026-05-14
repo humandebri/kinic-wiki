@@ -1,6 +1,6 @@
 // Where: workers/wiki-generator/src/jobs.ts
 // What: D1 job/cursor state and Queue enqueue helpers.
-// Why: Generation must be idempotent across cron scans and retries.
+// Why: Generation must be idempotent across explicit triggers and retries.
 import type { QueueMessage, SourceJob } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 

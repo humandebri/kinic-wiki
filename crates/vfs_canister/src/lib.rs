@@ -29,7 +29,7 @@ use vfs_types::{
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    SourceEvidenceRequest, Status, UrlIngestTriggerGrantRequest, WriteNodeRequest, WriteNodeResult,
 };
 
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
@@ -350,6 +350,26 @@ fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
     with_usage("write_node", Some(database_id), |service, caller, now| {
         service.write_node(caller, request, now)
     })
+}
+
+#[update]
+fn authorize_url_ingest_trigger(request: UrlIngestTriggerGrantRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "authorize_url_ingest_trigger",
+        Some(database_id),
+        |service, caller, now| service.authorize_url_ingest_trigger(caller, request, now),
+    )
+}
+
+#[update]
+fn consume_url_ingest_trigger(request: UrlIngestTriggerGrantRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "consume_url_ingest_trigger",
+        Some(database_id),
+        |service, _caller, now| service.consume_url_ingest_trigger(request, now),
+    )
 }
 
 #[update]

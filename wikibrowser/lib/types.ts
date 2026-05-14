@@ -25,6 +25,12 @@ export type WriteNodeResult = {
   node: RecentNode;
 };
 
+export type UrlIngestTriggerGrantRequest = {
+  databaseId: string;
+  requestPath: string;
+  nonce: string;
+};
+
 export type CanisterHealth = {
   cyclesBalance: bigint;
 };

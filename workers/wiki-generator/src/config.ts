@@ -1,6 +1,6 @@
 // Where: workers/wiki-generator/src/config.ts
 // What: Runtime config normalization for the generator Worker.
-// Why: Env vars need validation before scheduling, queueing, or generation.
+// Why: Env vars need validation before queueing or generation.
 import type { WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
@@ -19,7 +19,6 @@ export function loadConfig(env: RuntimeEnv): WorkerConfig {
   return {
     canisterId,
     icHost: env.KINIC_WIKI_IC_HOST || "https://icp0.io",
-    databaseIds: parseDatabaseIds(env.KINIC_WIKI_DATABASE_IDS),
     model: env.KINIC_WIKI_WORKER_MODEL || DEFAULT_MODEL,
     targetRoot: env.KINIC_WIKI_WORKER_TARGET_ROOT || DEFAULT_TARGET_ROOT,
     sourcePrefix: env.KINIC_WIKI_WORKER_SOURCE_PREFIX || DEFAULT_SOURCE_PREFIX,
@@ -30,14 +29,6 @@ export function loadConfig(env: RuntimeEnv): WorkerConfig {
     maxContextHits: parsePositiveInt(env.KINIC_WIKI_WORKER_CONTEXT_HITS, DEFAULT_CONTEXT_HITS),
     maxOutputTokens: parsePositiveInt(env.KINIC_WIKI_WORKER_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS)
   };
-}
-
-export function parseDatabaseIds(value: string | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
 }
 
 function required(value: string | undefined, name: string): string {

@@ -12,7 +12,7 @@ use vfs_runtime::{
 };
 use vfs_types::{
     AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, NodeKind,
-    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
+    SearchNodesRequest, SearchPreviewMode, UrlIngestTriggerGrantRequest, WriteNodeRequest,
 };
 
 fn service() -> VfsService {
@@ -117,6 +117,63 @@ fn mount_history_row(root: &std::path::Path, mount_id: u16) -> (String, String) 
     .expect("mount history row should exist")
 }
 
+fn url_ingest_grant_request(
+    database_id: &str,
+    request_path: &str,
+    nonce: &str,
+) -> UrlIngestTriggerGrantRequest {
+    UrlIngestTriggerGrantRequest {
+        database_id: database_id.to_string(),
+        request_path: request_path.to_string(),
+        nonce: nonce.to_string(),
+    }
+}
+
+fn url_ingest_content(status: &str, requested_by: &str) -> String {
+    [
+        "---",
+        "kind: kinic.url_ingest_request",
+        "schema_version: 1",
+        &format!("status: {status}"),
+        "url: \"https://example.com/\"",
+        &format!("requested_by: \"{requested_by}\""),
+        "requested_at: \"2026-05-14T00:00:00Z\"",
+        "source_path: null",
+        "target_path: null",
+        "finished_at: null",
+        "error: null",
+        "---",
+        "",
+        "# URL Ingest Request",
+        "",
+    ]
+    .join("\n")
+}
+
+fn write_url_ingest_request(
+    service: &VfsService,
+    caller: &str,
+    database_id: &str,
+    path: &str,
+    status: &str,
+    requested_by: &str,
+) {
+    service
+        .write_node(
+            caller,
+            WriteNodeRequest {
+                database_id: database_id.to_string(),
+                path: path.to_string(),
+                kind: NodeKind::File,
+                content: url_ingest_content(status, requested_by),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("url ingest request should write");
+}
+
 fn database_restore_chunk_count(root: &std::path::Path, database_id: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -200,7 +257,11 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
     let (service, root) = service_with_root();
 
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
-    for table_name in ["usage_events", "database_mount_history"] {
+    for table_name in [
+        "usage_events",
+        "database_mount_history",
+        "url_ingest_trigger_grants",
+    ] {
         let table_exists: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -218,6 +279,10 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_grants"),
+        1
+    );
 
     service
         .run_index_migrations()
@@ -230,6 +295,169 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_grants"),
+        1
+    );
+}
+
+#[test]
+fn url_ingest_trigger_grant_requires_request_owner_and_consumes_once() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            100,
+        )
+        .expect("owner should authorize grant");
+    service
+        .consume_url_ingest_trigger(
+            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            101,
+        )
+        .expect("grant should consume once");
+    let error = service
+        .consume_url_ingest_trigger(
+            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            102,
+        )
+        .expect_err("consumed grant should fail");
+    assert!(error.contains("missing, expired, or consumed"));
+}
+
+#[test]
+fn url_ingest_trigger_grant_rejects_invalid_request_nodes() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "other", DatabaseRole::Reader, 2)
+        .expect("reader grant should succeed");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    let caller_mismatch = service
+        .authorize_url_ingest_trigger(
+            "other",
+            url_ingest_grant_request("alpha", request_path, "nonce-other"),
+            100,
+        )
+        .expect_err("different principal should fail");
+    assert!(caller_mismatch.contains("caller mismatch"));
+
+    let anonymous = service
+        .authorize_url_ingest_trigger(
+            "2vxsx-fae",
+            url_ingest_grant_request("alpha", request_path, "nonce-anonymous"),
+            100,
+        )
+        .expect_err("anonymous principal should fail");
+    assert!(anonymous.contains("anonymous caller not allowed"));
+
+    let invalid_path = service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request("alpha", "/Wiki/not-request.md", "nonce-path"),
+            100,
+        )
+        .expect_err("non request path should fail");
+    assert!(invalid_path.contains("request_path must be a URL ingest request path"));
+
+    let missing = service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request(
+                "alpha",
+                "/Sources/ingest-requests/missing.md",
+                "nonce-missing",
+            ),
+            100,
+        )
+        .expect_err("missing node should fail");
+    assert!(missing.contains("not found"));
+
+    let completed_path = "/Sources/ingest-requests/completed.md";
+    write_url_ingest_request(
+        &service,
+        "owner",
+        "alpha",
+        completed_path,
+        "completed",
+        "owner",
+    );
+    let completed = service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request("alpha", completed_path, "nonce-completed"),
+            100,
+        )
+        .expect_err("completed request should fail");
+    assert!(completed.contains("not triggerable"));
+
+    let invalid_frontmatter_path = "/Sources/ingest-requests/invalid.md";
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: invalid_frontmatter_path.to_string(),
+                kind: NodeKind::File,
+                content: "not frontmatter".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            3,
+        )
+        .expect("invalid request node should write");
+    let invalid_frontmatter = service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request("alpha", invalid_frontmatter_path, "nonce-invalid"),
+            100,
+        )
+        .expect_err("invalid frontmatter should fail");
+    assert!(invalid_frontmatter.contains("frontmatter"));
+}
+
+#[test]
+fn url_ingest_trigger_grant_rejects_expired_and_unknown_nonce() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    service
+        .authorize_url_ingest_trigger(
+            "owner",
+            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            0,
+        )
+        .expect("grant should authorize");
+    let unknown = service
+        .consume_url_ingest_trigger(
+            url_ingest_grant_request("alpha", request_path, "unknown"),
+            1,
+        )
+        .expect_err("unknown nonce should fail");
+    assert!(unknown.contains("missing, expired, or consumed"));
+
+    let expired = service
+        .consume_url_ingest_trigger(
+            url_ingest_grant_request("alpha", request_path, "nonce-1"),
+            300_001,
+        )
+        .expect_err("expired grant should fail");
+    assert!(expired.contains("missing, expired, or consumed"));
 }
 
 #[test]

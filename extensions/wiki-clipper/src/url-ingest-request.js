@@ -2,7 +2,6 @@
 // What: Build URL ingest request VFS nodes and generator trigger payloads.
 // Why: Toolbar clicks should queue the same request shape as Wiki Browser.
 
-export const DEFAULT_GENERATOR_URL = "https://wiki-generator.kinic.xyz";
 export const DEFAULT_CANISTER_ID = "xis3j-paaaa-aaaai-axumq-cai";
 export const DEFAULT_IC_HOST = "https://icp0.io";
 export const URL_INGEST_STATUS_KEY = "kinic-url-ingest-status-v1";
@@ -52,9 +51,4 @@ export function normalizedHttpUrl(value) {
   }
   url.hash = "";
   return url.toString();
-}
-
-export function generatorEndpoint(generatorUrl) {
-  const baseUrl = String(generatorUrl || DEFAULT_GENERATOR_URL).trim();
-  return new URL("/url-ingest", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }

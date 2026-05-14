@@ -68,7 +68,7 @@ Submitting a URL writes one request node to the same database:
 
 Ingest request nodes are regular `file` nodes. Only fetched raw web evidence under `/Sources/raw/<id>/<id>.md` is stored as `source`.
 
-When `NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL` is set, the browser triggers `workers/wiki-generator` after writing the request by posting `databaseId` and `requestPath` to `/url-ingest`.
+When `KINIC_WIKI_GENERATOR_URL` and the `KINIC_WIKI_WORKER_TOKEN` secret are set, the browser writes the request, asks the VFS canister to authorize a one-time trigger grant for the same caller, then calls `/api/url-ingest/trigger`. That server route consumes the canister grant before forwarding `databaseId` and `requestPath` to the generator Worker with bearer auth. `Origin` is only a CORS allowlist, not the authorization boundary.
 The worker fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
 The generator Worker principal must have writer access to the target database.
 

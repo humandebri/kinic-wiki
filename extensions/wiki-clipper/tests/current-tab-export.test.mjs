@@ -472,7 +472,7 @@ test("load-config leaves databaseId empty until saved", async () => {
     assert.equal(response.config.canisterId, "xis3j-paaaa-aaaai-axumq-cai");
     assert.equal(response.config.databaseId, "");
     assert.equal(response.config.host, "https://icp0.io");
-    assert.equal(response.config.generatorUrl, "https://wiki-generator.kinic.xyz");
+    assert.equal("generatorUrl" in response.config, false);
   } finally {
     restore();
   }

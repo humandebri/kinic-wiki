@@ -7,7 +7,6 @@ type PublicVars = {
   NEXT_PUBLIC_WIKI_IC_HOST?: string;
   NEXT_PUBLIC_II_PROVIDER_URL?: string;
   NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID?: string;
-  NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL?: string;
 };
 
 function readWranglerPublicVars(): PublicVars {
@@ -23,8 +22,7 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_WIKI_IC_HOST: process.env.NEXT_PUBLIC_WIKI_IC_HOST ?? wranglerVars.NEXT_PUBLIC_WIKI_IC_HOST ?? "https://icp0.io",
     NEXT_PUBLIC_II_PROVIDER_URL: process.env.NEXT_PUBLIC_II_PROVIDER_URL ?? wranglerVars.NEXT_PUBLIC_II_PROVIDER_URL ?? "https://id.ai",
-    NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? wranglerVars.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? "",
-    NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL: process.env.NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL ?? wranglerVars.NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL ?? ""
+    NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? wranglerVars.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? ""
   },
   reactStrictMode: true
 };

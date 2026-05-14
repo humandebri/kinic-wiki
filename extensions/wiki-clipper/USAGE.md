@@ -2,7 +2,7 @@
 
 Usage guide for exporting recent ChatGPT conversations and active-tab URLs into the mainnet Kinic Wiki canister.
 
-ChatGPT raw-source export uses an anonymous write-capable actor. URL ingest uses Internet Identity and requires writer access for the selected database.
+ChatGPT raw-source export and URL ingest use Internet Identity and require writer access for the selected database.
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ Use these extension settings:
 
 - `Database`: select a writable hot database for the logged-in Internet Identity principal
 
-The extension fixes canister ID to `xis3j-paaaa-aaaai-axumq-cai`, IC host to `https://icp0.io`, and generator URL to `https://wiki-generator.kinic.xyz`. The database must already exist. Mainnet writes require explicit confirmation before ChatGPT raw export.
+The extension fixes canister ID to `xis3j-paaaa-aaaai-axumq-cai` and IC host to `https://icp0.io`. The database must already exist. Mainnet writes require explicit confirmation before ChatGPT raw export.
 
 Login with Internet Identity from the extension settings page, select a writable database, and save it before clicking the toolbar icon. The logged-in principal must have writer access to the selected database.
 
@@ -74,7 +74,8 @@ Raw sources are saved as:
 1. Open any public `http` / `https` page.
 2. Click the extension toolbar icon.
 3. The extension writes `/Sources/ingest-requests/<request-id>.md`.
-4. The generator Worker fetches the URL and creates `/Sources/raw/...` plus `/Wiki/conversations/...`.
+4. The extension asks the VFS canister to authorize a one-time trigger grant for the same II principal.
+5. WikiBrowser consumes the grant through `https://wiki.kinic.xyz/api/url-ingest/trigger`, then triggers the generator Worker.
 
 Non-web pages such as `chrome://extensions` are rejected.
 
@@ -84,7 +85,7 @@ Confirm that `/Sources/raw/...` or `/Sources/ingest-requests/...` is created in 
 
 ## Generate Wiki Pages
 
-The extension only writes raw evidence. Generate wiki pages from the CLI:
+ChatGPT export only writes raw evidence. Generate wiki pages from the CLI:
 
 ```bash
 cargo run -p vfs-cli --bin vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
@@ -96,4 +97,4 @@ This command creates a wiki scaffold. Re-running it preserves existing `summary.
 
 - ChatGPT backend API shape can change.
 - Stopping an export can allow up to 2 in-flight conversations to finish saving.
-- ChatGPT raw-source writes are anonymous. Public distribution requires write authorization design before release.
+- ChatGPT raw-source export and URL ingest writes require writer access for the logged-in Internet Identity principal.

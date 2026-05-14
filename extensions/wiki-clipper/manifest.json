@@ -21,7 +21,7 @@
   ],
   "permissions": ["storage", "tabs", "activeTab", "offscreen", "contextMenus"],
   "host_permissions": [
-    "https://wiki-generator.kinic.xyz/*",
+    "https://wiki.kinic.xyz/*",
     "https://id.ai/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",

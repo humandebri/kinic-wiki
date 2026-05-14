@@ -154,6 +154,13 @@ pub struct WriteNodeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct UrlIngestTriggerGrantRequest {
+    pub database_id: String,
+    pub request_path: String,
+    pub nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct NodeMutationAck {
     pub path: String,
     pub kind: NodeKind,

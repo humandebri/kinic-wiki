@@ -4,7 +4,6 @@
 import { buildRawSource } from "./raw-source.js";
 import {
   DEFAULT_CANISTER_ID,
-  DEFAULT_GENERATOR_URL,
   DEFAULT_IC_HOST,
   URL_INGEST_STATUS_KEY,
   normalizedHttpUrl
@@ -13,8 +12,7 @@ import {
 const DEFAULT_CONFIG = {
   canisterId: DEFAULT_CANISTER_ID,
   databaseId: "",
-  host: DEFAULT_IC_HOST,
-  generatorUrl: DEFAULT_GENERATOR_URL
+  host: DEFAULT_IC_HOST
 };
 const ALLOWED_CHATGPT_ORIGINS = new Set(["https://chatgpt.com", "https://chat.openai.com"]);
 const ALLOWED_MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
@@ -137,6 +135,10 @@ export async function handleActionClick(tab, deps = defaultActionDeps()) {
     }
     const status = successStatus(response.result);
     await deps.writeStatus(status);
+    if (response.result?.triggered === false) {
+      await deps.setBadge("ERR", "#b42318");
+      return { ok: false, result: response.result, error: response.result.triggerError || "worker trigger failed" };
+    }
     await deps.setBadge("OK", "#137333");
     return { ok: true, result: response.result };
   } catch (error) {
@@ -250,12 +252,15 @@ async function writeLatestUrlIngestStatus(status) {
 }
 
 function successStatus(result) {
+  const triggered = result?.triggered !== false;
   return {
-    status: "ok",
+    status: triggered ? "ok" : "error",
     url: result?.url || "",
     title: result?.title || "",
     requestPath: result?.requestPath || "",
-    message: "URL ingest queued.",
+    message: triggered
+      ? "URL ingest queued and started."
+      : `Queued, trigger failed: ${result?.triggerError || "worker trigger failed"}`,
     updatedAt: new Date().toISOString()
   };
 }
@@ -418,8 +423,7 @@ async function loadConfig() {
   return {
     canisterId: DEFAULT_CONFIG.canisterId,
     databaseId: String(stored.databaseId || DEFAULT_CONFIG.databaseId),
-    host: DEFAULT_CONFIG.host,
-    generatorUrl: DEFAULT_CONFIG.generatorUrl
+    host: DEFAULT_CONFIG.host
   };
 }
 
