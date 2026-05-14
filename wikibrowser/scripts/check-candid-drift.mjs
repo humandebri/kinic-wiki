@@ -187,6 +187,7 @@ function normalizeResultAlias(value) {
   if (normalized === "Result_10") return "ResultChildren";
   if (normalized === "Result_1") return "ResultUnit";
   if (normalized === "Result_3") return "ResultCreateDatabase";
+  if (normalized === "Result_4") return "ResultDeleteNode";
   if (normalized === "Result_11") return "ResultMembers";
   if (normalized === "Result_12") return "ResultDatabases";
   if (normalized === "Result_16") return "ResultQueryContext";

@@ -69,6 +69,18 @@ export const expectedTypes = {
     kind: "record",
     fields: { created: "bool", node: "RecentNodeHit" }
   },
+  DeleteNodeRequest: {
+    kind: "record",
+    fields: {
+      path: "text",
+      expected_etag: "opt text",
+      database_id: "text"
+    }
+  },
+  DeleteNodeResult: {
+    kind: "record",
+    fields: { path: "text" }
+  },
   UrlIngestTriggerSessionRequest: {
     kind: "record",
     fields: { database_id: "text", session_nonce: "text" }
@@ -149,6 +161,7 @@ export const expectedTypes = {
   ResultMembers: { kind: "variant", cases: { Ok: "vec DatabaseMember", Err: "text" } },
   ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
   ResultWriteNode: { kind: "variant", cases: { Ok: "WriteNodeResult", Err: "text" } },
+  ResultDeleteNode: { kind: "variant", cases: { Ok: "DeleteNodeResult", Err: "text" } },
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
@@ -218,6 +231,7 @@ export const didTypeAliases = {
   ResultChildren: "Result_10",
   ResultCreateDatabase: "Result_3",
   ResultDatabases: "Result_12",
+  ResultDeleteNode: "Result_4",
   ResultMembers: "Result_11",
   ResultUnit: "Result_1",
   ResultWriteNode: "Result",
@@ -235,6 +249,7 @@ export const expectedMethods = {
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
   check_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionCheckRequest"], output: "ResultUnit", mode: "query" },
   create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
+  delete_node: { input: ["DeleteNodeRequest"], output: "ResultDeleteNode", mode: "update" },
   grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },

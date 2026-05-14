@@ -1,13 +1,22 @@
 "use client";
 
 import type { Identity } from "@icp-sdk/core/agent";
+import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Plus, Trash2, X } from "lucide-react";
 import { hrefForPath } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
-import type { ChildNode } from "@/lib/types";
+import type { ChildNode, DatabaseRole } from "@/lib/types";
 import { canExpandChildNode, errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
+
+type ExplorerMutationProps = {
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
+  onCreateMarkdownFile: (directoryPath: string, fileName: string) => Promise<boolean>;
+  onDeleteMarkdownNode: (node: ChildNode) => Promise<boolean>;
+};
 
 export function ExplorerTree({
   canisterId,
@@ -15,22 +24,33 @@ export function ExplorerTree({
   selectedPath,
   autoExpandSelected = true,
   readIdentity,
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
   readMode = null,
-  childNodesCache
+  childNodesCache,
+  onCreateMarkdownFile,
+  onDeleteMarkdownNode
 }: {
   canisterId: string;
   databaseId: string;
   selectedPath: string;
   autoExpandSelected?: boolean;
   readIdentity: Identity | null;
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
   readMode?: "anonymous" | null;
   childNodesCache: { current: Map<string, ChildNode[]> };
+  onCreateMarkdownFile: (directoryPath: string, fileName: string) => Promise<boolean>;
+  onDeleteMarkdownNode: (node: ChildNode) => Promise<boolean>;
 }) {
   const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
+  const mutationProps = { writeIdentity, currentDatabaseRole, databaseRoleError, onCreateMarkdownFile, onDeleteMarkdownNode };
   return (
     <div className="min-h-0 flex-1 space-y-1 overflow-auto p-2">
-      <TreeNode key={`${canisterId}:${databaseId}:/Wiki:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} />
-      <TreeNode key={`${canisterId}:${databaseId}:/Sources:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} />
+      <TreeNode key={`${canisterId}:${databaseId}:/Wiki:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Wiki")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} mutationProps={mutationProps} />
+      <TreeNode key={`${canisterId}:${databaseId}:/Sources:${readPrincipal ?? "anonymous"}`} canisterId={canisterId} databaseId={databaseId} node={rootChild("/Sources")} selectedPath={selectedPath} depth={0} autoExpandSelected={autoExpandSelected} readIdentity={readIdentity} readMode={readMode} childNodesCache={childNodesCache} mutationProps={mutationProps} />
     </div>
   );
 }
@@ -44,7 +64,8 @@ function TreeNode({
   autoExpandSelected,
   readIdentity,
   readMode,
-  childNodesCache
+  childNodesCache,
+  mutationProps
 }: {
   canisterId: string;
   databaseId: string;
@@ -55,6 +76,7 @@ function TreeNode({
   readIdentity: Identity | null;
   readMode: "anonymous" | null;
   childNodesCache: { current: Map<string, ChildNode[]> };
+  mutationProps: ExplorerMutationProps;
 }) {
   const readPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   const requestKey = nodeRequestKey(canisterId, databaseId, node.path, readPrincipal);
@@ -68,6 +90,13 @@ function TreeNode({
   const canExpand = canExpandChildNode(node);
   const selected = selectedPath === node.path;
   const selectedAncestor = node.path === selectedPath || selectedPath.startsWith(`${node.path}/`);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"create" | "delete" | null>(null);
+  const disabledReason = writeDisabledReason(readMode, mutationProps);
+  const canCreateMarkdown = isWikiDirectory(node);
+  const canDeleteMarkdown = isWikiMarkdownFile(node) && Boolean(node.etag);
 
   useEffect(() => {
     if (!autoExpandSelected || !selectedAncestor || autoExpandedKey.current === selectedPath) return;
@@ -122,6 +151,40 @@ function TreeNode({
     };
   }, [canisterId, databaseId, canExpand, childNodesCache, children.data, children.error, expanded, node.path, readIdentity, requestKey]);
 
+  async function submitCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionError(null);
+    const normalizedName = normalizeMarkdownFileName(draftName);
+    if (!normalizedName) {
+      setActionError("Enter a Markdown file name, not a path.");
+      return;
+    }
+    setBusyAction("create");
+    try {
+      const created = await mutationProps.onCreateMarkdownFile(node.path, normalizedName);
+      if (created) {
+        setCreateOpen(false);
+        setDraftName("");
+      }
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deleteNode() {
+    setActionError(null);
+    setBusyAction("delete");
+    try {
+      await mutationProps.onDeleteMarkdownNode(node);
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <div>
       <div
@@ -138,7 +201,66 @@ function TreeNode({
         >
           {node.name}
         </Link>
+        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          {canCreateMarkdown ? (
+            <button
+              aria-label={`New Markdown under ${node.path}`}
+              className="rounded p-1 text-muted hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={Boolean(disabledReason) || busyAction !== null}
+              title={disabledReason ?? "New Markdown"}
+              type="button"
+              onClick={() => {
+                setActionError(null);
+                setCreateOpen(true);
+                setExpanded(true);
+              }}
+            >
+              <Plus size={13} />
+            </button>
+          ) : null}
+          {canDeleteMarkdown ? (
+            <button
+              aria-label={`Delete ${node.path}`}
+              className="rounded p-1 text-muted hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={Boolean(disabledReason) || busyAction !== null}
+              title={disabledReason ?? "Delete Markdown"}
+              type="button"
+              onClick={() => void deleteNode()}
+            >
+              <Trash2 size={13} />
+            </button>
+          ) : null}
+        </div>
       </div>
+      {createOpen ? (
+        <form className="mt-1 flex items-center gap-1 px-2" style={{ paddingLeft: `${30 + depth * 16}px` }} onSubmit={submitCreate}>
+          <input
+            aria-label="Markdown file name"
+            className="min-w-0 flex-1 rounded-md border border-line bg-white px-2 py-1 text-xs outline-none focus:border-accent"
+            disabled={busyAction === "create"}
+            placeholder="new-note.md"
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+          />
+          <button className="rounded p-1 text-accent hover:bg-blue-50 disabled:opacity-40" disabled={busyAction === "create"} title="Create" type="submit">
+            <Check size={13} />
+          </button>
+          <button
+            className="rounded p-1 text-muted hover:bg-canvas disabled:opacity-40"
+            disabled={busyAction === "create"}
+            title="Cancel"
+            type="button"
+            onClick={() => {
+              setCreateOpen(false);
+              setDraftName("");
+              setActionError(null);
+            }}
+          >
+            <X size={13} />
+          </button>
+        </form>
+      ) : null}
+      {actionError ? <TreeStatus depth={depth + 1} label={actionError} /> : null}
       {expanded && canExpand ? (
         <ChildrenList
           canisterId={canisterId}
@@ -150,6 +272,7 @@ function TreeNode({
           readIdentity={readIdentity}
           readMode={readMode}
           childNodesCache={childNodesCache}
+          mutationProps={mutationProps}
         />
       ) : null}
     </div>
@@ -178,7 +301,8 @@ function ChildrenList({
   autoExpandSelected,
   readIdentity,
   readMode,
-  childNodesCache
+  childNodesCache,
+  mutationProps
 }: {
   canisterId: string;
   databaseId: string;
@@ -189,6 +313,7 @@ function ChildrenList({
   readIdentity: Identity | null;
   readMode: "anonymous" | null;
   childNodesCache: { current: Map<string, ChildNode[]> };
+  mutationProps: ExplorerMutationProps;
 }) {
   return (
     <div>
@@ -206,6 +331,7 @@ function ChildrenList({
           readIdentity={readIdentity}
           readMode={readMode}
           childNodesCache={childNodesCache}
+          mutationProps={mutationProps}
         />
       ))}
     </div>
@@ -223,4 +349,27 @@ function TreeStatus({ depth, label }: { depth: number; label: string }) {
 function directoryIcon(isDirectory: boolean, expanded: boolean) {
   if (!isDirectory) return <FileText size={15} className="text-muted" />;
   return expanded ? <FolderOpen size={15} className="text-accent" /> : <Folder size={15} className="text-muted" />;
+}
+
+function writeDisabledReason(readMode: "anonymous" | null, props: ExplorerMutationProps): string | null {
+  if (readMode === "anonymous") return "Switch to authenticated mode to write.";
+  if (!props.writeIdentity) return "Login with Internet Identity to write.";
+  if (props.databaseRoleError) return props.databaseRoleError;
+  if (!props.currentDatabaseRole) return "Database role unavailable.";
+  if (props.currentDatabaseRole !== "writer" && props.currentDatabaseRole !== "owner") return "Writer or owner access required.";
+  return null;
+}
+
+function isWikiDirectory(node: ChildNode): boolean {
+  return node.kind === "directory" && (node.path === "/Wiki" || node.path.startsWith("/Wiki/"));
+}
+
+function isWikiMarkdownFile(node: ChildNode): boolean {
+  return node.kind === "file" && !node.isVirtual && node.path.startsWith("/Wiki/") && node.path.endsWith(".md");
+}
+
+function normalizeMarkdownFileName(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed === "." || trimmed === ".." || trimmed === ".md") return null;
+  return trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
 }

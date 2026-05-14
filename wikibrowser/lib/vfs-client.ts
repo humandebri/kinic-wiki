@@ -7,6 +7,8 @@ import { idlFactory } from "@/lib/vfs-idl";
 import type {
   CanisterHealth,
   ChildNode,
+  DeleteNodeRequest,
+  DeleteNodeResult,
   DatabaseMember,
   DatabaseRole,
   DatabaseStatus,
@@ -89,6 +91,16 @@ type RawWriteNodeResult = {
   node: RawRecent;
 };
 
+type RawDeleteNodeRequest = {
+  database_id: string;
+  path: string;
+  expected_etag: [] | [string];
+};
+
+type RawDeleteNodeResult = {
+  path: string;
+};
+
 type RawUrlIngestTriggerSessionRequest = {
   database_id: string;
   session_nonce: string;
@@ -120,6 +132,7 @@ type VfsActor = {
   canister_health: () => Promise<RawCanisterHealth>;
   check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
+  delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
   list_databases: () => Promise<{ Ok: RawDatabaseSummary[] } | { Err: string }>;
   list_database_members: (databaseId: string) => Promise<{ Ok: RawDatabaseMember[] } | { Err: string }>;
@@ -306,6 +319,21 @@ export async function writeNodeAuthenticated(canisterId: string, identity: Ident
       created: result.Ok.created,
       node: normalizeRecentNode(result.Ok.node)
     };
+  });
+}
+
+export async function deleteNodeAuthenticated(canisterId: string, identity: Identity, request: DeleteNodeRequest): Promise<DeleteNodeResult> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.delete_node({
+      database_id: request.databaseId,
+      path: request.path,
+      expected_etag: request.expectedEtag ? [request.expectedEtag] : []
+    });
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return result.Ok;
   });
 }
 

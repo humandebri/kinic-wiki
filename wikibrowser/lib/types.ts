@@ -25,6 +25,16 @@ export type WriteNodeResult = {
   node: RecentNode;
 };
 
+export type DeleteNodeRequest = {
+  databaseId: string;
+  path: string;
+  expectedEtag: string;
+};
+
+export type DeleteNodeResult = {
+  path: string;
+};
+
 export type UrlIngestTriggerSessionRequest = {
   databaseId: string;
   sessionNonce: string;

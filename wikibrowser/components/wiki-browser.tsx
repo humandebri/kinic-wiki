@@ -18,9 +18,9 @@ import { RecentPanel } from "@/components/recent-panel";
 import { SourcesPanel } from "@/components/sources-panel";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import { readBrowserNodeCache } from "@/lib/browser-node-cache";
-import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch } from "@/lib/paths";
+import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch, parentPath } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
-import type { ChildNode, DatabaseSummary, NodeContext, WikiNode } from "@/lib/types";
+import type { ChildNode, DatabaseRole, DatabaseSummary, NodeContext, WikiNode } from "@/lib/types";
 import { listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
 import {
   errorHint,
@@ -81,6 +81,7 @@ export function WikiBrowser() {
   const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [editState, setEditState] = useState<DocumentEditState>({ dirty: false, saveState: "idle" });
+  const [explorerRevision, setExplorerRevision] = useState(0);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
   const [memberDatabases, setMemberDatabases] = useState<DatabaseSummary[]>([]);
   const [databaseListError, setDatabaseListError] = useState<string | null>(null);
@@ -254,6 +255,12 @@ export function WikiBrowser() {
     return data.node;
   }, [canisterId, databaseId, effectiveReadIdentity, readPrincipal, selectedPath]);
 
+  const invalidateBrowserCaches = useCallback(() => {
+    nodeContextCache.current.clear();
+    childNodesCache.current.clear();
+    setExplorerRevision((current) => current + 1);
+  }, []);
+
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
   const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
@@ -271,6 +278,47 @@ export function WikiBrowser() {
     () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
     [databaseId, memberDatabases, readIdentity]
   );
+  const createMarkdownFile = useCallback(async (directoryPath: string, fileName: string) => {
+    if (!canLeaveDirtyEdit()) return false;
+    if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to create Markdown files.");
+    if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
+    const nextPath = wikiMarkdownChildPath(directoryPath, fileName);
+    const { writeNodeAuthenticated } = await import("@/lib/vfs-client");
+    await writeNodeAuthenticated(canisterId, readIdentity, {
+      databaseId,
+      path: nextPath,
+      kind: "file",
+      content: "",
+      metadataJson: "{}",
+      expectedEtag: null
+    });
+    invalidateBrowserCaches();
+    setEditState(EMPTY_EDIT_STATE);
+    router.replace(hrefForPath(canisterId, databaseId, nextPath, "edit", tab, undefined, undefined, readMode));
+    return true;
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, setEditState, tab]);
+  const deleteMarkdownNode = useCallback(async (target: ChildNode) => {
+    if (!canLeaveDirtyEdit()) return false;
+    if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to delete Markdown files.");
+    if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
+    if (!isDeletableWikiMarkdown(target)) throw new Error("Only /Wiki Markdown files can be deleted.");
+    if (!target.etag) throw new Error("Cannot delete a node without an etag.");
+    if (!window.confirm(`Delete ${target.path}?`)) return false;
+    const { deleteNodeAuthenticated } = await import("@/lib/vfs-client");
+    await deleteNodeAuthenticated(canisterId, readIdentity, {
+      databaseId,
+      path: target.path,
+      expectedEtag: target.etag
+    });
+    invalidateBrowserCaches();
+    setEditState(EMPTY_EDIT_STATE);
+    if (selectedPath === target.path) {
+      router.replace(hrefForPath(canisterId, databaseId, parentPath(target.path) ?? "/Wiki", undefined, tab, undefined, undefined, readMode));
+    }
+    return true;
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, selectedPath, setEditState, tab]);
 
   useEffect(() => {
     const loadError = currentNode.error || currentChildren.error;
@@ -327,7 +375,13 @@ export function WikiBrowser() {
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
             readIdentity={readIdentity}
             effectiveReadIdentity={effectiveReadIdentity}
+            writeIdentity={readIdentity}
+            currentDatabaseRole={currentDatabaseRole}
+            databaseRoleError={readIdentity && !currentDatabaseRole ? databaseListError : null}
             readMode={readMode}
+            explorerRevision={explorerRevision}
+            onCreateMarkdownFile={createMarkdownFile}
+            onDeleteMarkdownNode={deleteMarkdownNode}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
@@ -404,7 +458,13 @@ function LeftPane({
   autoExpandExplorer,
   readIdentity,
   effectiveReadIdentity,
-  readMode
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
+  readMode,
+  explorerRevision,
+  onCreateMarkdownFile,
+  onDeleteMarkdownNode
 }: {
   tab: ModeTab;
   canisterId: string;
@@ -415,12 +475,50 @@ function LeftPane({
   autoExpandExplorer: boolean;
   readIdentity: Identity | null;
   effectiveReadIdentity: Identity | null;
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
   readMode: "anonymous" | null;
+  explorerRevision: number;
+  onCreateMarkdownFile: (directoryPath: string, fileName: string) => Promise<boolean>;
+  onDeleteMarkdownNode: (node: ChildNode) => Promise<boolean>;
 }) {
   if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} readMode={readMode} />;
   if (tab === "ingest") return <IngestPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
   if (tab === "sources") return <SourcesPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} writeIdentity={readIdentity} readMode={readMode} />;
-  return <ExplorerTree canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} autoExpandSelected={autoExpandExplorer} readIdentity={effectiveReadIdentity} readMode={readMode} childNodesCache={childNodesCache} />;
+  return (
+    <ExplorerTree
+      key={explorerRevision}
+      canisterId={canisterId}
+      databaseId={databaseId}
+      selectedPath={selectedPath}
+      autoExpandSelected={autoExpandExplorer}
+      readIdentity={effectiveReadIdentity}
+      writeIdentity={writeIdentity}
+      currentDatabaseRole={currentDatabaseRole}
+      databaseRoleError={databaseRoleError}
+      readMode={readMode}
+      childNodesCache={childNodesCache}
+      onCreateMarkdownFile={onCreateMarkdownFile}
+      onDeleteMarkdownNode={onDeleteMarkdownNode}
+    />
+  );
+}
+
+function wikiMarkdownChildPath(directoryPath: string, fileName: string): string {
+  if (directoryPath !== "/Wiki" && !directoryPath.startsWith("/Wiki/")) {
+    throw new Error("Markdown files can only be created under /Wiki.");
+  }
+  const trimmed = fileName.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed === "." || trimmed === ".." || trimmed === ".md") {
+    throw new Error("Enter a Markdown file name, not a path.");
+  }
+  const markdownFileName = trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
+  return `${directoryPath}/${markdownFileName}`;
+}
+
+function isDeletableWikiMarkdown(node: ChildNode): boolean {
+  return node.kind === "file" && !node.isVirtual && node.path.startsWith("/Wiki/") && node.path.endsWith(".md");
 }
 
 function TopBar({

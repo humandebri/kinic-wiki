@@ -140,6 +140,11 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     metadata_json: idl.Text,
     database_id: idl.Text
   });
+  const DeleteNodeRequest = idl.Record({
+    path: idl.Text,
+    expected_etag: idl.Opt(idl.Text),
+    database_id: idl.Text
+  });
   const UrlIngestTriggerSessionRequest = idl.Record({
     database_id: idl.Text,
     session_nonce: idl.Text
@@ -186,6 +191,8 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultMembers = idl.Variant({ Ok: idl.Vec(DatabaseMember), Err: idl.Text });
   const WriteNodeResult = idl.Record({ created: idl.Bool, node: RecentNodeHit });
   const ResultWriteNode = idl.Variant({ Ok: WriteNodeResult, Err: idl.Text });
+  const DeleteNodeResult = idl.Record({ path: idl.Text });
+  const ResultDeleteNode = idl.Variant({ Ok: DeleteNodeResult, Err: idl.Text });
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
 
   return idl.Service({
@@ -193,6 +200,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
     check_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionCheckRequest], [ResultUnit], ["query"]),
     create_database: idl.Func([], [ResultCreateDatabase], []),
+    delete_node: idl.Func([DeleteNodeRequest], [ResultDeleteNode], []),
     grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
