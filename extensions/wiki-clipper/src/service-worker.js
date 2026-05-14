@@ -22,8 +22,12 @@ const MAX_MESSAGE_COUNT = 500;
 const MAX_MESSAGE_CONTENT_CHARS = 200_000;
 const MAX_RAW_SOURCE_CHARS = 1_500_000;
 const SETTINGS_OPEN_THROTTLE_MS = 2_000;
+const SETTINGS_MENU_ID = "kinic-wiki-clipper-settings";
+const URL_INGEST_IN_FLIGHT_KEY = "kinic-url-ingest-in-flight-v1";
+const URL_INGEST_IN_FLIGHT_TTL_MS = 2 * 60 * 1000;
 let offscreenBridge = defaultOffscreenBridge;
 let lastSettingsOpenedAt = 0;
+const activeUrlIngests = new Set();
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -41,6 +45,25 @@ if (globalThis.chrome?.action?.onClicked) {
       writeLatestUrlIngestStatus(errorStatus(error instanceof Error ? error.message : String(error)));
       setActionBadge("ERR", "#b42318");
     });
+  });
+}
+
+if (globalThis.chrome?.runtime?.onInstalled) {
+  chrome.runtime.onInstalled.addListener(() => {
+    createSettingsContextMenu().catch((error) => {
+      console.warn("failed to create settings context menu", error);
+    });
+  });
+}
+
+if (globalThis.chrome?.contextMenus?.onClicked) {
+  chrome.contextMenus.onClicked.addListener((info) => {
+    if (info?.menuItemId === SETTINGS_MENU_ID) {
+      chrome.runtime.openOptionsPage();
+    }
+  });
+  createSettingsContextMenu().catch((error) => {
+    console.warn("failed to create settings context menu", error);
   });
 }
 
@@ -76,6 +99,8 @@ export async function handleMessage(message, sender) {
 }
 
 export async function handleActionClick(tab, deps = defaultActionDeps()) {
+  let inFlightKey = null;
+  let reservedInFlight = false;
   try {
     const url = normalizedHttpUrl(tab?.url);
     await deps.setBadge("...", "#444444");
@@ -85,6 +110,14 @@ export async function handleActionClick(tab, deps = defaultActionDeps()) {
       await deps.setBadge("SET", "#5f6368");
       await deps.openSettings();
       return { ok: false, error: "config required" };
+    }
+    inFlightKey = urlIngestInFlightKey(config.databaseId, url);
+    reservedInFlight = await deps.reserveUrlIngest(inFlightKey);
+    if (!reservedInFlight) {
+      const status = busyStatus(url);
+      await deps.writeStatus(status);
+      await deps.setBadge("BUSY", "#5f6368");
+      return { ok: false, error: status.message };
     }
     await deps.ensureOffscreen();
     const response = await deps.sendOffscreen({
@@ -111,6 +144,10 @@ export async function handleActionClick(tab, deps = defaultActionDeps()) {
     await deps.writeStatus(errorStatus(message, tab?.url || ""));
     await deps.setBadge("ERR", "#b42318");
     return { ok: false, error: message };
+  } finally {
+    if (reservedInFlight && inFlightKey) {
+      await deps.releaseUrlIngest(inFlightKey);
+    }
   }
 }
 
@@ -241,6 +278,15 @@ function setupRequiredStatus(url = "") {
   };
 }
 
+function busyStatus(url = "") {
+  return {
+    status: "busy",
+    url,
+    message: "URL ingest is already running for this page.",
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function defaultActionDeps() {
   return {
     loadConfig,
@@ -248,8 +294,36 @@ function defaultActionDeps() {
     sendOffscreen: (message) => chrome.runtime.sendMessage(message),
     writeStatus: writeLatestUrlIngestStatus,
     setBadge: setActionBadge,
-    openSettings: openSettingsOnce
+    openSettings: openSettingsOnce,
+    reserveUrlIngest,
+    releaseUrlIngest
   };
+}
+
+async function createSettingsContextMenu() {
+  if (!globalThis.chrome?.contextMenus) return;
+  if (typeof chrome.contextMenus.remove === "function") {
+    await chrome.contextMenus.remove(SETTINGS_MENU_ID).catch(() => {});
+  }
+  chrome.contextMenus.create({
+    id: SETTINGS_MENU_ID,
+    title: "Settings",
+    contexts: ["action"]
+  });
+}
+
+export function createSettingsContextMenuForTest() {
+  return createSettingsContextMenu();
+}
+
+export function handleContextMenuClickForTest(info) {
+  if (info?.menuItemId === SETTINGS_MENU_ID) {
+    chrome.runtime.openOptionsPage();
+  }
+}
+
+export function resetUrlIngestInFlightForTest() {
+  activeUrlIngests.clear();
 }
 
 async function ensureOffscreen() {
@@ -383,6 +457,49 @@ async function openSettingsOnce(open = openSettings) {
   if (now - lastSettingsOpenedAt < SETTINGS_OPEN_THROTTLE_MS) return;
   lastSettingsOpenedAt = now;
   await open();
+}
+
+async function reserveUrlIngest(key) {
+  if (activeUrlIngests.has(key)) return false;
+  const current = await readInFlightRecord();
+  const now = Date.now();
+  if (current?.key === key && current.expiresAt > now) {
+    return false;
+  }
+  await writeInFlightRecord({ key, expiresAt: now + URL_INGEST_IN_FLIGHT_TTL_MS });
+  activeUrlIngests.add(key);
+  return true;
+}
+
+async function releaseUrlIngest(key) {
+  activeUrlIngests.delete(key);
+  const current = await readInFlightRecord();
+  if (current?.key === key) {
+    await chrome.storage.session.remove(URL_INGEST_IN_FLIGHT_KEY);
+  }
+}
+
+async function readInFlightRecord() {
+  if (!globalThis.chrome?.storage?.session) return null;
+  const values = await chrome.storage.session.get(URL_INGEST_IN_FLIGHT_KEY);
+  const raw = values?.[URL_INGEST_IN_FLIGHT_KEY];
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.key !== "string" || typeof parsed?.expiresAt !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeInFlightRecord(record) {
+  if (!globalThis.chrome?.storage?.session) return;
+  await chrome.storage.session.set({ [URL_INGEST_IN_FLIGHT_KEY]: JSON.stringify(record) });
+}
+
+function urlIngestInFlightKey(databaseId, url) {
+  return `${databaseId}:${url}`;
 }
 
 function requireSessionKey(key) {

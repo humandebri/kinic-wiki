@@ -19,6 +19,7 @@ test("manifest exposes settings as options page without popup", () => {
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
   assert.equal(manifest.options_page, "popup/popup.html");
   assert.equal(manifest.action.default_popup, undefined);
+  assert.ok(manifest.permissions.includes("contextMenus"));
 });
 
 test("database dropdown options include only hot owner and writer databases", () => {

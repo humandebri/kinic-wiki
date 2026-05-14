@@ -19,7 +19,7 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["storage", "tabs", "activeTab", "offscreen"],
+  "permissions": ["storage", "tabs", "activeTab", "offscreen", "contextMenus"],
   "host_permissions": [
     "https://wiki-generator.kinic.xyz/*",
     "https://id.ai/*",

@@ -3,7 +3,15 @@
 // Why: The capture extension must call the current canister API shape.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleActionClick, handleMessage, resetSettingsOpenThrottleForTest, setOffscreenBridgeForTest } from "../src/service-worker.js";
+import {
+  createSettingsContextMenuForTest,
+  handleActionClick,
+  handleContextMenuClickForTest,
+  handleMessage,
+  resetSettingsOpenThrottleForTest,
+  resetUrlIngestInFlightForTest,
+  setOffscreenBridgeForTest
+} from "../src/service-worker.js";
 
 test("save-source delegates raw source writes to offscreen", async () => {
   const restore = installChromeStorage(memoryStorage());
@@ -169,6 +177,108 @@ test("action click sends http tab to offscreen", async () => {
   assert.equal(messages[0].config.databaseId, "team-db");
 });
 
+test("context menu opens settings without starting URL ingest", async () => {
+  const createdMenus = [];
+  let optionsOpened = 0;
+  const restore = installChromeForContextMenu(createdMenus, () => {
+    optionsOpened += 1;
+  });
+  try {
+    await createSettingsContextMenuForTest();
+    handleContextMenuClickForTest({ menuItemId: "kinic-wiki-clipper-settings" });
+
+    assert.deepEqual(createdMenus, [{ id: "kinic-wiki-clipper-settings", title: "Settings", contexts: ["action"] }]);
+    assert.equal(optionsOpened, 1);
+  } finally {
+    restore();
+  }
+});
+
+test("action click rejects duplicate in-flight URL ingest", async () => {
+  resetUrlIngestInFlightForTest();
+  const deferred = createDeferred();
+  const restore = installChromeForAction({
+    sendOffscreen(message, callCount) {
+      if (callCount === 1) return deferred.promise;
+      return { ok: true, result: { requestPath: "/Sources/ingest-requests/2.md", url: message.tab.url } };
+    }
+  });
+  try {
+    const first = handleActionClick({ url: "https://example.com/#section", title: "Example" });
+    await waitUntil(() => restore.messages.length === 1);
+
+    const duplicate = await handleActionClick({ url: "https://example.com/", title: "Example" });
+    assert.equal(duplicate.ok, false);
+    assert.equal(duplicate.error, "URL ingest is already running for this page.");
+    assert.equal(restore.messages.length, 1);
+    assert.ok(restore.badges.some((badge) => badge.text === "BUSY"));
+
+    deferred.resolve({ ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: "https://example.com/" } });
+    assert.equal((await first).ok, true);
+
+    const retry = await handleActionClick({ url: "https://example.com/", title: "Example" });
+    assert.equal(retry.ok, true);
+    assert.equal(restore.messages.length, 2);
+  } finally {
+    resetUrlIngestInFlightForTest();
+    restore();
+  }
+});
+
+test("action click allows a different URL while another URL is in flight", async () => {
+  resetUrlIngestInFlightForTest();
+  const deferred = createDeferred();
+  const restore = installChromeForAction({
+    sendOffscreen(message, callCount) {
+      if (callCount === 1) return deferred.promise;
+      return { ok: true, result: { requestPath: "/Sources/ingest-requests/2.md", url: message.tab.url } };
+    }
+  });
+  try {
+    const first = handleActionClick({ url: "https://example.com/a", title: "A" });
+    await waitUntil(() => restore.messages.length === 1);
+
+    const second = await handleActionClick({ url: "https://example.com/b", title: "B" });
+    assert.equal(second.ok, true);
+    assert.equal(restore.messages.length, 2);
+    assert.equal(restore.messages[0].tab.url, "https://example.com/a");
+    assert.equal(restore.messages[1].tab.url, "https://example.com/b");
+
+    deferred.resolve({ ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: "https://example.com/a" } });
+    assert.equal((await first).ok, true);
+  } finally {
+    resetUrlIngestInFlightForTest();
+    restore();
+  }
+});
+
+test("action click honors session in-flight TTL", async () => {
+  resetUrlIngestInFlightForTest();
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem(
+    "kinic-url-ingest-in-flight-v1",
+    JSON.stringify({ key: "team-db:https://example.com/", expiresAt: Date.now() + 120_000 })
+  );
+  const restore = installChromeForAction({ sessionStorage });
+  try {
+    const busy = await handleActionClick({ url: "https://example.com/", title: "Example" });
+    assert.equal(busy.ok, false);
+    assert.equal(busy.error, "URL ingest is already running for this page.");
+    assert.equal(restore.messages.length, 0);
+
+    sessionStorage.setItem(
+      "kinic-url-ingest-in-flight-v1",
+      JSON.stringify({ key: "team-db:https://example.com/", expiresAt: Date.now() - 1 })
+    );
+    const response = await handleActionClick({ url: "https://example.com/", title: "Example" });
+    assert.equal(response.ok, true);
+    assert.equal(restore.messages.length, 1);
+  } finally {
+    resetUrlIngestInFlightForTest();
+    restore();
+  }
+});
+
 function capture() {
   return {
     provider: "chatgpt",
@@ -277,6 +387,99 @@ function installChromeForSettings(syncStorage, settingsTabs) {
   };
 }
 
+function installChromeForContextMenu(createdMenus, onOpenOptions) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      contextMenus: {
+        async remove() {},
+        create(item) {
+          createdMenus.push(item);
+        }
+      },
+      runtime: {
+        openOptionsPage: onOpenOptions
+      }
+    }
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+}
+
+function installChromeForAction({ databaseId = "team-db", sessionStorage = memoryStorage(), sendOffscreen } = {}) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  const syncStorage = memoryStorage();
+  syncStorage.setItem("databaseId", databaseId);
+  const badges = [];
+  const messages = [];
+  let sendCount = 0;
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      action: {
+        async setBadgeText({ text }) {
+          badges.push({ text });
+        },
+        async setBadgeBackgroundColor() {}
+      },
+      offscreen: {
+        Reason: { DOM_PARSER: "DOM_PARSER" },
+        async createDocument() {}
+      },
+      runtime: {
+        getURL(path) {
+          return `chrome-extension://id/${path}`;
+        },
+        async getContexts() {
+          return [];
+        },
+        async sendMessage(message) {
+          sendCount += 1;
+          messages.push(message);
+          if (sendOffscreen) return sendOffscreen(message, sendCount);
+          return { ok: true, result: { requestPath: "/Sources/ingest-requests/1.md", url: message.tab.url } };
+        },
+        async openOptionsPage() {}
+      },
+      storage: {
+        sync: storageArea(syncStorage),
+        session: storageArea(sessionStorage)
+      }
+    }
+  });
+  const restore = () => {
+    if (descriptor) Object.defineProperty(globalThis, "chrome", descriptor);
+    else delete globalThis.chrome;
+  };
+  restore.badges = badges;
+  restore.messages = messages;
+  return restore;
+}
+
+function storageArea(storage) {
+  return {
+    async get(defaults) {
+      if (typeof defaults === "string") {
+        return { [defaults]: storage.getItem(defaults) };
+      }
+      return { ...defaults, ...Object.fromEntries(storage.entries()) };
+    },
+    async set(values) {
+      for (const [key, value] of Object.entries(values)) {
+        storage.setItem(key, value);
+      }
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        storage.removeItem(key);
+      }
+    }
+  };
+}
+
 function actionDeps(overrides = {}) {
   return {
     loadConfig: async () => ({
@@ -290,6 +493,26 @@ function actionDeps(overrides = {}) {
     writeStatus: async () => {},
     setBadge: async () => {},
     openSettings: async () => {},
+    reserveUrlIngest: async () => true,
+    releaseUrlIngest: async () => {},
     ...overrides
   };
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitUntil(predicate) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.fail("condition was not met");
 }
