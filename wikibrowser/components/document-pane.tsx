@@ -10,6 +10,7 @@ import { hrefForPath, hrefForSearch } from "@/lib/paths";
 import { splitMarkdownPreviewSections } from "@/lib/markdown-sections";
 import type { ChildNode, DatabaseRole, WikiNode } from "@/lib/types";
 import type { LoadState, ModeTab, PathLoadState, ViewMode } from "@/lib/wiki-helpers";
+import { folderIndexPath, visibleChildren } from "@/lib/folder-index";
 import { ErrorBox } from "@/components/panel";
 import type { EditorSaveState } from "@/components/markdown-editor";
 import { MarkdownEditDocument } from "@/components/markdown-edit-document";
@@ -34,6 +35,7 @@ export function DocumentHeader({
   view,
   onViewChange,
   isDirectory,
+  canEditDirectory,
   editState
 }: {
   canisterId: string;
@@ -42,6 +44,7 @@ export function DocumentHeader({
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
   isDirectory: boolean;
+  canEditDirectory: boolean;
   editState: DocumentEditState;
 }) {
   return (
@@ -59,7 +62,7 @@ export function DocumentHeader({
       <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
         <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
         <ViewButton active={view === "raw"} label="Raw" onClick={() => onViewChange("raw")} />
-        {!isDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
+        {!isDirectory || canEditDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
       </div>
     </div>
   );
@@ -72,6 +75,7 @@ function displayPath(path: string): string {
 export function DocumentPane({
   databaseId,
   node,
+  folderIndexNode,
   childrenState,
   view,
   canisterId,
@@ -82,11 +86,13 @@ export function DocumentPane({
   currentDatabaseRole,
   databaseRoleError,
   onNodeSaved,
+  onFolderIndexSaved,
   onEditStateChange,
   tab,
   readMode = null
 }: {
   node: PathLoadState<WikiNode>;
+  folderIndexNode: PathLoadState<WikiNode>;
   childrenState: PathLoadState<ChildNode[]>;
   view: ViewMode;
   canisterId: string;
@@ -98,6 +104,7 @@ export function DocumentPane({
   currentDatabaseRole?: DatabaseRole | null;
   databaseRoleError?: string | null;
   onNodeSaved?: () => Promise<WikiNode>;
+  onFolderIndexSaved?: () => Promise<WikiNode>;
   onEditStateChange?: (state: DocumentEditState) => void;
   tab?: ModeTab;
   readMode?: "anonymous" | null;
@@ -109,7 +116,23 @@ export function DocumentPane({
   if (node.data?.kind === "folder") {
     return (
       <PaneBody>
-        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />
+        <FolderDocument
+          folder={node.data}
+          folderIndexNode={folderIndexNode}
+          childrenState={childrenState}
+          view={view}
+          canisterId={canisterId}
+          databaseId={databaseId}
+          readMode={readMode}
+          tab={tab}
+          authReady={Boolean(authReady)}
+          onLogin={onLogin}
+          writeIdentity={writeIdentity ?? null}
+          currentDatabaseRole={currentDatabaseRole ?? null}
+          databaseRoleError={databaseRoleError ?? null}
+          onFolderIndexSaved={onFolderIndexSaved}
+          onEditStateChange={onEditStateChange}
+        />
       </PaneBody>
     );
   }
@@ -137,7 +160,7 @@ export function DocumentPane({
   if (childrenState.data) {
     return (
       <PaneBody>
-        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />
+        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} parentPath={childrenState.path} />
       </PaneBody>
     );
   }
@@ -498,42 +521,205 @@ function LargeContentState({
   );
 }
 
+function FolderDocument({
+  folder,
+  folderIndexNode,
+  childrenState,
+  view,
+  canisterId,
+  databaseId,
+  readMode,
+  tab,
+  authReady,
+  onLogin,
+  writeIdentity,
+  currentDatabaseRole,
+  databaseRoleError,
+  onFolderIndexSaved,
+  onEditStateChange
+}: {
+  folder: WikiNode;
+  folderIndexNode: PathLoadState<WikiNode>;
+  childrenState: LoadState<ChildNode[]>;
+  view: ViewMode;
+  canisterId: string;
+  databaseId: string;
+  readMode: "anonymous" | null;
+  tab?: ModeTab;
+  authReady: boolean;
+  onLogin?: () => void;
+  writeIdentity: Identity | null;
+  currentDatabaseRole: DatabaseRole | null;
+  databaseRoleError: string | null;
+  onFolderIndexSaved?: () => Promise<WikiNode>;
+  onEditStateChange?: (state: DocumentEditState) => void;
+}) {
+  const indexNode = folderIndexNode.data ?? emptyFolderIndexNode(folder.path);
+  const contentBytes = new TextEncoder().encode(indexNode.content).length;
+  const isLargeContent = contentBytes > LARGE_CONTENT_BYTES;
+  if (!isWikiPath(folder.path)) {
+    return <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} parentPath={folder.path} />;
+  }
+  if (view === "edit") {
+    return (
+      <EditDocument
+        canisterId={canisterId}
+        databaseId={databaseId}
+        node={indexNode}
+        isLargeContent={isLargeContent}
+        contentBytes={contentBytes}
+        readMode={readMode}
+        tab={tab}
+        authReady={authReady}
+        onLogin={onLogin}
+        writeIdentity={writeIdentity}
+        currentDatabaseRole={currentDatabaseRole}
+        databaseRoleError={databaseRoleError}
+        onNodeSaved={onFolderIndexSaved}
+        onEditStateChange={onEditStateChange}
+      />
+    );
+  }
+  return (
+    <div className="h-full overflow-auto p-6">
+      <div className="space-y-6">
+        <FolderIndexSection
+          folderPath={folder.path}
+          folderIndexNode={folderIndexNode}
+          view={view}
+          isLargeContent={isLargeContent}
+          contentBytes={contentBytes}
+          canisterId={canisterId}
+          databaseId={databaseId}
+          readMode={readMode}
+        />
+        <DirectoryChildrenCard childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} parentPath={folder.path} />
+      </div>
+    </div>
+  );
+}
+
+function FolderIndexSection({
+  folderPath,
+  folderIndexNode,
+  view,
+  isLargeContent,
+  contentBytes,
+  canisterId,
+  databaseId,
+  readMode
+}: {
+  folderPath: string;
+  folderIndexNode: PathLoadState<WikiNode>;
+  view: "preview" | "raw";
+  isLargeContent: boolean;
+  contentBytes: number;
+  canisterId: string;
+  databaseId: string;
+  readMode: "anonymous" | null;
+}) {
+  if (folderIndexNode.loading) {
+    return <p className="text-sm text-muted">Loading folder note...</p>;
+  }
+  if (folderIndexNode.error) {
+    return <ErrorBox message={folderIndexNode.error} hint={folderIndexNode.hint} />;
+  }
+  if (!folderIndexNode.data) {
+    return null;
+  }
+  const indexNode = folderIndexNode.data;
+  return (
+    <section className="rounded-2xl border border-line bg-paper p-5">
+      <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Folder note</p>
+      <div className="mt-4">
+        {view === "raw" ? (
+          <RawContent content={indexNode.content} isLargeContent={isLargeContent} contentBytes={contentBytes} />
+        ) : isLargeContent ? (
+          <LargeMarkdownPreview key={`${indexNode.path}:${indexNode.etag}`} content={indexNode.content} contentBytes={contentBytes} canisterId={canisterId} databaseId={databaseId} nodePath={folderPath} readMode={readMode} />
+        ) : (
+          <div className="markdown-body mx-auto max-w-3xl">
+            <MarkdownPreview canisterId={canisterId} databaseId={databaseId} nodePath={folderPath} content={indexNode.content} readMode={readMode} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function DirectoryDocument({
   childrenState,
   canisterId,
   databaseId,
-  readMode
+  readMode,
+  parentPath
 }: {
   childrenState: LoadState<ChildNode[]>;
   canisterId: string;
   databaseId: string;
   readMode: "anonymous" | null;
+  parentPath: string;
 }) {
   return (
     <div className="h-full overflow-auto p-6">
-      <div className="rounded-2xl border border-line bg-paper p-5">
-        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Directory</p>
-        <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">Children</h3>
-        <div className="mt-5 grid gap-2">
-          {childrenState.loading ? <p className="text-sm text-muted">Loading children...</p> : null}
-          {!childrenState.loading && childrenState.data?.length === 0 ? <p className="text-sm text-muted">No children.</p> : null}
-          {childrenState.data?.map((child) => (
-            <Link
-              key={child.path}
-              href={hrefForPath(canisterId, databaseId, child.path, undefined, undefined, undefined, undefined, readMode)}
-              className="flex items-center justify-between rounded-xl border border-line bg-white px-4 py-3 text-sm no-underline hover:border-accent"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                {child.kind === "directory" || child.kind === "folder" ? <Folder size={16} /> : <FileText size={16} />}
-                <span className="truncate">{child.name}</span>
-              </span>
-              <span className="font-mono text-xs text-muted">{child.kind}</span>
-            </Link>
-          ))}
-        </div>
+      <DirectoryChildrenCard childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} parentPath={parentPath} />
+    </div>
+  );
+}
+
+function DirectoryChildrenCard({
+  childrenState,
+  canisterId,
+  databaseId,
+  readMode,
+  parentPath
+}: {
+  childrenState: LoadState<ChildNode[]>;
+  canisterId: string;
+  databaseId: string;
+  readMode: "anonymous" | null;
+  parentPath: string;
+}) {
+  const children = childrenState.data ? visibleChildren(childrenState.data, parentPath) : null;
+  return (
+    <div className="rounded-2xl border border-line bg-paper p-5">
+      <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Directory</p>
+      <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">Children</h3>
+      <div className="mt-5 grid gap-2">
+        {childrenState.loading ? <p className="text-sm text-muted">Loading children...</p> : null}
+        {!childrenState.loading && children?.length === 0 ? <p className="text-sm text-muted">No children.</p> : null}
+        {children?.map((child) => (
+          <Link
+            key={child.path}
+            href={hrefForPath(canisterId, databaseId, child.path, undefined, undefined, undefined, undefined, readMode)}
+            className="flex items-center justify-between rounded-xl border border-line bg-white px-4 py-3 text-sm no-underline hover:border-accent"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              {child.kind === "directory" || child.kind === "folder" ? <Folder size={16} /> : <FileText size={16} />}
+              <span className="truncate">{child.name}</span>
+            </span>
+            <span className="font-mono text-xs text-muted">{child.kind}</span>
+          </Link>
+        ))}
       </div>
     </div>
   );
+}
+
+function emptyFolderIndexNode(folderPath: string): WikiNode {
+  const path = folderIndexPath(folderPath);
+  return {
+    path,
+    kind: "file",
+    content: "",
+    createdAt: "",
+    updatedAt: "",
+    etag: "",
+    metadataJson: "{}"
+  };
+}
+
+function isWikiPath(path: string): boolean {
+  return path === "/Wiki" || path.startsWith("/Wiki/");
 }
 
 function HeaderBadge({ label, tone }: { label: string; tone: "blue" | "green" | "yellow" }) {

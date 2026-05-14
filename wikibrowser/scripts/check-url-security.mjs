@@ -69,6 +69,16 @@ await withEnv(
     );
     assert.equal(missingSessionNonce.status, 400);
 
+    const missingCanisterId = await triggerRouteModule.POST(
+      triggerRequest("https://kinic.xyz", { canisterId: "" })
+    );
+    assert.equal(missingCanisterId.status, 400);
+
+    const mismatchedCanisterId = await triggerRouteModule.POST(
+      triggerRequest("https://kinic.xyz", { canisterId: "bbbbb-bb" })
+    );
+    assert.equal(mismatchedCanisterId.status, 400);
+
     triggerRouteModule.setUrlIngestTriggerDepsForTest({
       checkSession: async () => {
         throw new Error("denied");
@@ -85,6 +95,7 @@ await withEnv(
       checkSession: async (canisterId, input) => {
         assert.equal(canisterId, "aaaaa-aa");
         assert.deepEqual(input, {
+          canisterId: "aaaaa-aa",
           databaseId: "db_1",
           requestPath: "/Sources/ingest-requests/1.md",
           sessionNonce: "session-1"
@@ -96,6 +107,7 @@ await withEnv(
       assert.equal(init?.headers?.authorization, "Bearer secret-token");
       assert.equal(init?.method, "POST");
       assert.deepEqual(JSON.parse(init?.body), {
+        canisterId: "aaaaa-aa",
         databaseId: "db_1",
         requestPath: "/Sources/ingest-requests/1.md"
       });
@@ -162,6 +174,7 @@ function triggerRequest(origin, overrides = {}) {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({
+      canisterId: "aaaaa-aa",
       databaseId: "db_1",
       requestPath: "/Sources/ingest-requests/1.md",
       sessionNonce: "session-1",

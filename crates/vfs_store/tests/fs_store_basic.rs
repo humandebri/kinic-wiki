@@ -17,6 +17,39 @@ fn new_store() -> (tempfile::TempDir, FsStore) {
     (dir, store)
 }
 
+fn old_fs_schema_store() -> (tempfile::TempDir, FsStore) {
+    let dir = tempdir().expect("temp dir should exist");
+    let database_path = dir.path().join("wiki.sqlite3");
+    let conn = Connection::open(&database_path).expect("db should open");
+    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
+        .expect("schema migrations table should create");
+    conn.execute_batch(include_str!("../migrations/000_fs_schema.sql"))
+        .expect("base schema should create");
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)",
+        ["wiki_store:000_fs_schema"],
+    )
+    .expect("base migration version should insert");
+    drop(conn);
+    (dir, FsStore::new(database_path))
+}
+
+fn insert_legacy_node(
+    conn: &Connection,
+    path: &str,
+    kind: &str,
+    content: &str,
+    metadata_json: &str,
+) {
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, ?2, ?3, 10, 20, ?4, ?5)",
+        params![path, kind, content, format!("etag-{path}"), metadata_json],
+    )
+    .expect("legacy node should insert");
+}
+
 fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64) -> String {
     ensure_parent_folders(store, path, now - 1);
     store
@@ -661,6 +694,65 @@ fn fs_links_migration_backfills_existing_nodes() {
         })
         .expect("plain outgoing links should load");
     assert!(plain_outgoing.is_empty());
+}
+
+#[test]
+fn fs_folder_migration_promotes_empty_file_parent_to_folder() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", "", "{}");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should promote empty parent");
+
+    let folder = store
+        .read_node("/Wiki/foo")
+        .expect("folder should read")
+        .expect("folder should exist");
+    assert_eq!(folder.kind, NodeKind::Folder);
+    assert_eq!(folder.content, "");
+    assert_eq!(folder.metadata_json, "{}");
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/foo".to_string(),
+        })
+        .expect("promoted folder should list children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].path, "/Wiki/foo/bar.md");
+    assert_eq!(children[0].kind, NodeEntryKind::File);
+}
+
+#[test]
+fn fs_folder_migration_rejects_content_file_parent_conflict() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", " ", "{}");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("non-empty parent conflict should fail migration");
+    assert!(error.contains("folder path conflicts with non-empty node: /Wiki/foo"));
+}
+
+#[test]
+fn fs_folder_migration_rejects_metadata_file_parent_conflict() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", "", r#"{"note":true}"#);
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("metadata parent conflict should fail migration");
+    assert!(error.contains("folder path conflicts with non-empty node: /Wiki/foo"));
 }
 
 #[test]

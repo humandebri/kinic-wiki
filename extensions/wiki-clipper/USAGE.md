@@ -75,7 +75,7 @@ Raw sources are saved as:
 2. Click the extension toolbar icon.
 3. The extension writes `/Sources/ingest-requests/<request-id>.md`.
 4. The extension asks the VFS canister to authorize a 30 minute session trigger ticket for the same II principal.
-5. WikiBrowser checks the session ticket through `https://wiki.kinic.xyz/api/url-ingest/trigger`, then triggers the generator Worker.
+5. WikiBrowser checks the session ticket and configured canister id through `https://wiki.kinic.xyz/api/url-ingest/trigger`, then triggers the generator Worker.
 
 Writer access is checked when the session ticket is issued. Revoking writer access does not immediately invalidate an already issued ticket before its TTL.
 

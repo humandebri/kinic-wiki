@@ -30,6 +30,7 @@ struct MatchedRequest {
 
 #[derive(Debug, Serialize)]
 struct PurgeReport {
+    ok: bool,
     dry_run: bool,
     matched_requests: Vec<MatchedRequest>,
     delete_plan: Vec<String>,
@@ -70,6 +71,7 @@ pub async fn purge_url_ingest(
     let matched_requests = matched.into_values().collect::<Vec<_>>();
     let delete_plan = build_delete_plan(client, database_id, &matched_requests).await?;
     let mut report = PurgeReport {
+        ok: true,
         dry_run: !yes,
         matched_requests,
         delete_plan,
@@ -80,7 +82,13 @@ pub async fn purge_url_ingest(
     if yes {
         execute_delete_plan(client, database_id, &mut report).await?;
     }
+    report.ok = report.errors.is_empty();
     print_report(&report, json)?;
+    if yes && !report.ok {
+        return Err(anyhow!(
+            "purge_url_ingest failed to delete one or more paths"
+        ));
+    }
     Ok(())
 }
 

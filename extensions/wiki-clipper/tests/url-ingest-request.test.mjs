@@ -19,6 +19,7 @@ test("buildUrlIngestRequest creates a file request with frontmatter", () => {
   assert.match(request.writeRequest.content, /status: queued/);
   assert.match(request.writeRequest.content, /url: "https:\/\/example\.com\/post"/);
   assert.match(request.writeRequest.content, /requested_by: "aaaaa-aa"/);
+  assert.match(request.writeRequest.content, /claimed_at: null/);
   assert.match(request.writeRequest.content, /finished_at: null/);
   assert.deepEqual(JSON.parse(request.writeRequest.metadataJson), {
     request_type: "url_ingest",

@@ -14,10 +14,13 @@ type EditStateChange = {
 
 type StoredEditorState = {
   key: string;
+  path: string;
+  baseEtag: string;
   baseContent: string;
   draft: string;
   saveState: EditorSaveState;
   saveError: string | null;
+  saveWarning: string | null;
 };
 
 export function MarkdownEditDocument({
@@ -40,8 +43,8 @@ export function MarkdownEditDocument({
   onEditStateChange?: (state: EditStateChange) => void;
 }) {
   const currentKey = `${node.path}\n${node.etag}`;
-  const [storedEditor, setStoredEditor] = useState<StoredEditorState>(() => newStoredEditorState(currentKey, node.content));
-  const editor = storedEditor.key === currentKey ? storedEditor : newStoredEditorState(currentKey, node.content);
+  const [storedEditor, setStoredEditor] = useState<StoredEditorState>(() => newStoredEditorState(currentKey, node.path, node.etag, node.content));
+  const editor = shouldUseStoredEditor(storedEditor, currentKey, node.path) ? storedEditor : newStoredEditorState(currentKey, node.path, node.etag, node.content);
   const dirty = editor.draft !== editor.baseContent;
   const visibleSaveState: EditorSaveState = editor.saveState === "saving" || editor.saveState === "saved" || editor.saveState === "error" ? editor.saveState : dirty ? "dirty" : "idle";
 
@@ -66,20 +69,31 @@ export function MarkdownEditDocument({
   const draftBytes = useMemo(() => new TextEncoder().encode(editor.draft).length, [editor.draft]);
 
   async function save() {
-    setStoredEditor({ ...editor, saveState: "saving", saveError: null });
+    setStoredEditor({ ...editor, saveState: "saving", saveError: null, saveWarning: null });
     try {
-      await writeNodeAuthenticated(canisterId, writeIdentity, {
+      const result = await writeNodeAuthenticated(canisterId, writeIdentity, {
         databaseId,
         path: node.path,
         kind: node.kind,
         content: editor.draft,
         metadataJson: node.metadataJson,
-        expectedEtag: node.etag
+        expectedEtag: editor.baseEtag
       });
-      const savedNode = await onNodeSaved();
-      setStoredEditor(newSavedEditorState(`${savedNode.path}\n${savedNode.etag}`, savedNode.content));
+      const savedEditor = newSavedEditorState(`${node.path}\n${result.node.etag}`, node.path, result.node.etag, editor.draft);
+      setStoredEditor(savedEditor);
+      let savedNode: WikiNode;
+      try {
+        savedNode = await onNodeSaved();
+      } catch (refreshError) {
+        setStoredEditor({
+          ...savedEditor,
+          saveWarning: `Saved, but refresh failed: ${errorMessage(refreshError)}`
+        });
+        return;
+      }
+      setStoredEditor(newSavedEditorState(`${savedNode.path}\n${savedNode.etag}`, savedNode.path, savedNode.etag, savedNode.content));
     } catch (cause) {
-      setStoredEditor({ ...editor, saveState: "error", saveError: errorMessage(cause) });
+      setStoredEditor({ ...editor, saveState: "error", saveError: errorMessage(cause), saveWarning: null });
     }
   }
 
@@ -97,16 +111,18 @@ export function MarkdownEditDocument({
         error={editor.saveError}
         lineCount={lineCount}
         saveState={visibleSaveState}
+        warning={editor.saveWarning}
         onChange={(nextContent) => {
           setStoredEditor({
             ...editor,
             draft: nextContent,
             saveState: editor.saveState === "saved" || editor.saveState === "error" ? "idle" : editor.saveState,
-            saveError: editor.saveState === "error" ? null : editor.saveError
+            saveError: editor.saveState === "error" ? null : editor.saveError,
+            saveWarning: null
           });
         }}
         onRevert={() => {
-          setStoredEditor({ ...editor, draft: editor.baseContent, saveState: "idle", saveError: null });
+          setStoredEditor({ ...editor, draft: editor.baseContent, saveState: "idle", saveError: null, saveWarning: null });
         }}
         onSave={() => void save()}
       />
@@ -157,22 +173,35 @@ function countLines(content: string): number {
   return content.split("\n").length;
 }
 
-function newStoredEditorState(key: string, content: string): StoredEditorState {
+function newStoredEditorState(key: string, path: string, etag: string, content: string): StoredEditorState {
   return {
     key,
+    path,
+    baseEtag: etag,
     baseContent: content,
     draft: content,
     saveState: "idle",
-    saveError: null
+    saveError: null,
+    saveWarning: null
   };
 }
 
-function newSavedEditorState(key: string, content: string): StoredEditorState {
+function shouldUseStoredEditor(editor: StoredEditorState, currentKey: string, path: string): boolean {
+  if (editor.path !== path) return false;
+  if (editor.key === currentKey) return true;
+  if (editor.draft !== editor.baseContent) return true;
+  return editor.saveState === "saved" || editor.saveState === "saving" || editor.saveState === "error" || editor.saveWarning !== null;
+}
+
+function newSavedEditorState(key: string, path: string, etag: string, content: string): StoredEditorState {
   return {
     key,
+    path,
+    baseEtag: etag,
     baseContent: content,
     draft: content,
     saveState: "saved",
-    saveError: null
+    saveError: null,
+    saveWarning: null
   };
 }

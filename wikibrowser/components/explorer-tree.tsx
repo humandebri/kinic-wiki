@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-
 import { hrefForPath } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
 import type { ChildNode } from "@/lib/types";
+import { visibleChildren } from "@/lib/folder-index";
 import { canExpandChildNode, errorMessage, rootChild, type LoadState } from "@/lib/wiki-helpers";
 
 const WIKI_ROOT_NODE = rootChild("/Wiki");
@@ -230,7 +231,7 @@ function ChildrenList({
     <div>
       {!childrenState.data && !childrenState.error ? <TreeStatus depth={depth + 1} label="Loading" /> : null}
       {childrenState.error ? <TreeStatus depth={depth + 1} label={childrenState.error} /> : null}
-      {childrenState.data?.map((child) => (
+      {childrenState.data ? visibleChildren(childrenState.data).map((child) => (
         <TreeNode
           key={child.path}
           canisterId={canisterId}
@@ -244,7 +245,7 @@ function ChildrenList({
           childNodesCache={childNodesCache}
           onSelectedNode={onSelectedNode}
         />
-      ))}
+      )) : null}
     </div>
   );
 }

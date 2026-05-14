@@ -430,6 +430,43 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
 }
 
 #[tokio::test]
+async fn purge_url_ingest_returns_error_when_delete_fails() {
+    let client = MockClient {
+        nodes: url_ingest_nodes(),
+        delete_fail_paths: HashSet::from(["/Sources/raw/web-1/web-1.md".to_string()]),
+        ..Default::default()
+    };
+
+    let error = run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                canister_id: None,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect_err("delete failure should fail the command");
+
+    assert!(error.to_string().contains("failed to delete"));
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(
+        deletes
+            .iter()
+            .any(|request| request.path == "/Sources/ingest-requests/r1.md")
+    );
+}
+
+#[tokio::test]
 async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
     let client = MockClient {
         nodes: vec![Node {

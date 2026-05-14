@@ -38,6 +38,7 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
       `url: ${JSON.stringify(normalizedUrl)}`,
       `requested_by: ${JSON.stringify(requestedBy)}`,
       `requested_at: ${JSON.stringify(requestedAt)}`,
+      "claimed_at: null",
       "source_path: null",
       "target_path: null",
       "finished_at: null",
@@ -50,7 +51,7 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
     metadataJson: JSON.stringify({ request_type: "url_ingest", url: normalizedUrl }),
     expectedEtag: null
   });
-  const trigger = await triggerWorker(databaseId, requestPath, session);
+  const trigger = await triggerWorker(canisterId, databaseId, requestPath, session);
   return { requestPath, triggered: trigger.ok, triggerError: trigger.error };
 }
 
@@ -109,12 +110,12 @@ function normalizedHttpUrl(value: string): string {
   return url.toString();
 }
 
-async function triggerWorker(databaseId: string, requestPath: string, sessionNonce: string): Promise<{ ok: boolean; error: string | null }> {
+async function triggerWorker(canisterId: string, databaseId: string, requestPath: string, sessionNonce: string): Promise<{ ok: boolean; error: string | null }> {
   try {
     const response = await fetch("/api/url-ingest/trigger", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ databaseId, requestPath, sessionNonce })
+      body: JSON.stringify({ canisterId, databaseId, requestPath, sessionNonce })
     });
     if (!response.ok) {
       return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };

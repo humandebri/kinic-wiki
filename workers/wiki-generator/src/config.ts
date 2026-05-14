@@ -7,7 +7,6 @@ import type { RuntimeEnv } from "./env.js";
 const DEFAULT_MODEL = "deepseek-v4-flash";
 const DEFAULT_TARGET_ROOT = "/Wiki/conversations";
 const DEFAULT_SOURCE_PREFIX = "/Sources/raw";
-const DEFAULT_INGEST_REQUEST_PREFIX = "/Sources/ingest-requests";
 const DEFAULT_CONTEXT_PREFIX = "/Wiki";
 const DEFAULT_MAX_RAW_CHARS = 120_000;
 const DEFAULT_MAX_FETCHED_BYTES = 1_000_000;
@@ -22,7 +21,6 @@ export function loadConfig(env: RuntimeEnv): WorkerConfig {
     model: env.KINIC_WIKI_WORKER_MODEL || DEFAULT_MODEL,
     targetRoot: env.KINIC_WIKI_WORKER_TARGET_ROOT || DEFAULT_TARGET_ROOT,
     sourcePrefix: env.KINIC_WIKI_WORKER_SOURCE_PREFIX || DEFAULT_SOURCE_PREFIX,
-    ingestRequestPrefix: env.KINIC_WIKI_WORKER_INGEST_REQUEST_PREFIX || DEFAULT_INGEST_REQUEST_PREFIX,
     contextPrefix: env.KINIC_WIKI_WORKER_CONTEXT_PREFIX || DEFAULT_CONTEXT_PREFIX,
     maxRawChars: parsePositiveInt(env.KINIC_WIKI_WORKER_MAX_RAW_CHARS, DEFAULT_MAX_RAW_CHARS),
     maxFetchedBytes: parsePositiveInt(env.KINIC_WIKI_WORKER_MAX_FETCHED_BYTES, DEFAULT_MAX_FETCHED_BYTES),

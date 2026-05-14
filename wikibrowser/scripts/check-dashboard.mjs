@@ -11,7 +11,7 @@ const dashboardMemberTable = readFileSync(new URL("../app/dashboard/member-table
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const wikiLayout = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
-const iiAlternativeOrigins = readFileSync(new URL("../app/.well-known/ii-alternative-origins/route.ts", import.meta.url), "utf8");
+const canisterEntrypoint = readFileSync(new URL("../../crates/vfs_canister/src/lib.rs", import.meta.url), "utf8");
 const ingestPanel = readFileSync(new URL("../components/ingest-panel.tsx", import.meta.url), "utf8");
 const ingestTriggerRoute = readFileSync(new URL("../app/api/url-ingest/trigger/route.ts", import.meta.url), "utf8");
 const nextConfig = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
@@ -30,9 +30,15 @@ assert.doesNotMatch(dashboardClient, /useSearchParams/);
 assert.doesNotMatch(dashboardClient, /usePathname/);
 
 assert.match(wikiLayout, /<WikiBrowser \/>/);
-assert.match(iiAlternativeOrigins, /chrome-extension:\/\/jcfniiflikojmbfnaoamlbbddlikchaj/);
-assert.match(iiAlternativeOrigins, /chrome-extension:\/\/hbnicbmdodpmihmcnfgejcdgbfmemoci/);
-assert.match(iiAlternativeOrigins, /access-control-allow-origin/);
+for (const origin of [
+  "chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj",
+  "chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"
+]) {
+  assert.match(canisterEntrypoint, new RegExp(origin.replaceAll("/", "\\/")));
+}
+assert.match(canisterEntrypoint, /https:\/\/wiki\.kinic\.xyz/);
+assert.match(canisterEntrypoint, /https:\/\/kinic\.xyz/);
+assert.equal(existsSync(new URL("../app/.well-known/ii-alternative-origins/route.ts", import.meta.url)), false);
 assert.match(wikiRoute, /return null;/);
 assert.equal(existsSync(new URL("../app/w/page.tsx", import.meta.url)), false);
 assert.equal(existsSync(new URL("../vercel.json", import.meta.url)), false);
@@ -88,9 +94,10 @@ assert.match(wikiBrowser, /effectiveReadIdentity/);
 assert.match(wikiBrowser, /hrefForCurrentReadRoute/);
 assert.match(wikiBrowser, /router\.replace\(anonymousHref\)/);
 assert.match(ingestPanel, /createUrlIngestRequest/);
-assert.match(ingestPanel, /Queued and started/);
+assert.match(ingestPanel, /Queued and accepted/);
 assert.match(urlIngest, /\/Sources\/ingest-requests/);
 assert.match(urlIngest, /kinic\.url_ingest_request/);
+assert.match(urlIngest, /claimed_at: null/);
 assert.match(urlIngest, /finished_at: null/);
 assert.match(urlIngest, /\/api\/url-ingest\/trigger/);
 assert.match(ingestTriggerRoute, /KINIC_WIKI_GENERATOR_URL/);

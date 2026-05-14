@@ -24,7 +24,6 @@ export function workerConfig(): WorkerConfig {
     model: "deepseek-v4-flash",
     targetRoot: "/Wiki/conversations",
     sourcePrefix: "/Sources/raw",
-    ingestRequestPrefix: "/Sources/ingest-requests",
     contextPrefix: "/Wiki",
     maxRawChars: 120_000,
     maxFetchedBytes: 1_000_000,
@@ -64,9 +63,12 @@ export async function withFetchedPage(run: () => Promise<void>): Promise<void> {
 
 export class TestVfsClient implements VfsClient {
   existingSource: WikiNode | null = null;
+  requestNode: WikiNode | null = null;
+  failExpectedEtagOnce = false;
   sourceAckKind: NodeKind = "source";
   sourceReadsBeforeWrite = 0;
   sourceReadsAfterWrite = 0;
+  requestReads = 0;
   sourceWrites = 0;
   lastRequest: UrlIngestRequest | null = null;
   lastSourceWrite: WriteNodeRequest | null = null;
@@ -77,16 +79,28 @@ export class TestVfsClient implements VfsClient {
       else this.sourceReadsBeforeWrite += 1;
       return this.existingSource;
     }
-    return null;
+    this.requestReads += 1;
+    return this.requestNode;
   }
 
   async writeNode(request: WriteNodeRequest): Promise<WriteNodeAck> {
     const etag = request.kind === "source" ? "etag-source-write" : `etag-file-${request.path}-${request.content.length}`;
+    if (this.failExpectedEtagOnce && request.kind === "file") {
+      this.failExpectedEtagOnce = false;
+      throw new Error(`expected_etag does not match current etag: ${request.path}`);
+    }
     if (request.kind === "source") {
       this.sourceWrites += 1;
       this.lastSourceWrite = request;
       return { path: request.path, kind: this.sourceAckKind, etag };
     }
+    this.requestNode = {
+      path: request.path,
+      kind: "file",
+      content: request.content,
+      etag,
+      metadataJson: request.metadataJson
+    };
     const parsed = parseUrlIngestRequest({
       path: request.path,
       kind: "file",

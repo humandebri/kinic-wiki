@@ -30,11 +30,7 @@ test("url ingest trigger rejects missing bearer token", async () => {
 
 test("url ingest trigger rejects invalid request path before background work", async () => {
   const context = recordingCtx();
-  const response = await fetchWorker(
-    authorizedUrlIngestRequest(),
-    { ...testEnv(new TestQueue()), KINIC_WIKI_WORKER_INGEST_REQUEST_PREFIX: "/Custom/requests" },
-    context
-  );
+  const response = await fetchWorker(authorizedUrlIngestRequest({ requestPath: "/Sources/raw/1.md" }), testEnv(new TestQueue()), context);
 
   assert.equal(response.status, 400);
   assert.match(await response.text(), /non-canonical ingest request path/);
@@ -50,21 +46,32 @@ test("url ingest trigger rejects missing canister config before background work"
   assert.equal(context.waitUntilCount, 0);
 });
 
+test("url ingest trigger rejects canister mismatches before background work", async () => {
+  const context = recordingCtx();
+  const response = await fetchWorker(authorizedUrlIngestRequest({ canisterId: "aaaaa-aa" }), testEnv(new TestQueue()), context);
+
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /canisterId does not match worker canister config/);
+  assert.equal(context.waitUntilCount, 0);
+});
+
 test("worker does not expose scheduled cron handler", () => {
   assert.equal("scheduled" in worker, false);
 });
 
-function authorizedUrlIngestRequest(): Request {
-  return urlIngestRequest({ authorization: "Bearer worker-token" });
+function authorizedUrlIngestRequest(body: Record<string, string> = {}): Request {
+  return urlIngestRequest({ authorization: "Bearer worker-token" }, body);
 }
 
-function urlIngestRequest(headers: Record<string, string> = {}): Request {
+function urlIngestRequest(headers: Record<string, string> = {}, body: Record<string, string> = {}): Request {
   return new Request("https://wiki-generator.kinic.xyz/url-ingest", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({
+      canisterId: "xis3j-paaaa-aaaai-axumq-cai",
       databaseId: "db_1",
-      requestPath: "/Sources/ingest-requests/1.md"
+      requestPath: "/Sources/ingest-requests/1.md",
+      ...body
     })
   });
 }

@@ -3,6 +3,7 @@
 // Why: Browsers and extensions must not receive the worker bearer token.
 
 type TriggerRequest = {
+  canisterId: string;
   databaseId: string;
   requestPath: string;
   sessionNonce: string;
@@ -60,12 +61,15 @@ export async function POST(request: Request): Promise<Response> {
     return jsonError("KINIC_WIKI_GENERATOR_URL is invalid", 503, origin);
   }
 
-  const canisterId = (process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? process.env.KINIC_WIKI_CANISTER_ID)?.trim();
-  if (!canisterId) {
+  const configuredCanisterId = (process.env.NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID ?? process.env.KINIC_WIKI_CANISTER_ID)?.trim();
+  if (!configuredCanisterId) {
     return jsonError("NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID is not configured", 503, origin);
   }
+  if (input.canisterId !== configuredCanisterId) {
+    return jsonError("canisterId does not match configured canister", 400, origin);
+  }
   try {
-    await checkSession(canisterId, input);
+    await checkSession(input.canisterId, input);
   } catch {
     return jsonError("url ingest trigger session denied", 403, origin);
   }
@@ -77,7 +81,7 @@ export async function POST(request: Request): Promise<Response> {
         authorization: `Bearer ${token}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify({ databaseId: input.databaseId, requestPath: input.requestPath })
+      body: JSON.stringify({ canisterId: input.canisterId, databaseId: input.databaseId, requestPath: input.requestPath })
     });
     if (!response.ok) {
       return jsonError(`worker trigger failed: HTTP ${response.status}`, 502, origin);
@@ -89,10 +93,12 @@ export async function POST(request: Request): Promise<Response> {
 }
 
 function parseTriggerRequest(value: unknown): TriggerRequest | string {
-  if (!isRecord(value)) return "databaseId and requestPath are required";
+  if (!isRecord(value)) return "canisterId, databaseId, and requestPath are required";
+  const canisterId = value.canisterId;
   const databaseId = value.databaseId;
   const requestPath = value.requestPath;
   const sessionNonce = value.sessionNonce;
+  if (typeof canisterId !== "string" || !canisterId) return "canisterId is required";
   if (typeof databaseId !== "string" || !databaseId) return "databaseId is required";
   if (typeof requestPath !== "string" || !requestPath) return "requestPath is required";
   if (typeof sessionNonce !== "string" || !sessionNonce) return "sessionNonce is required";
@@ -100,7 +106,7 @@ function parseTriggerRequest(value: unknown): TriggerRequest | string {
   if (!requestPath.startsWith("/Sources/ingest-requests/") || !requestPath.endsWith(".md")) {
     return "requestPath must be a URL ingest request path";
   }
-  return { databaseId, requestPath, sessionNonce };
+  return { canisterId, databaseId, requestPath, sessionNonce };
 }
 
 function allowedOrigin(request: Request): string | null {

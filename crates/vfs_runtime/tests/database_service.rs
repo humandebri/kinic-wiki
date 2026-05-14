@@ -149,6 +149,7 @@ fn url_ingest_content(status: &str, requested_by: &str) -> String {
         "url: \"https://example.com/\"",
         &format!("requested_by: \"{requested_by}\""),
         "requested_at: \"2026-05-14T00:00:00Z\"",
+        "claimed_at: null",
         "source_path: null",
         "target_path: null",
         "finished_at: null",

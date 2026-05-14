@@ -16,6 +16,7 @@ export function MarkdownEditor({
   byteCount,
   saveState,
   error,
+  warning,
   onChange,
   onRevert,
   onSave
@@ -26,13 +27,15 @@ export function MarkdownEditor({
   byteCount: number;
   saveState: EditorSaveState;
   error: string | null;
+  warning: string | null;
   onChange: (content: string) => void;
   onRevert: () => void;
   onSave: () => void;
 }) {
   const extensions = useMemo(() => [markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping], []);
   const busy = saveState === "saving";
-  const canSave = saveState === "dirty" && !disabled && !busy;
+  const canSave = (saveState === "dirty" || saveState === "error") && !disabled && !busy;
+  const canRevert = (saveState === "dirty" || saveState === "error") && !disabled && !busy;
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-line bg-paper/95 px-4 py-3 backdrop-blur">
@@ -48,7 +51,7 @@ export function MarkdownEditor({
         </button>
         <button
           className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={disabled || busy || saveState !== "dirty"}
+          disabled={!canRevert}
           type="button"
           onClick={onRevert}
         >
@@ -61,6 +64,7 @@ export function MarkdownEditor({
         <span className="ml-auto font-mono text-xs text-muted">
           {lineCount.toLocaleString()} lines / {byteCount.toLocaleString()} bytes
         </span>
+        {warning ? <p className="basis-full text-sm text-yellow-800">{warning}</p> : null}
         {error ? <p className="basis-full text-sm text-red-700">{error}</p> : null}
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">

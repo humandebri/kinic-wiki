@@ -6,6 +6,7 @@ const { collectLintHints, provenancePathFor, rawSourceLinksFor } = await importT
 const { normalizeSearchHit } = await importTs("../lib/search-normalizer.ts");
 const { readBrowserNodeCache } = await importTs("../lib/browser-node-cache.ts");
 const { sortChildNodes } = await importTs("../lib/child-sort.ts");
+const { folderIndexPath, isFolderIndexNode, isReservedFolderIndexName, visibleChildren } = await importTs("../lib/folder-index.ts");
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
@@ -23,6 +24,7 @@ const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), 
 
 assert.match(explorerTreeSource, /childNodesCache\.current\.get\(requestKey\)/);
 assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, data\)/);
+assert.match(explorerTreeSource, /visibleChildren\(childrenState\.data\)/);
 assert.match(explorerTreeSource, /key=\{`\$\{canisterId\}:\$\{databaseId\}:\/Wiki:/);
 assert.match(explorerTreeSource, /onSelectedNode/);
 assert.doesNotMatch(explorerTreeSource, /onCreateMarkdownFile/);
@@ -45,6 +47,9 @@ assert.match(wikiBrowserSource, /moveNodeAuthenticated/);
 assert.match(wikiBrowserSource, /nodeContextCache\.current\.clear\(\)/);
 assert.match(wikiBrowserSource, /childNodesCache\.current\.clear\(\)/);
 assert.match(wikiBrowserSource, /expectedEtag: null/);
+assert.match(wikiBrowserSource, /folderIndexPath\(selectedPath\)/);
+assert.match(wikiBrowserSource, /Use folder Edit to create index\.md\./);
+assert.match(wikiBrowserSource, /deleteNodeAuthenticated\(canisterId, readIdentity, \{\s+databaseId,\s+path: indexNode\.path,/);
 assert.match(wikiBrowserSource, /memberDatabases\.find/);
 assert.match(wikiBrowserSource, /ExplorerHeaderActions/);
 assert.match(wikiBrowserSource, /ExplorerCreateForm/);
@@ -65,6 +70,8 @@ assert.match(wikiBrowserSource, /!node\.hasChildren/);
 assert.match(wikiBrowserSource, /DocumentBreadcrumbs/);
 assert.match(documentPaneSource, /label="Edit"/);
 assert.match(documentPaneSource, /node\.data\?\.kind === "folder"/);
+assert.match(documentPaneSource, /FolderIndexSection/);
+assert.match(documentPaneSource, /emptyFolderIndexNode/);
 assert.match(documentPaneSource, /node\.kind === "file" && node\.path\.endsWith\("\.md"\) && !node\.path\.startsWith\("\/Sources\/raw\/"\)/);
 assert.match(documentPaneSource, /readMode === "anonymous"/);
 assert.match(documentPaneSource, /Authenticated mode required/);
@@ -72,7 +79,12 @@ assert.match(documentPaneSource, /Use authenticated mode/);
 assert.match(documentPaneSource, /Writer or owner access required/);
 assert.match(documentPaneSource, /Database role unavailable/);
 assert.match(markdownEditDocumentSource, /writeNodeAuthenticated/);
-assert.match(markdownEditDocumentSource, /expectedEtag: node\.etag/);
+assert.match(markdownEditDocumentSource, /expectedEtag: editor\.baseEtag/);
+assert.match(markdownEditDocumentSource, /result\.node\.etag/);
+assert.match(markdownEditDocumentSource, /Saved, but refresh failed/);
+assert.match(markdownEditDocumentSource, /saveWarning/);
+assert.match(markdownEditorSource, /saveState === "dirty" \|\| saveState === "error"/);
+assert.match(markdownEditorSource, /warning: string \| null/);
 assert.match(vfsClientSource, /deleteNodeAuthenticated/);
 assert.match(vfsClientSource, /delete_node/);
 assert.match(markdownEditorSource, /@uiw\/react-codemirror/);
@@ -117,6 +129,18 @@ const sortedChildren = sortChildNodes([
 assert.deepEqual(
   sortedChildren.map((node) => node.path),
   ["/Wiki/alpha", "/Wiki/beta", "/Wiki/1.md", "/Wiki/2.md", "/Wiki/10.md"]
+);
+assert.equal(folderIndexPath("/Wiki/project"), "/Wiki/project/index.md");
+assert.equal(folderIndexPath("/Wiki/project/"), "/Wiki/project/index.md");
+assert.equal(isFolderIndexNode(child("/Wiki/project/index.md", "index.md", "file"), "/Wiki/project"), true);
+assert.equal(isFolderIndexNode(child("/Wiki/project/note.md", "note.md", "file"), "/Wiki/project"), false);
+assert.equal(isReservedFolderIndexName("INDEX.md"), true);
+assert.deepEqual(
+  visibleChildren([
+    child("/Wiki/project/index.md", "index.md", "file"),
+    child("/Wiki/project/note.md", "note.md", "file")
+  ], "/Wiki/project").map((node) => node.path),
+  ["/Wiki/project/note.md"]
 );
 assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
 assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);

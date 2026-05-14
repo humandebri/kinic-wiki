@@ -52,6 +52,7 @@ test("queueUrlIngest writes request and triggers via wiki route", async () => {
     assert.equal(triggerCalls[0][0], "https://wiki.kinic.xyz/api/url-ingest/trigger");
     assert.equal(triggerCalls[0][1].method, "POST");
     assert.deepEqual(JSON.parse(triggerCalls[0][1].body), {
+      canisterId: "xis3j-paaaa-aaaai-axumq-cai",
       databaseId: "team-db",
       requestPath: result.requestPath,
       sessionNonce: calls[1][2]
@@ -156,6 +157,8 @@ test("queueUrlIngest reuses session nonce inside ttl", async () => {
     assert.equal(triggerCalls.length, 2);
     assert.equal(JSON.parse(triggerCalls[0][1].body).sessionNonce, sessionCalls[0][1]);
     assert.equal(JSON.parse(triggerCalls[1][1].body).sessionNonce, sessionCalls[0][1]);
+    assert.equal(JSON.parse(triggerCalls[0][1].body).canisterId, "xis3j-paaaa-aaaai-axumq-cai");
+    assert.equal(JSON.parse(triggerCalls[1][1].body).canisterId, "xis3j-paaaa-aaaai-axumq-cai");
   } finally {
     setOffscreenDepsForTest();
   }

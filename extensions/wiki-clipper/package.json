@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node scripts/check-candid-drift.mjs && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@icp-sdk/auth": "^5.0.0",

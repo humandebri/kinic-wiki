@@ -22,6 +22,7 @@ import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch, parent
 import { nodeRequestKey } from "@/lib/request-keys";
 import type { ChildNode, DatabaseRole, DatabaseSummary, NodeContext, WikiNode } from "@/lib/types";
 import { listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
+import { folderIndexPath, isReservedFolderIndexName, visibleChildren } from "@/lib/folder-index";
 import {
   errorHint,
   errorMessage,
@@ -77,9 +78,11 @@ export function WikiBrowser() {
   const authPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   const readPrincipal = effectiveReadIdentity?.getPrincipal().toText() ?? null;
   const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
+  const folderIndexRequestKey = nodeRequestKey(canisterId, databaseId, folderIndexPath(selectedPath), readPrincipal);
   const [node, setNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [nodeContext, setNodeContext] = useState<BrowserLoadState<NodeContext>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
+  const [folderIndexNode, setFolderIndexNode] = useState<BrowserLoadState<WikiNode>>(browserLoadingState(canisterId, databaseId, folderIndexPath(selectedPath)));
   const [editState, setEditState] = useState<DocumentEditState>({ dirty: false, saveState: "idle" });
   const [explorerRevision, setExplorerRevision] = useState(0);
   const [selectedExplorerState, setSelectedExplorerState] = useState<{ key: string; node: ChildNode } | null>(null);
@@ -95,6 +98,7 @@ export function WikiBrowser() {
   const [databaseListError, setDatabaseListError] = useState<string | null>(null);
   const nodeContextCache = useRef(new Map<string, NodeContext>());
   const childNodesCache = useRef(new Map<string, ChildNode[]>());
+  const folderIndexNodeCache = useRef(new Map<string, WikiNode | null>());
   const invalidCanister = validateCanisterText(canisterId);
 
   useEffect(() => {
@@ -163,17 +167,22 @@ export function WikiBrowser() {
       return;
     }
     const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
+    const indexPath = folderIndexPath(selectedPath);
+    const indexRequestKey = nodeRequestKey(canisterId, databaseId, indexPath, readPrincipal);
     const cached = readBrowserNodeCache(nodeContextCache.current, childNodesCache.current, requestKey);
     const cachedFolderNeedsChildren = cached?.kind === "node" && cached.context.node.kind === "folder" && !childNodesCache.current.has(requestKey);
-    if (cached && !cachedFolderNeedsChildren) {
+    const cachedFolderNeedsIndex = cached?.kind === "node" && cached.context.node.kind === "folder" && !folderIndexNodeCache.current.has(indexRequestKey);
+    if (cached && !cachedFolderNeedsChildren && !cachedFolderNeedsIndex) {
       if (cached.kind === "node") {
         setNode({ requestKey, path: selectedPath, data: cached.context.node, error: null, loading: false });
         setNodeContext({ requestKey, path: selectedPath, data: cached.context, error: null, loading: false });
         setChildNodes({ requestKey, path: selectedPath, data: childNodesCache.current.get(requestKey) ?? [], error: null, loading: false });
+        setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: cached.context.node.kind === "folder" ? folderIndexNodeCache.current.get(indexRequestKey) ?? null : null, error: null, loading: false });
       } else {
         setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
         setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
         setChildNodes({ requestKey, path: selectedPath, data: cached.children, error: null, loading: false });
+        setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
       }
       return;
     }
@@ -188,14 +197,26 @@ export function WikiBrowser() {
           setNode({ requestKey, path: selectedPath, data: data.node, error: null, loading: false });
           setNodeContext({ requestKey, path: selectedPath, data, error: null, loading: false });
           if (data.node.kind === "folder") {
-            const { listChildren } = await import("@/lib/vfs-client");
+            const { listChildren, readNode } = await import("@/lib/vfs-client");
             const children = await listChildren(canisterId, databaseId, selectedPath, effectiveReadIdentity ?? undefined);
             if (!cancelled) {
               childNodesCache.current.set(requestKey, children);
               setChildNodes({ requestKey, path: selectedPath, data: children, error: null, loading: false });
             }
+            try {
+              const indexNode = await readNode(canisterId, databaseId, indexPath, effectiveReadIdentity ?? undefined);
+              if (!cancelled) {
+                folderIndexNodeCache.current.set(indexRequestKey, indexNode);
+                setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: indexNode, error: null, loading: false });
+              }
+            } catch (indexError) {
+              if (!cancelled) {
+                setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: errorMessage(indexError), hint: errorHint(indexError), loading: false });
+              }
+            }
           } else {
             setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+            setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
           }
         }
       })
@@ -205,6 +226,7 @@ export function WikiBrowser() {
             setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
             setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
             setChildNodes({ requestKey, path: selectedPath, data: null, error: null, loading: false });
+            setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
           }
           return;
         }
@@ -216,11 +238,13 @@ export function WikiBrowser() {
                 setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
                 setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
                 setChildNodes({ requestKey, path: selectedPath, data: null, error: `path not found: ${selectedPath}`, loading: false });
+                setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
               } else {
                 setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
                 setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
                 childNodesCache.current.set(requestKey, data);
                 setChildNodes({ requestKey, path: selectedPath, data, error: null, loading: false });
+                setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
               }
             }
           })
@@ -229,6 +253,7 @@ export function WikiBrowser() {
               setNode({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
               setNodeContext({ requestKey, path: selectedPath, data: null, error: errorMessage(nodeError), hint: errorHint(nodeError), loading: false });
               setChildNodes({ requestKey, path: selectedPath, data: null, error: errorMessage(childrenError), hint: errorHint(childrenError), loading: false });
+              setFolderIndexNode({ requestKey: indexRequestKey, path: indexPath, data: null, error: null, loading: false });
             }
           });
       });
@@ -273,9 +298,23 @@ export function WikiBrowser() {
     return data.node;
   }, [canisterId, databaseId, effectiveReadIdentity, readPrincipal, selectedPath]);
 
+  const refreshSelectedFolderIndex = useCallback(async (): Promise<WikiNode> => {
+    const indexPath = folderIndexPath(selectedPath);
+    const requestKey = nodeRequestKey(canisterId, databaseId, indexPath, readPrincipal);
+    const { readNode } = await import("@/lib/vfs-client");
+    const data = await readNode(canisterId, databaseId, indexPath, effectiveReadIdentity ?? undefined);
+    if (!data) {
+      throw new ApiError(`node not found: ${indexPath}`, 404);
+    }
+    folderIndexNodeCache.current.set(requestKey, data);
+    setFolderIndexNode({ requestKey, path: indexPath, data, error: null, loading: false });
+    return data;
+  }, [canisterId, databaseId, effectiveReadIdentity, readPrincipal, selectedPath]);
+
   const invalidateBrowserCaches = useCallback(() => {
     nodeContextCache.current.clear();
     childNodesCache.current.clear();
+    folderIndexNodeCache.current.clear();
     setSelectedExplorerState(null);
     setExplorerRevision((current) => current + 1);
   }, []);
@@ -283,6 +322,7 @@ export function WikiBrowser() {
   const currentNode = currentNodeState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, node);
   const currentNodeContext = currentNodeContextState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, nodeContext);
   const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
+  const currentFolderIndexNode = currentNodeState(invalidCanister, canisterId, databaseId, folderIndexPath(selectedPath), folderIndexRequestKey, folderIndexNode);
   const noteRole = inferNoteRole(selectedPath);
   const authPrompt = authPromptMode(tab, readIdentity, currentNode.error || currentChildren.error);
   const activeEditState = view === "edit" ? editState : EMPTY_EDIT_STATE;
@@ -373,6 +413,7 @@ export function WikiBrowser() {
     if (!target.etag) throw new Error("Cannot rename a node without an etag.");
     const normalizedName = target.kind === "file" ? normalizeMarkdownFileName(nextName) : normalizePathSegment(nextName);
     if (!normalizedName) throw new Error("Enter a single valid name.");
+    if (target.kind === "file" && isReservedFolderIndexName(normalizedName)) throw new Error("Use folder Edit to create index.md.");
     const nextPath = `${parentPath(target.path) ?? "/Wiki"}/${normalizedName}`;
     const { moveNodeAuthenticated } = await import("@/lib/vfs-client");
     await moveNodeAuthenticated(canisterId, readIdentity, {
@@ -415,10 +456,20 @@ export function WikiBrowser() {
     if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
     if (!readIdentity) throw new Error("Login with Internet Identity to delete nodes.");
     if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
-    if (!isDeletableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and empty folders can be deleted.");
+    if (!isDeletableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and folders without visible children can be deleted.");
     if (!target.etag) throw new Error("Cannot delete a node without an etag.");
     if (!window.confirm(`Delete ${target.path}?`)) return false;
     const { deleteNodeAuthenticated } = await import("@/lib/vfs-client");
+    const indexNode = target.kind === "folder" && currentFolderIndexNode.data?.path === folderIndexPath(target.path)
+      ? currentFolderIndexNode.data
+      : null;
+    if (indexNode) {
+      await deleteNodeAuthenticated(canisterId, readIdentity, {
+        databaseId,
+        path: indexNode.path,
+        expectedEtag: indexNode.etag
+      });
+    }
     await deleteNodeAuthenticated(canisterId, readIdentity, {
       databaseId,
       path: target.path,
@@ -430,7 +481,7 @@ export function WikiBrowser() {
       router.replace(hrefForPath(canisterId, databaseId, parentPath(target.path) ?? "/Wiki", undefined, tab, undefined, undefined, readMode));
     }
     return true;
-  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, selectedPath, setEditState, tab]);
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, currentFolderIndexNode.data, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, selectedPath, setEditState, tab]);
 
   async function submitExplorerCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -550,7 +601,7 @@ export function WikiBrowser() {
                 folderTitle={explorerWriteDisabledReason ?? `New folder in ${explorerCreateDirectory}`}
                 renameTitle={explorerWriteDisabledReason ?? (explorerMutationTarget ? `Rename ${explorerMutationTarget.path}` : "Select a /Wiki Markdown file or folder to rename")}
                 moveTitle={explorerWriteDisabledReason ?? (explorerMutationTarget ? `Move ${explorerMutationTarget.path}` : "Select a /Wiki Markdown file or folder to move")}
-                deleteTitle={explorerWriteDisabledReason ?? (explorerDeleteTarget ? `Delete ${explorerDeleteTarget.path}` : "Select a /Wiki Markdown file or empty folder to delete")}
+                deleteTitle={explorerWriteDisabledReason ?? (explorerDeleteTarget ? `Delete ${explorerDeleteTarget.path}` : "Select a /Wiki Markdown file or folder without visible children to delete")}
                 onNewFile={() => {
                   setExplorerActionError(null);
                   setExplorerActionMode("file");
@@ -648,10 +699,12 @@ export function WikiBrowser() {
                   router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab, undefined, undefined, readMode));
                 }}
                 isDirectory={currentNode.data?.kind === "folder" || (!currentNode.data && Boolean(currentChildren.data))}
+                canEditDirectory={currentNode.data?.kind === "folder" && isWikiPath(selectedPath)}
               />
               <DocumentBreadcrumbs canisterId={canisterId} databaseId={databaseId} path={selectedPath} readMode={readMode} />
               <DocumentPane
                 node={currentNode}
+                folderIndexNode={currentFolderIndexNode}
                 childrenState={currentChildren}
                 view={view}
                 canisterId={canisterId}
@@ -663,6 +716,7 @@ export function WikiBrowser() {
                 currentDatabaseRole={currentDatabaseRole}
                 databaseRoleError={readIdentity && !currentDatabaseRole ? databaseListError : null}
                 onNodeSaved={refreshSelectedNodeContext}
+                onFolderIndexSaved={refreshSelectedFolderIndex}
                 onEditStateChange={setEditState}
                 tab={tab}
                 readMode={readMode}
@@ -952,6 +1006,7 @@ function ExplorerActionError({ message }: { message: string }) {
 function wikiMarkdownChildPath(directoryPath: string, fileName: string): string {
   const markdownFileName = normalizeMarkdownFileName(fileName);
   if (!markdownFileName) throw new Error("Enter a Markdown file name, not a path.");
+  if (isReservedFolderIndexName(markdownFileName)) throw new Error("Use folder Edit to create index.md.");
   return wikiChildPath(directoryPath, markdownFileName, "Markdown files");
 }
 
@@ -1060,7 +1115,7 @@ function explorerNodeFromSelection(
       etag: node.data.etag,
       sizeBytes: null,
       isVirtual: false,
-      hasChildren: node.data.kind === "folder" && Boolean(children.data?.length)
+      hasChildren: node.data.kind === "folder" && Boolean(children.data && visibleChildren(children.data, node.data.path).length)
     };
   }
   if (children.data) {

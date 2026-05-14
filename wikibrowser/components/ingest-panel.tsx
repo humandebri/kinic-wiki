@@ -32,7 +32,7 @@ export function IngestPanel({
     try {
       const created = await createUrlIngestRequest(canisterId, databaseId, readIdentity, url);
       setTone("info");
-      setMessage(created.triggered ? `Queued and started ${created.requestPath}` : `Queued ${created.requestPath}. ${created.triggerError}`);
+      setMessage(created.triggered ? `Queued and accepted ${created.requestPath}` : `Queued ${created.requestPath}. ${created.triggerError}`);
       setUrl("");
     } catch (cause) {
       setTone("error");

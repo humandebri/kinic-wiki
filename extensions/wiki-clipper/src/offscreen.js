@@ -55,7 +55,7 @@ export async function queueUrlIngest(tab, config) {
     expected_etag: request.writeRequest.expectedEtag
   });
   if ("Err" in result) throw new Error(result.Err);
-  const trigger = await triggerUrlIngest(config.databaseId, request.requestPath, session);
+  const trigger = await triggerUrlIngest(config.canisterId, config.databaseId, request.requestPath, session);
   return {
     requestPath: request.requestPath,
     url: tab.url,
@@ -166,12 +166,12 @@ async function ensureTriggerSession(actor, databaseId, principal) {
   return promise;
 }
 
-async function triggerUrlIngest(databaseId, requestPath, sessionNonce) {
+async function triggerUrlIngest(canisterId, databaseId, requestPath, sessionNonce) {
   try {
     const response = await fetchFactory(URL_INGEST_TRIGGER_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ databaseId, requestPath, sessionNonce })
+      body: JSON.stringify({ canisterId, databaseId, requestPath, sessionNonce })
     });
     if (!response.ok) {
       return { ok: false, error: `worker trigger failed: HTTP ${response.status}` };

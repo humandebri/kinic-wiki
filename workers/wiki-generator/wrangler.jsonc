@@ -19,7 +19,6 @@
     "KINIC_WIKI_WORKER_MODEL": "deepseek-v4-flash",
     "KINIC_WIKI_WORKER_TARGET_ROOT": "/Wiki/conversations",
     "KINIC_WIKI_WORKER_SOURCE_PREFIX": "/Sources/raw",
-    "KINIC_WIKI_WORKER_INGEST_REQUEST_PREFIX": "/Sources/ingest-requests",
     "KINIC_WIKI_WORKER_CONTEXT_PREFIX": "/Wiki"
   },
   "d1_databases": [

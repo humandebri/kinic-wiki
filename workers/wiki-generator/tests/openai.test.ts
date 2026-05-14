@@ -73,7 +73,6 @@ function config(): WorkerConfig {
     model: "deepseek-v4-flash",
     targetRoot: "/Wiki/conversations",
     sourcePrefix: "/Sources/raw",
-    ingestRequestPrefix: "/Sources/ingest-requests",
     contextPrefix: "/Wiki",
     maxRawChars: 120_000,
     maxFetchedBytes: 1_000_000,

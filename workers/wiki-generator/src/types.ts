@@ -88,7 +88,6 @@ export type WorkerConfig = {
   model: string;
   targetRoot: string;
   sourcePrefix: string;
-  ingestRequestPrefix: string;
   contextPrefix: string;
   maxRawChars: number;
   maxFetchedBytes: number;
@@ -118,13 +117,16 @@ export type UrlIngestRequest = {
   url: string;
   requestedBy: string;
   requestedAt: string;
+  claimedAt: string | null;
   sourcePath: string | null;
   targetPath: string | null;
   finishedAt: string | null;
   error: string | null;
+  metadataJson: string;
 };
 
 export type UrlIngestTriggerInput = {
+  canisterId: string;
   databaseId: string;
   requestPath: string;
 };

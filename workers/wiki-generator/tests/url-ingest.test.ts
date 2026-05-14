@@ -3,7 +3,7 @@
 // Why: Only valid queued request nodes should enter the worker ingest path.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseUrlIngestRequest, parseUrlIngestTriggerInput, processUrlIngestRequest, shouldProcessIngestRequest } from "../src/url-ingest.js";
+import { parseUrlIngestRequest, parseUrlIngestTriggerInput, processUrlIngestRequest, shouldProcessIngestRequest, triggerUrlIngestRequest } from "../src/url-ingest.js";
 import type { UrlIngestRequest, WikiNode } from "../src/types.js";
 import { testEnv, TestQueue, TestVfsClient, withFetchedPage, workerConfig } from "./url-ingest-fixtures.js";
 
@@ -20,6 +20,7 @@ const node: WikiNode = {
     'url: "https://example.com/a"',
     'requested_by: "aaaaa-aa"',
     'requested_at: "2026-05-12T00:00:00.000Z"',
+    "claimed_at: null",
     "source_path: null",
     "target_path: null",
     "finished_at: null",
@@ -45,6 +46,27 @@ test("completed request is not processed", () => {
   assert.equal(shouldProcessIngestRequest(request), false);
 });
 
+test("fresh fetching and generating requests are treated as already accepted", () => {
+  const fetching = parseUrlIngestRequest({
+    ...node,
+    content: node.content.replace("status: queued", "status: fetching").replace("claimed_at: null", `claimed_at: "${new Date().toISOString()}"`)
+  });
+  const generating = parseUrlIngestRequest({ ...node, content: node.content.replace("status: queued", "status: generating") });
+  assert.ok(fetching);
+  assert.ok(generating);
+  assert.equal(shouldProcessIngestRequest(fetching), false);
+  assert.equal(shouldProcessIngestRequest(generating), false);
+});
+
+test("stale fetching request can be retried", () => {
+  const fetching = parseUrlIngestRequest({
+    ...node,
+    content: node.content.replace("status: queued", "status: fetching").replace("claimed_at: null", 'claimed_at: "2020-01-01T00:00:00.000Z"')
+  });
+  assert.ok(fetching);
+  assert.equal(shouldProcessIngestRequest(fetching), true);
+});
+
 test("unrelated source node is ignored", () => {
   assert.equal(parseUrlIngestRequest({ ...node, content: node.content.replace("kinic.url_ingest_request", "kinic.raw_web_source") }), null);
 });
@@ -54,11 +76,12 @@ test("source-kind request node is ignored", () => {
 });
 
 test("url ingest trigger input carries database and request path", () => {
-  assert.deepEqual(parseUrlIngestTriggerInput({ databaseId: "db_1", requestPath: "/Sources/ingest-requests/1.md" }), {
+  assert.deepEqual(parseUrlIngestTriggerInput({ canisterId: "canister-1", databaseId: "db_1", requestPath: "/Sources/ingest-requests/1.md" }), {
+    canisterId: "canister-1",
     databaseId: "db_1",
     requestPath: "/Sources/ingest-requests/1.md"
   });
-  assert.equal(parseUrlIngestTriggerInput({ databaseId: "db_1" }), "requestPath is required");
+  assert.equal(parseUrlIngestTriggerInput({ databaseId: "db_1" }), "canisterId is required");
 });
 
 test("queued URL ingest uses source write ack without reading source after write", async () => {
@@ -76,7 +99,14 @@ test("queued URL ingest uses source write ack without reading source after write
   assert.equal(vfs.lastRequest?.status, "generating");
   assert.equal(vfs.lastRequest?.sourcePath, queue.messages[0]?.sourcePath);
   assert.equal(vfs.lastRequest?.finishedAt, null);
+  assert.equal(vfs.lastRequest?.metadataJson, vfs.requestNode?.metadataJson);
   assert.ok(vfs.lastSourceWrite);
+  const metadata = JSON.parse(vfs.requestNode?.metadataJson ?? "{}");
+  assert.equal(metadata.request_type, "url_ingest");
+  assert.equal(metadata.url, "https://example.com/a");
+  assert.equal(metadata.status, "generating");
+  assert.equal(metadata.source_path, queue.messages[0]?.sourcePath);
+  assert.equal(metadata.custom, "preserved");
   assert.doesNotMatch(vfs.lastSourceWrite.content, /request_path/);
   assert.doesNotMatch(vfs.lastSourceWrite.metadataJson, /request_path/);
 });
@@ -172,6 +202,73 @@ test("source_written URL ingest still reads source to recover etag", async () =>
   assert.equal(queue.messages[0]?.sourcePath, "/Sources/raw/retry/retry.md");
 });
 
+test("second trigger for the same request is accepted without reprocessing", async () => {
+  const vfs = new TestVfsClient();
+  const queue = new TestQueue();
+  vfs.requestNode = requestNode(queuedRequest());
+
+  await withFetchedPage(async () => {
+    await triggerUrlIngestRequest(
+      testEnv(queue),
+      {
+        canisterId: "xis3j-paaaa-aaaai-axumq-cai",
+        databaseId: "db_1",
+        requestPath: "/Sources/ingest-requests/1.md"
+      },
+      { config: workerConfig(), vfs }
+    );
+    await triggerUrlIngestRequest(
+      testEnv(queue),
+      {
+        canisterId: "xis3j-paaaa-aaaai-axumq-cai",
+        databaseId: "db_1",
+        requestPath: "/Sources/ingest-requests/1.md"
+      },
+      { config: workerConfig(), vfs }
+    );
+  });
+
+  assert.equal(queue.messages.length, 1);
+  assert.equal(vfs.sourceWrites, 1);
+  assert.equal(vfs.lastRequest?.status, "generating");
+});
+
+test("queued claim etag mismatch re-reads fetching state without failing", async () => {
+  const vfs = new TestVfsClient();
+  const queue = new TestQueue();
+  vfs.requestNode = requestNode(queuedRequest({ status: "fetching", etag: "etag-current" }));
+  vfs.failExpectedEtagOnce = true;
+
+  await processUrlIngestRequest(testEnv(queue), vfs, workerConfig(), "db_1", queuedRequest());
+
+  assert.equal(queue.messages.length, 0);
+  assert.equal(vfs.sourceWrites, 0);
+  assert.equal(vfs.lastRequest, null);
+  assert.equal(vfs.requestNode?.etag, "etag-current");
+});
+
+test("stale fetching request is claimed before retry", async () => {
+  const vfs = new TestVfsClient();
+  const queue = new TestQueue();
+  vfs.requestNode = requestNode(queuedRequest({ status: "fetching", claimedAt: "2020-01-01T00:00:00.000Z", etag: "etag-stale" }));
+
+  await withFetchedPage(async () => {
+    await triggerUrlIngestRequest(
+      testEnv(queue),
+      {
+        canisterId: "xis3j-paaaa-aaaai-axumq-cai",
+        databaseId: "db_1",
+        requestPath: "/Sources/ingest-requests/1.md"
+      },
+      { config: workerConfig(), vfs }
+    );
+  });
+
+  assert.equal(queue.messages.length, 1);
+  assert.equal(vfs.sourceWrites, 1);
+  assert.notEqual(vfs.lastRequest?.claimedAt, "2020-01-01T00:00:00.000Z");
+});
+
 function queuedRequest(overrides: Partial<UrlIngestRequest> = {}): UrlIngestRequest {
   return {
     path: "/Sources/ingest-requests/1.md",
@@ -180,10 +277,38 @@ function queuedRequest(overrides: Partial<UrlIngestRequest> = {}): UrlIngestRequ
     url: "https://example.com/a",
     requestedBy: "aaaaa-aa",
     requestedAt: "2026-05-12T00:00:00.000Z",
+    claimedAt: null,
     sourcePath: null,
     targetPath: null,
     finishedAt: null,
     error: null,
+    metadataJson: JSON.stringify({ request_type: "url_ingest", url: "https://example.com/a", custom: "preserved" }),
     ...overrides
+  };
+}
+
+function requestNode(request: UrlIngestRequest): WikiNode {
+  return {
+    path: request.path,
+    kind: "file",
+    etag: request.etag,
+    metadataJson: request.metadataJson,
+    content: [
+      "---",
+      "kind: kinic.url_ingest_request",
+      "schema_version: 1",
+      `status: ${request.status}`,
+      `url: ${JSON.stringify(request.url)}`,
+      `requested_by: ${JSON.stringify(request.requestedBy)}`,
+      `requested_at: ${JSON.stringify(request.requestedAt)}`,
+      `claimed_at: ${request.claimedAt === null ? "null" : JSON.stringify(request.claimedAt)}`,
+      `source_path: ${request.sourcePath === null ? "null" : JSON.stringify(request.sourcePath)}`,
+      `target_path: ${request.targetPath === null ? "null" : JSON.stringify(request.targetPath)}`,
+      `finished_at: ${request.finishedAt === null ? "null" : JSON.stringify(request.finishedAt)}`,
+      `error: ${request.error === null ? "null" : JSON.stringify(request.error)}`,
+      "---",
+      "",
+      "# URL Ingest Request"
+    ].join("\n")
   };
 }

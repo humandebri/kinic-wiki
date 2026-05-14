@@ -24,6 +24,7 @@ export function buildUrlIngestRequest({ url, requestedBy, now = new Date(), uuid
         `url: ${JSON.stringify(normalizedUrl)}`,
         `requested_by: ${JSON.stringify(requestedBy)}`,
         `requested_at: ${JSON.stringify(requestedAt)}`,
+        "claimed_at: null",
         "source_path: null",
         "target_path: null",
         "finished_at: null",

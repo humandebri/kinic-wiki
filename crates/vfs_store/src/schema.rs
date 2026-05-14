@@ -194,13 +194,7 @@ fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String>
     }
 
     for (folder_path, (created_at, updated_at)) in folders {
-        conn.execute(
-            "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
-             VALUES (?1, 'folder', '', ?2, ?3, '', '{}')
-             ON CONFLICT(path) DO NOTHING",
-            params![folder_path, created_at, updated_at],
-        )
-        .map_err(|error| error.to_string())?;
+        ensure_folder_backfill_node(conn, &folder_path, created_at, updated_at)?;
     }
 
     let rows = conn
@@ -291,6 +285,52 @@ fn node_id_for_path(conn: &rusqlite::Transaction<'_>, path: &str) -> Result<i64,
         |row| row.get(0),
     )
     .map_err(|error| error.to_string())
+}
+
+fn ensure_folder_backfill_node(
+    conn: &rusqlite::Transaction<'_>,
+    path: &str,
+    created_at: i64,
+    updated_at: i64,
+) -> Result<(), String> {
+    let existing = conn
+        .query_row(
+            "SELECT kind, content, metadata_json FROM fs_nodes WHERE path = ?1",
+            params![path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    match existing {
+        None => conn
+            .execute(
+                "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
+                 VALUES (?1, 'folder', '', ?2, ?3, '', '{}')",
+                params![path, created_at, updated_at],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        Some((kind, _, _)) if kind == "folder" => Ok(()),
+        Some((kind, content, metadata_json))
+            if kind == "file" && content.is_empty() && metadata_json == "{}" =>
+        {
+            conn.execute(
+                "UPDATE fs_nodes SET kind = 'folder', content = '', metadata_json = '{}' WHERE path = ?1",
+                params![path],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        }
+        Some(_) => Err(format!(
+            "folder path conflicts with non-empty node: {path}"
+        )),
+    }
 }
 
 fn folder_migration_etag(path: &str, kind: &str, content: &str, metadata_json: &str) -> String {
