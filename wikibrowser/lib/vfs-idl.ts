@@ -27,11 +27,12 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     created_at_ms: idl.Int64,
     database_id: idl.Text
   });
-  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
+  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null, Folder: idl.Null });
   const NodeEntryKind = idl.Variant({
     File: idl.Null,
     Source: idl.Null,
-    Directory: idl.Null
+    Directory: idl.Null,
+    Folder: idl.Null
   });
   const Node = idl.Record({
     path: idl.Text,
@@ -53,6 +54,12 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     is_virtual: idl.Bool
   });
   const RecentNodeHit = idl.Record({
+    path: idl.Text,
+    kind: NodeKind,
+    updated_at: idl.Int64,
+    etag: idl.Text
+  });
+  const NodeMutationAck = idl.Record({
     path: idl.Text,
     kind: NodeKind,
     updated_at: idl.Int64,
@@ -145,6 +152,14 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     expected_etag: idl.Opt(idl.Text),
     database_id: idl.Text
   });
+  const MkdirNodeRequest = idl.Record({ path: idl.Text, database_id: idl.Text });
+  const MoveNodeRequest = idl.Record({
+    from_path: idl.Text,
+    to_path: idl.Text,
+    expected_etag: idl.Opt(idl.Text),
+    overwrite: idl.Bool,
+    database_id: idl.Text
+  });
   const UrlIngestTriggerSessionRequest = idl.Record({
     database_id: idl.Text,
     session_nonce: idl.Text
@@ -193,6 +208,10 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultWriteNode = idl.Variant({ Ok: WriteNodeResult, Err: idl.Text });
   const DeleteNodeResult = idl.Record({ path: idl.Text });
   const ResultDeleteNode = idl.Variant({ Ok: DeleteNodeResult, Err: idl.Text });
+  const MkdirNodeResult = idl.Record({ path: idl.Text, created: idl.Bool });
+  const ResultMkdirNode = idl.Variant({ Ok: MkdirNodeResult, Err: idl.Text });
+  const MoveNodeResult = idl.Record({ from_path: idl.Text, node: NodeMutationAck, overwrote: idl.Bool });
+  const ResultMoveNode = idl.Variant({ Ok: MoveNodeResult, Err: idl.Text });
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
 
   return idl.Service({
@@ -208,6 +227,8 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     list_databases: idl.Func([], [ResultDatabases], ["query"]),
     list_database_members: idl.Func([idl.Text], [ResultMembers], ["query"]),
     memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
+    mkdir_node: idl.Func([MkdirNodeRequest], [ResultMkdirNode], []),
+    move_node: idl.Func([MoveNodeRequest], [ResultMoveNode], []),
     query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
     read_node: idl.Func([idl.Text, idl.Text], [ResultNode], ["query"]),
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"]),

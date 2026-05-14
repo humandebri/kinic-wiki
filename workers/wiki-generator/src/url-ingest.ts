@@ -7,7 +7,22 @@ import { parseFrontmatter, renderFrontmatter } from "./frontmatter.js";
 import { fetchUrlSource, type FetchedUrlSource } from "./url-fetch.js";
 import type { RuntimeEnv } from "./env.js";
 import type { UrlIngestRequest, UrlIngestTriggerInput, WikiNode, WorkerConfig, WriteNodeAck } from "./types.js";
-import { createVfsClient, type VfsClient } from "./vfs.js";
+import { createVfsClient, ensureParentFolders, type VfsClient } from "./vfs.js";
+
+export type UrlIngestTriggerContext = {
+  config: WorkerConfig;
+  vfs: VfsClient;
+};
+
+export class UrlIngestTriggerError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "UrlIngestTriggerError";
+    this.status = status;
+  }
+}
 
 export function parseUrlIngestTriggerInput(value: unknown): UrlIngestTriggerInput | string {
   if (!isObject(value)) return "body must include databaseId and requestPath";
@@ -18,10 +33,16 @@ export function parseUrlIngestTriggerInput(value: unknown): UrlIngestTriggerInpu
   return { databaseId, requestPath };
 }
 
-export async function triggerUrlIngestRequest(env: RuntimeEnv, input: UrlIngestTriggerInput): Promise<void> {
+export async function prepareUrlIngestTrigger(env: RuntimeEnv, input: UrlIngestTriggerInput): Promise<UrlIngestTriggerContext> {
   const config = loadConfig(env);
   validateIngestRequestPath(input.requestPath, config.ingestRequestPrefix);
   const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_PEM);
+  return { config, vfs };
+}
+
+export async function triggerUrlIngestRequest(env: RuntimeEnv, input: UrlIngestTriggerInput, context?: UrlIngestTriggerContext): Promise<void> {
+  const triggerContext = context ?? (await prepareUrlIngestTrigger(env, input));
+  const { config, vfs } = triggerContext;
   const node = await vfs.readNode(input.databaseId, input.requestPath);
   if (!node) throw new Error(`ingest request not found: ${input.requestPath}`);
   const request = parseUrlIngestRequest(node);
@@ -122,6 +143,7 @@ async function writeFetchedSource(vfs: VfsClient, databaseId: string, path: stri
     },
     [`# ${title}`, "", `Source URL: ${fetched.finalUrl}`, "", fetched.text].join("\n")
   );
+  await ensureParentFolders(vfs, databaseId, path);
   const ack = await vfs.writeNode({
     databaseId,
     path,
@@ -153,6 +175,7 @@ async function writeRequestState(
     finished_at: finishedAt,
     error: updates.error === undefined ? request.error : updates.error
   };
+  await ensureParentFolders(vfs, databaseId, request.path);
   const ack = await vfs.writeNode({
     databaseId,
     path: request.path,
@@ -210,7 +233,7 @@ function errorMessage(error: unknown): string {
 
 function validateIngestRequestPath(path: string, prefix: string): void {
   if (!path.startsWith(`${prefix}/`) || !path.endsWith(".md")) {
-    throw new Error(`non-canonical ingest request path: ${path}`);
+    throw new UrlIngestTriggerError(`non-canonical ingest request path: ${path}`, 400);
   }
 }
 

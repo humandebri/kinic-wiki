@@ -52,8 +52,8 @@ export const expectedTypes = {
       metadata_json: "text"
     }
   },
-  NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null" } },
-  NodeKind: { kind: "variant", cases: { File: "null", Source: "null" } },
+  NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null", Folder: "null" } },
+  NodeKind: { kind: "variant", cases: { File: "null", Source: "null", Folder: "null" } },
   WriteNodeRequest: {
     kind: "record",
     fields: {
@@ -80,6 +80,26 @@ export const expectedTypes = {
   DeleteNodeResult: {
     kind: "record",
     fields: { path: "text" }
+  },
+  MkdirNodeRequest: { kind: "record", fields: { path: "text", database_id: "text" } },
+  MkdirNodeResult: { kind: "record", fields: { path: "text", created: "bool" } },
+  MoveNodeRequest: {
+    kind: "record",
+    fields: {
+      from_path: "text",
+      to_path: "text",
+      expected_etag: "opt text",
+      overwrite: "bool",
+      database_id: "text"
+    }
+  },
+  MoveNodeResult: {
+    kind: "record",
+    fields: { from_path: "text", node: "NodeMutationAck", overwrote: "bool" }
+  },
+  NodeMutationAck: {
+    kind: "record",
+    fields: { updated_at: "int64", etag: "text", kind: "NodeKind", path: "text" }
   },
   UrlIngestTriggerSessionRequest: {
     kind: "record",
@@ -162,6 +182,8 @@ export const expectedTypes = {
   ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
   ResultWriteNode: { kind: "variant", cases: { Ok: "WriteNodeResult", Err: "text" } },
   ResultDeleteNode: { kind: "variant", cases: { Ok: "DeleteNodeResult", Err: "text" } },
+  ResultMkdirNode: { kind: "variant", cases: { Ok: "MkdirNodeResult", Err: "text" } },
+  ResultMoveNode: { kind: "variant", cases: { Ok: "MoveNodeResult", Err: "text" } },
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
@@ -232,6 +254,8 @@ export const didTypeAliases = {
   ResultCreateDatabase: "Result_3",
   ResultDatabases: "Result_12",
   ResultDeleteNode: "Result_4",
+  ResultMkdirNode: "Result_14",
+  ResultMoveNode: "Result_15",
   ResultMembers: "Result_11",
   ResultUnit: "Result_1",
   ResultWriteNode: "Result",
@@ -258,6 +282,8 @@ export const expectedMethods = {
   list_databases: { input: [], output: "ResultDatabases", mode: "query" },
   list_database_members: { input: ["text"], output: "ResultMembers", mode: "query" },
   memory_manifest: { input: [], output: "MemoryManifest", mode: "query" },
+  mkdir_node: { input: ["MkdirNodeRequest"], output: "ResultMkdirNode", mode: "update" },
+  move_node: { input: ["MoveNodeRequest"], output: "ResultMoveNode", mode: "update" },
   outgoing_links: { input: ["OutgoingLinksRequest"], output: "ResultLinks", mode: "query" },
   query_context: { input: ["QueryContextRequest"], output: "ResultQueryContext", mode: "query" },
   read_node: { input: ["text", "text"], output: "ResultNode", mode: "query" },

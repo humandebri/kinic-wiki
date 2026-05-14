@@ -11,7 +11,7 @@ use vfs_runtime::{
     USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService,
 };
 use vfs_types::{
-    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, NodeKind,
+    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, MkdirNodeRequest, NodeKind,
     SearchNodesRequest, SearchPreviewMode, UrlIngestTriggerSessionCheckRequest,
     UrlIngestTriggerSessionRequest, WriteNodeRequest,
 };
@@ -169,6 +169,7 @@ fn write_url_ingest_request(
     status: &str,
     requested_by: &str,
 ) {
+    ensure_parent_folders(service, caller, database_id, path, 1);
     service
         .write_node(
             caller,
@@ -183,6 +184,34 @@ fn write_url_ingest_request(
             2,
         )
         .expect("url ingest request should write");
+}
+
+fn ensure_parent_folders(
+    service: &VfsService,
+    caller: &str,
+    database_id: &str,
+    path: &str,
+    now_ms: i64,
+) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        service
+            .mkdir_node(
+                caller,
+                MkdirNodeRequest {
+                    database_id: database_id.to_string(),
+                    path: current.clone(),
+                },
+                now_ms,
+            )
+            .expect("parent folder should exist or be created");
+    }
 }
 
 fn database_restore_chunk_count(root: &std::path::Path, database_id: &str) -> i64 {
@@ -1863,6 +1892,7 @@ fn append_node_validates_effective_kind_paths() {
         .expect_err("kind=None under sources should be treated as file");
     assert!(error.contains("source path must use source kind"));
 
+    ensure_parent_folders(&service, "owner", "alpha", "/Sources/raw/good/good.md", 3);
     let source = service
         .write_node(
             "owner",

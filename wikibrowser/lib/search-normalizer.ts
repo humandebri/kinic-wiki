@@ -39,6 +39,7 @@ function normalizeSearchPreview(raw: RawSearchPreview): SearchPreview {
 }
 
 function normalizeNodeKind(kind: Variant): NodeKind {
+  if ("Folder" in kind) return "folder";
   return "Source" in kind ? "source" : "file";
 }
 

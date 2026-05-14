@@ -31,7 +31,7 @@ function idlFactory({ IDL: idl }) {
     archived_at_ms: idl.Opt(idl.Int64),
     deleted_at_ms: idl.Opt(idl.Int64)
   });
-  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
+  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null, Folder: idl.Null });
   const Node = idl.Record({
     path: idl.Text,
     kind: NodeKind,
@@ -49,6 +49,8 @@ function idlFactory({ IDL: idl }) {
     metadata_json: idl.Text,
     expected_etag: idl.Opt(idl.Text)
   });
+  const MkdirNodeRequest = idl.Record({ database_id: idl.Text, path: idl.Text });
+  const MkdirNodeResult = idl.Record({ path: idl.Text, created: idl.Bool });
   const UrlIngestTriggerSessionRequest = idl.Record({
     database_id: idl.Text,
     session_nonce: idl.Text
@@ -63,6 +65,7 @@ function idlFactory({ IDL: idl }) {
   return idl.Service({
     authorize_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionRequest], [idl.Variant({ Ok: idl.Null, Err: idl.Text })], []),
     list_databases: idl.Func([], [idl.Variant({ Ok: idl.Vec(DatabaseSummary), Err: idl.Text })], ["query"]),
+    mkdir_node: idl.Func([MkdirNodeRequest], [idl.Variant({ Ok: MkdirNodeResult, Err: idl.Text })], []),
     read_node: idl.Func([idl.Text, idl.Text], [idl.Variant({ Ok: idl.Opt(Node), Err: idl.Text })], ["query"]),
     write_node: idl.Func([WriteNodeRequest], [idl.Variant({ Ok: WriteNodeResult, Err: idl.Text })], [])
   });

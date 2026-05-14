@@ -59,7 +59,7 @@ export function DocumentHeader({
       <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
         <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
         <ViewButton active={view === "raw"} label="Raw" onClick={() => onViewChange("raw")} />
-        <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} />
+        {!isDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
       </div>
     </div>
   );
@@ -105,6 +105,13 @@ export function DocumentPane({
   if (node.loading && childrenState.loading) return <PaneBody><LoadingBlock /></PaneBody>;
   if (authPrompt && onLogin) {
     return <PaneBody className="p-6"><AuthRequiredState authReady={Boolean(authReady)} mode={authPrompt} onLogin={onLogin} /></PaneBody>;
+  }
+  if (node.data?.kind === "folder") {
+    return (
+      <PaneBody>
+        <DirectoryDocument childrenState={childrenState} canisterId={canisterId} databaseId={databaseId} readMode={readMode} />
+      </PaneBody>
+    );
   }
   if (node.data) {
     return (
@@ -508,6 +515,8 @@ function DirectoryDocument({
         <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Directory</p>
         <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">Children</h3>
         <div className="mt-5 grid gap-2">
+          {childrenState.loading ? <p className="text-sm text-muted">Loading children...</p> : null}
+          {!childrenState.loading && childrenState.data?.length === 0 ? <p className="text-sm text-muted">No children.</p> : null}
           {childrenState.data?.map((child) => (
             <Link
               key={child.path}
@@ -515,7 +524,7 @@ function DirectoryDocument({
               className="flex items-center justify-between rounded-xl border border-line bg-white px-4 py-3 text-sm no-underline hover:border-accent"
             >
               <span className="flex min-w-0 items-center gap-2">
-                {child.kind === "directory" ? <Folder size={16} /> : <FileText size={16} />}
+                {child.kind === "directory" || child.kind === "folder" ? <Folder size={16} /> : <FileText size={16} />}
                 <span className="truncate">{child.name}</span>
               </span>
               <span className="font-mono text-xs text-muted">{child.kind}</span>

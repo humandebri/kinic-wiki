@@ -45,6 +45,7 @@ export async function queueUrlIngest(tab, config) {
     url: tab.url,
     requestedBy: snapshot.principal
   });
+  await ensureParentFolders(actor, config.databaseId, request.writeRequest.path);
   const result = await actor.write_node({
     database_id: config.databaseId,
     path: request.writeRequest.path,
@@ -77,6 +78,7 @@ export async function saveRawSource(rawSource, config) {
   const existing = await actor.read_node(config.databaseId, rawSource.path);
   if ("Err" in existing) throw new Error(existing.Err);
   const expected = existing.Ok[0]?.etag ? [existing.Ok[0].etag] : [];
+  await ensureParentFolders(actor, config.databaseId, rawSource.path);
   const result = await actor.write_node({
     database_id: config.databaseId,
     path: rawSource.path,
@@ -93,6 +95,16 @@ export async function saveRawSource(rawSource, config) {
     principal: snapshot.principal,
     etag: result.Ok.node.etag
   };
+}
+
+async function ensureParentFolders(actor, databaseId, path) {
+  const segments = path.split("/").filter(Boolean);
+  let current = "";
+  for (const segment of segments.slice(0, -1)) {
+    current = `${current}/${segment}`;
+    const result = await actor.mkdir_node({ database_id: databaseId, path: current });
+    if ("Err" in result) throw new Error(result.Err);
+  }
 }
 
 export async function authStatus() {

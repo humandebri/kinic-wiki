@@ -14,6 +14,10 @@ import type {
   DatabaseStatus,
   DatabaseSummary,
   LinkEdge,
+  MkdirNodeRequest,
+  MkdirNodeResult,
+  MoveNodeRequest,
+  MoveNodeResult,
   NodeContext,
   NodeEntryKind,
   NodeKind,
@@ -101,6 +105,30 @@ type RawDeleteNodeResult = {
   path: string;
 };
 
+type RawMkdirNodeRequest = {
+  database_id: string;
+  path: string;
+};
+
+type RawMkdirNodeResult = {
+  path: string;
+  created: boolean;
+};
+
+type RawMoveNodeRequest = {
+  database_id: string;
+  from_path: string;
+  to_path: string;
+  expected_etag: [] | [string];
+  overwrite: boolean;
+};
+
+type RawMoveNodeResult = {
+  from_path: string;
+  node: RawRecent;
+  overwrote: boolean;
+};
+
 type RawUrlIngestTriggerSessionRequest = {
   database_id: string;
   session_nonce: string;
@@ -134,6 +162,8 @@ type VfsActor = {
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
   delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
+  mkdir_node: (request: RawMkdirNodeRequest) => Promise<{ Ok: RawMkdirNodeResult } | { Err: string }>;
+  move_node: (request: RawMoveNodeRequest) => Promise<{ Ok: RawMoveNodeResult } | { Err: string }>;
   list_databases: () => Promise<{ Ok: RawDatabaseSummary[] } | { Err: string }>;
   list_database_members: (databaseId: string) => Promise<{ Ok: RawDatabaseMember[] } | { Err: string }>;
   revoke_database_access: (databaseId: string, principal: string) => Promise<{ Ok: null } | { Err: string }>;
@@ -334,6 +364,41 @@ export async function deleteNodeAuthenticated(canisterId: string, identity: Iden
       throwCanisterError(result.Err);
     }
     return result.Ok;
+  });
+}
+
+export async function mkdirNodeAuthenticated(canisterId: string, identity: Identity, request: MkdirNodeRequest): Promise<MkdirNodeResult> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.mkdir_node({
+      database_id: request.databaseId,
+      path: request.path
+    });
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return result.Ok;
+  });
+}
+
+export async function moveNodeAuthenticated(canisterId: string, identity: Identity, request: MoveNodeRequest): Promise<MoveNodeResult> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.move_node({
+      database_id: request.databaseId,
+      from_path: request.fromPath,
+      to_path: request.toPath,
+      expected_etag: request.expectedEtag ? [request.expectedEtag] : [],
+      overwrite: request.overwrite
+    });
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return {
+      fromPath: result.Ok.from_path,
+      node: normalizeRecentNode(result.Ok.node),
+      overwrote: result.Ok.overwrote
+    };
   });
 }
 
@@ -611,10 +676,14 @@ function normalizeNodeContext(raw: RawNodeContext): NodeContext {
 }
 
 function normalizeNodeKind(kind: Variant): NodeKind {
+  if ("Folder" in kind) return "folder";
   return "Source" in kind ? "source" : "file";
 }
 
 function normalizeEntryKind(kind: Variant): NodeEntryKind {
+  if ("Folder" in kind) {
+    return "folder";
+  }
   if ("Directory" in kind) {
     return "directory";
   }
@@ -642,6 +711,7 @@ function databaseRoleVariant(role: DatabaseRole): Variant {
 }
 
 function nodeKindVariant(kind: NodeKind): Variant {
+  if (kind === "folder") return { Folder: null };
   if (kind === "source") return { Source: null };
   return { File: null };
 }

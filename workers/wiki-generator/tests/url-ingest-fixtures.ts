@@ -98,6 +98,8 @@ export class TestVfsClient implements VfsClient {
     return { path: request.path, kind: "file", etag };
   }
 
+  async mkdirNode(): Promise<void> {}
+
   async searchNodes(): Promise<SearchNodeHit[]> {
     return [];
   }

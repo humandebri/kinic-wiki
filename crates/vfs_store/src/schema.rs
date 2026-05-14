@@ -7,15 +7,19 @@ use crate::fs_links::backfill_node_links;
 
 // Keep the persisted version token stable so existing local databases do not
 // require a forced migration just because the crate naming moved from wiki_* to vfs_*.
-const CURRENT_SCHEMA_VERSION: &str = "wiki_store:001_fs_links";
+const CURRENT_SCHEMA_VERSION: &str = "wiki_store:002_fs_folders";
 const MIGRATIONS: &[(&str, &str)] = &[
     (
         "wiki_store:000_fs_schema",
         include_str!("../migrations/000_fs_schema.sql"),
     ),
     (
-        CURRENT_SCHEMA_VERSION,
+        "wiki_store:001_fs_links",
         include_str!("../migrations/001_fs_links.sql"),
+    ),
+    (
+        CURRENT_SCHEMA_VERSION,
+        include_str!("../migrations/002_fs_folders.sql"),
     ),
 ];
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
@@ -44,6 +48,9 @@ pub fn run_fs_migrations(conn: &mut Connection) -> Result<(), String> {
 fn run_post_migration_hook(conn: &rusqlite::Transaction<'_>, version: &str) -> Result<(), String> {
     if version == "wiki_store:001_fs_links" {
         backfill_node_links(conn)?;
+    }
+    if version == "wiki_store:002_fs_folders" {
+        backfill_folder_nodes(conn)?;
     }
     Ok(())
 }
@@ -135,12 +142,168 @@ fn current_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
             return Ok(false);
         }
     }
-    for index in ["fs_links_target_path_idx", "fs_links_source_path_idx"] {
+    for index in [
+        "fs_links_target_path_idx",
+        "fs_links_source_path_idx",
+        "fs_nodes_parent_name_idx",
+    ] {
         if !index_exists(conn, index)? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    let nodes = conn
+        .prepare("SELECT path, created_at, updated_at FROM fs_nodes ORDER BY path ASC")
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let mut folders = std::collections::BTreeMap::<String, (i64, i64)>::new();
+    folders.insert("/Wiki".to_string(), (0, 0));
+    folders.insert("/Sources".to_string(), (0, 0));
+    for (path, created_at, updated_at) in &nodes {
+        let mut current = String::new();
+        let mut segments = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .peekable();
+        while let Some(segment) = segments.next() {
+            current.push('/');
+            current.push_str(segment);
+            if segments.peek().is_none() {
+                break;
+            }
+            folders
+                .entry(current.clone())
+                .and_modify(|(_, folder_updated_at)| {
+                    *folder_updated_at = (*folder_updated_at).max(*updated_at);
+                })
+                .or_insert((*created_at, *updated_at));
+        }
+    }
+
+    for (folder_path, (created_at, updated_at)) in folders {
+        conn.execute(
+            "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
+             VALUES (?1, 'folder', '', ?2, ?3, '', '{}')
+             ON CONFLICT(path) DO NOTHING",
+            params![folder_path, created_at, updated_at],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    let rows = conn
+        .prepare("SELECT id, path, kind, content, metadata_json FROM fs_nodes ORDER BY length(path), path")
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    for (id, path, kind, content, metadata_json) in rows {
+        let (parent_path, name) = split_parent_and_name(&path)?;
+        let parent_id = parent_path
+            .as_deref()
+            .map(|parent| node_id_for_path(conn, parent))
+            .transpose()?;
+        let etag = folder_migration_etag(&path, &kind, &content, &metadata_json);
+        conn.execute(
+            "UPDATE fs_nodes SET parent_id = ?1, name = ?2, etag = ?3 WHERE id = ?4",
+            params![parent_id, name, etag, id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    let folder_paths = conn
+        .prepare(
+            "SELECT path FROM fs_nodes
+             WHERE kind = 'folder'
+               AND NOT EXISTS (SELECT 1 FROM fs_path_state WHERE fs_path_state.path = fs_nodes.path)
+             ORDER BY length(path), path",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for folder_path in folder_paths {
+        conn.execute(
+            "INSERT INTO fs_change_log (path, change_kind) VALUES (?1, 'upsert')",
+            params![folder_path],
+        )
+        .map_err(|error| error.to_string())?;
+        let revision = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fs_path_state (path, last_change_revision)
+             VALUES (?1, ?2)
+             ON CONFLICT(path) DO UPDATE SET last_change_revision = excluded.last_change_revision",
+            params![folder_path, revision],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX fs_nodes_parent_name_idx
+         ON fs_nodes (COALESCE(parent_id, 0), name);
+         CREATE INDEX fs_nodes_parent_idx ON fs_nodes(parent_id);",
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn split_parent_and_name(path: &str) -> Result<(Option<String>, String), String> {
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        return Err(format!("invalid node path: {path}"));
+    };
+    if name.is_empty() {
+        return Err(format!("invalid node path: {path}"));
+    }
+    let parent = if parent.is_empty() {
+        None
+    } else {
+        Some(parent.to_string())
+    };
+    Ok((parent, name.to_string()))
+}
+
+fn node_id_for_path(conn: &rusqlite::Transaction<'_>, path: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT id FROM fs_nodes WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn folder_migration_etag(path: &str, kind: &str, content: &str, metadata_json: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(content.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(metadata_json.as_bytes());
+    format!("v4h:{:x}", hasher.finalize())
 }
 
 fn base_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {

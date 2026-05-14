@@ -62,6 +62,23 @@ fn sha256_bytes(bytes: &[u8]) -> Vec<u8> {
     Sha256::digest(bytes).to_vec()
 }
 
+fn ensure_parent_folders(path: &str) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        mkdir_node(MkdirNodeRequest {
+            database_id: "default".to_string(),
+            path: current.clone(),
+        })
+        .expect("parent folder should exist or be created");
+    }
+}
+
 #[test]
 fn empty_index_does_not_create_default_database() {
     let dir = tempdir().expect("tempdir should create");
@@ -254,6 +271,7 @@ fn memory_entrypoints_return_agent_memory_contract() {
         ),
         ("/Sources/raw/a/a.md", "raw source"),
     ] {
+        ensure_parent_folders(path);
         write_node(WriteNodeRequest {
             database_id: "default".to_string(),
             path: path.to_string(),
@@ -315,6 +333,8 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     .expect("write should succeed");
     assert!(created.created);
 
+    ensure_parent_folders("/Wiki/nested/bar.md");
+    ensure_parent_folders("/Sources/raw/source/source.md");
     write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
@@ -347,9 +367,9 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     })
     .expect("list should succeed");
     assert!(
-        entries.iter().any(|entry| {
-            entry.path == "/Wiki/nested" && entry.kind == NodeEntryKind::Directory
-        })
+        entries
+            .iter()
+            .any(|entry| { entry.path == "/Wiki/nested" && entry.kind == NodeEntryKind::Folder })
     );
 
     let children = list_children(ListChildrenRequest {
@@ -358,7 +378,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
     })
     .expect("children should list");
     assert!(children.iter().any(|child| {
-        child.path == "/Wiki/nested" && child.kind == NodeEntryKind::Directory && child.is_virtual
+        child.path == "/Wiki/nested" && child.kind == NodeEntryKind::Folder && !child.is_virtual
     }));
     assert!(children.iter().any(|child| {
         child.path == "/Wiki/foo.md"
@@ -390,8 +410,11 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         preview_mode: None,
     })
     .expect("path search should succeed");
-    assert_eq!(path_hits.len(), 1);
-    assert_eq!(path_hits[0].path, "/Wiki/nested/bar.md");
+    assert!(
+        path_hits
+            .iter()
+            .any(|hit| hit.path == "/Wiki/nested/bar.md")
+    );
 
     let snapshot = export_snapshot(ExportSnapshotRequest {
         database_id: "default".to_string(),
@@ -402,7 +425,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         snapshot_session_id: None,
     })
     .expect("snapshot should export");
-    assert_eq!(snapshot.nodes.len(), 2);
+    assert_eq!(snapshot.nodes.len(), 4);
 
     let empty_delta = fetch_updates(FetchUpdatesRequest {
         database_id: "default".to_string(),
@@ -452,7 +475,9 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
 #[test]
 fn fs_entrypoints_cover_backlink_queries() {
     install_test_service();
+    ensure_parent_folders("/Wiki/topic/source.md");
 
+    ensure_parent_folders("/Sources/raw/source/source.md");
     write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Wiki/topic/source.md".to_string(),
@@ -582,6 +607,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect_err("noncanonical source write should fail");
     assert!(write_error.contains("source path must"));
 
+    ensure_parent_folders("/Sources/raw/source/source.md");
     write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Sources/raw/source/source.md".to_string(),
@@ -604,6 +630,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     .expect_err("noncanonical source append should fail");
     assert!(append_error.contains("source path must"));
 
+    ensure_parent_folders("/Sources/raw/keep/keep.md");
     let created = write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Sources/raw/keep/keep.md".to_string(),
@@ -614,6 +641,7 @@ fn fs_entrypoints_reject_noncanonical_source_paths() {
     })
     .expect("canonical source write should succeed");
 
+    ensure_parent_folders("/Sources/raw/renamed/wrong.md");
     let move_error = move_node(MoveNodeRequest {
         database_id: "default".to_string(),
         from_path: "/Sources/raw/keep/keep.md".to_string(),
@@ -631,6 +659,7 @@ fn fs_entrypoints_search_large_hits_without_trap() {
     install_test_service();
 
     let payload = format!("shared-bench-search {}", "x".repeat(1024 * 1024 - 20));
+    ensure_parent_folders("/Wiki/large/node-000.md");
     for index in 0..10 {
         write_node(WriteNodeRequest {
             database_id: "default".to_string(),
@@ -666,6 +695,8 @@ fn fs_entrypoints_search_large_hits_without_trap() {
 #[test]
 fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     install_test_service();
+    ensure_parent_folders("/Wiki/work/item.md");
+    ensure_parent_folders("/Wiki/archive/item.md");
 
     let created = write_node(WriteNodeRequest {
         database_id: "default".to_string(),
@@ -698,7 +729,7 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
     assert!(
         globbed
             .iter()
-            .any(|hit| hit.path == "/Wiki/archive" && hit.kind == NodeEntryKind::Directory)
+            .any(|hit| hit.path == "/Wiki/archive" && hit.kind == NodeEntryKind::Folder)
     );
 
     let recent = recent_nodes(RecentNodesRequest {
@@ -707,7 +738,11 @@ fn fs_entrypoints_cover_move_glob_recent_and_multi_edit() {
         path: Some("/Wiki".to_string()),
     })
     .expect("recent should succeed");
-    assert_eq!(recent[0].path, "/Wiki/archive/item.md");
+    assert!(
+        recent
+            .iter()
+            .any(|node| node.path == "/Wiki/archive/item.md")
+    );
 
     let edited = multi_edit_node(MultiEditNodeRequest {
         database_id: "default".to_string(),
@@ -745,6 +780,7 @@ fn database_archive_entrypoints_export_bytes_and_block_normal_reads() {
         expected_etag: None,
     })
     .expect("wiki write should succeed");
+    ensure_parent_folders("/Sources/raw/smoke/smoke.md");
     write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Sources/raw/smoke/smoke.md".to_string(),

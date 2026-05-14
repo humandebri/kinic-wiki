@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use vfs_types::{
     AppendNodeRequest, ChildNode, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
     EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
@@ -73,13 +73,6 @@ WHERE child.path >= ?1
   AND child.path < ?2
   AND instr(substr(child.path, ?3), '/') = 0
 ORDER BY child.path ASC";
-const LIST_VIRTUAL_CHILD_NAMES_SQL: &str = "\
-SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
-FROM fs_nodes
-WHERE path >= ?1
-  AND path < ?2
-  AND instr(substr(path, ?3), '/') > 0
-ORDER BY 1 ASC";
 
 struct ChildRow {
     path: String,
@@ -150,20 +143,18 @@ impl FsStore {
     pub fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>, String> {
         let path = normalize_list_children_path(&request.path)?;
         let conn = self.open()?;
-        let concrete_node_exists = load_stored_node(&conn, &path)?.is_some();
+        let concrete_node = load_stored_node(&conn, &path)?;
         let rows = load_child_rows(&conn, &path)?;
-        let virtual_names = load_virtual_child_names(&conn, &path)?;
-        if rows.is_empty() && virtual_names.is_empty() && concrete_node_exists {
+        if concrete_node
+            .as_ref()
+            .is_some_and(|stored| stored.node.kind != NodeKind::Folder)
+        {
             return Err(format!("not a directory: {path}"));
         }
-        if rows.is_empty()
-            && virtual_names.is_empty()
-            && !allows_empty_directory_listing(&path)
-            && !concrete_node_exists
-        {
+        if rows.is_empty() && !allows_empty_directory_listing(&path) && concrete_node.is_none() {
             return Err(format!("path not found: {path}"));
         }
-        build_child_nodes(&path, rows, virtual_names)
+        build_child_nodes(&path, rows)
     }
 
     pub fn write_node(
@@ -175,6 +166,12 @@ impl FsStore {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let existing = load_stored_node(&tx, &path)?;
+        if existing
+            .as_ref()
+            .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
+        {
+            return Err(format!("cannot overwrite folder with file node: {path}"));
+        }
         let created = existing.is_none();
         let mut node = match existing.as_ref() {
             Some(current) => update_existing_node(current.node.clone(), request, now)?,
@@ -202,6 +199,12 @@ impl FsStore {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let existing = load_stored_node(&tx, &path)?;
+        if existing
+            .as_ref()
+            .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
+        {
+            return Err(format!("cannot append to folder: {path}"));
+        }
         let created = existing.is_none();
         let mut node = match existing.as_ref() {
             Some(current) => append_existing_node(current.node.clone(), request, now)?,
@@ -229,6 +232,9 @@ impl FsStore {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current =
             load_stored_node(&tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))?;
+        if current.node.kind == NodeKind::Folder {
+            return Err(format!("cannot edit folder: {path}"));
+        }
         if current.node.etag != request.expected_etag.unwrap_or_default() {
             return Err(format!("expected_etag does not match current etag: {path}"));
         }
@@ -254,8 +260,37 @@ impl FsStore {
         })
     }
 
-    pub fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
+    pub fn mkdir_node(
+        &self,
+        request: MkdirNodeRequest,
+        now: i64,
+    ) -> Result<MkdirNodeResult, String> {
         let path = normalize_node_path(&request.path, false)?;
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        if let Some(existing) = load_stored_node(&tx, &path)? {
+            if existing.node.kind == NodeKind::Folder {
+                return Ok(MkdirNodeResult {
+                    path,
+                    created: false,
+                });
+            }
+            return Err(format!("node already exists and is not a folder: {path}"));
+        }
+        let mut node = Node {
+            path: path.clone(),
+            kind: NodeKind::Folder,
+            content: String::new(),
+            created_at: now,
+            updated_at: now,
+            etag: String::new(),
+            metadata_json: "{}".to_string(),
+        };
+        let revision = record_change(&tx, &node)?;
+        update_path_state(&tx, &node.path, revision)?;
+        node.etag = compute_node_etag(&node);
+        save_node(&tx, None, &node)?;
+        tx.commit().map_err(|error| error.to_string())?;
         Ok(MkdirNodeResult {
             path,
             created: true,
@@ -277,10 +312,59 @@ impl FsStore {
                 "expected_etag does not match current etag: {from_path}"
             ));
         }
+        if current.node.kind == NodeKind::Folder {
+            if is_protected_root_folder(&from_path) {
+                return Err(format!("cannot move protected folder: {from_path}"));
+            }
+            if to_path.starts_with(&format!("{from_path}/")) {
+                return Err("cannot move folder into itself".to_string());
+            }
+        }
         let target = load_stored_node(&tx, &to_path)?;
         let overwrote = target.is_some();
+        if current.node.kind == NodeKind::Folder && overwrote {
+            return Err(format!("target node already exists: {to_path}"));
+        }
         if overwrote && !request.overwrite {
             return Err(format!("target node already exists: {to_path}"));
+        }
+        if target
+            .as_ref()
+            .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
+        {
+            return Err(format!("cannot overwrite folder: {to_path}"));
+        }
+        if current.node.kind == NodeKind::Folder {
+            let subtree = load_stored_subtree(&tx, &from_path)?;
+            for stored in &subtree {
+                let next_path = rebase_path(&stored.node.path, &from_path, &to_path)?;
+                if next_path != stored.node.path && load_stored_node(&tx, &next_path)?.is_some() {
+                    return Err(format!("target node already exists: {next_path}"));
+                }
+            }
+            for stored in subtree {
+                let mut moved = stored.node.clone();
+                let old_path = moved.path.clone();
+                moved.path = rebase_path(&old_path, &from_path, &to_path)?;
+                moved.updated_at = now;
+                let from_revision = record_path_removal(&tx, &old_path)?;
+                update_path_state(&tx, &old_path, from_revision)?;
+                let to_revision = record_change(&tx, &moved)?;
+                update_path_state(&tx, &moved.path, to_revision)?;
+                moved.etag = compute_node_etag(&moved);
+                save_moved_node(&tx, stored.row_id, &moved)?;
+                sync_node_fts(&tx, Some(&stored), Some((stored.row_id, &moved)))?;
+                delete_source_links(&tx, &old_path)?;
+                sync_node_links(&tx, &moved)?;
+            }
+            let moved = load_node(&tx, &to_path)?
+                .ok_or_else(|| format!("node does not exist: {to_path}"))?;
+            tx.commit().map_err(|error| error.to_string())?;
+            return Ok(MoveNodeResult {
+                node: node_ack(&moved),
+                from_path,
+                overwrote: false,
+            });
         }
         if let Some(target) = target.as_ref() {
             delete_source_links(&tx, &target.node.path)?;
@@ -294,7 +378,7 @@ impl FsStore {
         let to_revision = record_change(&tx, &moved)?;
         update_path_state(&tx, &to_path, to_revision)?;
         moved.etag = compute_node_etag(&moved);
-        save_node(&tx, Some(current.row_id), &moved)?;
+        save_moved_node(&tx, current.row_id, &moved)?;
         sync_node_fts(&tx, Some(&current), Some((current.row_id, &moved)))?;
         delete_source_links(&tx, &from_path)?;
         sync_node_links(&tx, &moved)?;
@@ -389,6 +473,9 @@ impl FsStore {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current =
             load_stored_node(&tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))?;
+        if current.node.kind == NodeKind::Folder {
+            return Err(format!("cannot edit folder: {path}"));
+        }
         if current.node.etag != request.expected_etag.unwrap_or_default() {
             return Err(format!("expected_etag does not match current etag: {path}"));
         }
@@ -421,6 +508,14 @@ impl FsStore {
             load_stored_node(&tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))?;
         if current.node.etag != request.expected_etag.unwrap_or_default() {
             return Err(format!("expected_etag does not match current etag: {path}"));
+        }
+        if current.node.kind == NodeKind::Folder {
+            if is_protected_root_folder(&path) {
+                return Err(format!("cannot delete protected folder: {path}"));
+            }
+            if has_children(&tx, &path)? {
+                return Err(format!("folder is not empty: {path}"));
+            }
         }
         let revision = record_path_removal(&tx, &path)?;
         update_path_state(&tx, &path, revision)?;
@@ -1168,22 +1263,7 @@ fn allows_empty_directory_listing(path: &str) -> bool {
     matches!(path, "/" | "/Wiki" | "/Sources")
 }
 
-fn load_virtual_child_names(conn: &Connection, path: &str) -> Result<Vec<String>, String> {
-    let (prefix, upper, relative_start) = list_child_query_bounds(path);
-    let mut stmt = conn
-        .prepare(LIST_VIRTUAL_CHILD_NAMES_SQL)
-        .map_err(|error| error.to_string())?;
-    stmt.query_map(params![prefix, upper, relative_start], |row| row.get(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
-}
-
-fn build_child_nodes(
-    parent_path: &str,
-    rows: Vec<ChildRow>,
-    virtual_names: Vec<String>,
-) -> Result<Vec<ChildNode>, String> {
+fn build_child_nodes(parent_path: &str, rows: Vec<ChildRow>) -> Result<Vec<ChildNode>, String> {
     let mut children = BTreeMap::<String, ChildNode>::new();
 
     for row in rows {
@@ -1206,37 +1286,18 @@ fn build_child_nodes(
             },
         );
     }
-    for child in build_virtual_child_nodes(parent_path, virtual_names) {
-        children.entry(child.name.clone()).or_insert(child);
-    }
 
     let mut children = children.into_values().collect::<Vec<_>>();
     children.sort_by(|left, right| match (&left.kind, &right.kind) {
-        (NodeEntryKind::Directory, NodeEntryKind::Directory) => left.name.cmp(&right.name),
-        (NodeEntryKind::Directory, _) => std::cmp::Ordering::Less,
-        (_, NodeEntryKind::Directory) => std::cmp::Ordering::Greater,
+        (
+            NodeEntryKind::Folder | NodeEntryKind::Directory,
+            NodeEntryKind::Folder | NodeEntryKind::Directory,
+        ) => left.name.cmp(&right.name),
+        (NodeEntryKind::Folder | NodeEntryKind::Directory, _) => std::cmp::Ordering::Less,
+        (_, NodeEntryKind::Folder | NodeEntryKind::Directory) => std::cmp::Ordering::Greater,
         _ => left.name.cmp(&right.name),
     });
     Ok(children)
-}
-
-fn build_virtual_child_nodes(parent_path: &str, names: Vec<String>) -> Vec<ChildNode> {
-    names
-        .into_iter()
-        .map(|name| {
-            let path = child_path(parent_path, &name);
-            ChildNode {
-                has_children: true,
-                path,
-                name,
-                kind: NodeEntryKind::Directory,
-                updated_at: None,
-                etag: None,
-                size_bytes: None,
-                is_virtual: true,
-            }
-        })
-        .collect()
 }
 
 fn child_prefix(parent_path: &str) -> String {
@@ -1272,24 +1333,20 @@ fn child_name(parent_path: &str, path: &str) -> Option<(String, bool)> {
     }
 }
 
-fn child_path(parent_path: &str, name: &str) -> String {
-    if parent_path == "/" {
-        format!("/{name}")
-    } else {
-        format!("{parent_path}/{name}")
-    }
-}
-
 fn entry_kind_from_node_kind(kind: &NodeKind) -> NodeEntryKind {
     match kind {
         NodeKind::File => NodeEntryKind::File,
         NodeKind::Source => NodeEntryKind::Source,
+        NodeKind::Folder => NodeEntryKind::Folder,
     }
 }
 
 fn create_new_node(path: String, request: WriteNodeRequest, now: i64) -> Result<Node, String> {
     if request.expected_etag.is_some() {
         return Err(format!("expected_etag must be None for new node: {path}"));
+    }
+    if request.kind == NodeKind::Folder {
+        return Err("write_node cannot create folders; use mkdir_node".to_string());
     }
     Ok(Node {
         path,
@@ -1309,6 +1366,9 @@ fn create_appended_node(
 ) -> Result<Node, String> {
     if request.expected_etag.is_some() {
         return Err(format!("expected_etag must be None for new node: {path}"));
+    }
+    if request.kind == Some(NodeKind::Folder) {
+        return Err("append_node cannot create folders; use mkdir_node".to_string());
     }
     Ok(Node {
         path,
@@ -1331,6 +1391,9 @@ fn append_existing_node(
             "expected_etag does not match current etag: {}",
             current.path
         ));
+    }
+    if current.kind == NodeKind::Folder {
+        return Err(format!("cannot append to folder: {}", current.path));
     }
     let separator = request.separator.unwrap_or_default();
     current.content = format!("{}{}{}", current.content, separator, request.content);
@@ -1392,6 +1455,9 @@ fn update_existing_node(
             current.path
         ));
     }
+    if request.kind == NodeKind::Folder {
+        return Err("write_node cannot create folders; use mkdir_node".to_string());
+    }
     current.kind = request.kind;
     current.content = request.content;
     current.updated_at = now;
@@ -1427,9 +1493,10 @@ fn save_node(tx: &Transaction<'_>, row_id: Option<i64>, node: &Node) -> Result<i
             Ok(row_id)
         }
         None => {
+            let (parent_id, name) = parent_fields_for_path(tx, &node.path)?;
             tx.execute(
-                "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json, parent_id, name)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     node.path,
                     node_kind_to_db(&node.kind),
@@ -1437,12 +1504,134 @@ fn save_node(tx: &Transaction<'_>, row_id: Option<i64>, node: &Node) -> Result<i
                     node.created_at,
                     node.updated_at,
                     node.etag,
-                    node.metadata_json
+                    node.metadata_json,
+                    parent_id,
+                    name
                 ],
             )
             .map_err(|error| error.to_string())?;
             Ok(tx.last_insert_rowid())
         }
+    }
+}
+
+fn save_moved_node(tx: &Transaction<'_>, row_id: i64, node: &Node) -> Result<i64, String> {
+    let (parent_id, name) = parent_fields_for_path(tx, &node.path)?;
+    tx.execute(
+        "UPDATE fs_nodes
+         SET path = ?1,
+             kind = ?2,
+             content = ?3,
+             created_at = ?4,
+             updated_at = ?5,
+             etag = ?6,
+             metadata_json = ?7,
+             parent_id = ?8,
+             name = ?9
+         WHERE id = ?10",
+        params![
+            node.path,
+            node_kind_to_db(&node.kind),
+            node.content,
+            node.created_at,
+            node.updated_at,
+            node.etag,
+            node.metadata_json,
+            parent_id,
+            name,
+            row_id
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(row_id)
+}
+
+fn parent_fields_for_path(
+    tx: &Transaction<'_>,
+    path: &str,
+) -> Result<(Option<i64>, String), String> {
+    let (parent_path, name) = split_parent_path_and_name(path)?;
+    let Some(parent_path) = parent_path else {
+        return Ok((None, name));
+    };
+    let parent = load_parent_folder_candidate(tx, &parent_path)?
+        .ok_or_else(|| format!("parent folder does not exist: {parent_path}"))?;
+    if parent.1 != NodeKind::Folder {
+        return Err(format!("parent path is not a folder: {parent_path}"));
+    }
+    Ok((Some(parent.0), name))
+}
+
+fn load_parent_folder_candidate(
+    tx: &Transaction<'_>,
+    path: &str,
+) -> Result<Option<(i64, NodeKind)>, String> {
+    tx.query_row(
+        "SELECT id, kind FROM fs_nodes WHERE path = ?1",
+        params![path],
+        |row| Ok((row.get(0)?, node_kind_from_db(&row.get::<_, String>(1)?)?)),
+    )
+    .optional()
+    .map_err(|error| error.to_string())
+}
+
+fn load_stored_subtree(tx: &Transaction<'_>, path: &str) -> Result<Vec<StoredNode>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT path FROM fs_nodes
+             WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'
+             ORDER BY length(path), path",
+        )
+        .map_err(|error| error.to_string())?;
+    let like = format!("{}/%", crate::fs_helpers::escape_like_pattern(path));
+    let paths = stmt
+        .query_map(params![path, like], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    paths
+        .into_iter()
+        .map(|node_path| {
+            load_stored_node(tx, &node_path)?
+                .ok_or_else(|| format!("node does not exist: {node_path}"))
+        })
+        .collect()
+}
+
+fn rebase_path(path: &str, from_path: &str, to_path: &str) -> Result<String, String> {
+    if path == from_path {
+        return Ok(to_path.to_string());
+    }
+    let suffix = path
+        .strip_prefix(&format!("{from_path}/"))
+        .ok_or_else(|| format!("path is not in moved subtree: {path}"))?;
+    Ok(format!("{to_path}/{suffix}"))
+}
+
+fn has_children(tx: &Transaction<'_>, path: &str) -> Result<bool, String> {
+    let prefix = format!("{path}/");
+    let upper = prefix_upper_bound(&prefix);
+    tx.prepare("SELECT 1 FROM fs_nodes WHERE path >= ?1 AND path < ?2 LIMIT 1")
+        .map_err(|error| error.to_string())?
+        .exists(params![prefix, upper])
+        .map_err(|error| error.to_string())
+}
+
+fn is_protected_root_folder(path: &str) -> bool {
+    matches!(path, "/Wiki" | "/Sources")
+}
+
+fn split_parent_path_and_name(path: &str) -> Result<(Option<String>, String), String> {
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        return Err(format!("invalid node path: {path}"));
+    };
+    if name.is_empty() {
+        return Err(format!("invalid node path: {path}"));
+    }
+    if parent.is_empty() {
+        Ok((None, name.to_string()))
+    } else {
+        Ok((Some(parent.to_string()), name.to_string()))
     }
 }
 
@@ -1721,6 +1910,8 @@ fn glob_type_matches(node_type: &GlobNodeType, entry_kind: &NodeEntryKind) -> bo
         GlobNodeType::File => {
             matches!(entry_kind, NodeEntryKind::File | NodeEntryKind::Source)
         }
-        GlobNodeType::Directory => *entry_kind == NodeEntryKind::Directory,
+        GlobNodeType::Directory => {
+            matches!(entry_kind, NodeEntryKind::Directory | NodeEntryKind::Folder)
+        }
     }
 }

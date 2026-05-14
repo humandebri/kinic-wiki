@@ -85,6 +85,8 @@ pub enum NodeKind {
     File,
     #[serde(alias = "Source")]
     Source,
+    #[serde(alias = "Folder")]
+    Folder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -96,6 +98,8 @@ pub enum NodeEntryKind {
     File,
     #[serde(alias = "Source")]
     Source,
+    #[serde(alias = "Folder")]
+    Folder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

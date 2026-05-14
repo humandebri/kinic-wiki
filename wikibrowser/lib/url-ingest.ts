@@ -1,5 +1,5 @@
 import type { Identity } from "@icp-sdk/core/agent";
-import { authorizeUrlIngestTriggerSession, writeNodeAuthenticated } from "@/lib/vfs-client";
+import { authorizeUrlIngestTriggerSession, mkdirNodeAuthenticated, writeNodeAuthenticated } from "@/lib/vfs-client";
 
 export type CreatedUrlIngestRequest = {
   requestPath: string;
@@ -25,6 +25,7 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
   const requestPath = `/Sources/ingest-requests/${requestId}.md`;
   const requestedAt = new Date().toISOString();
   const requestedBy = identity.getPrincipal().toText();
+  await ensureParentFolders(canisterId, databaseId, identity, requestPath);
   await writeNodeAuthenticated(canisterId, identity, {
     databaseId,
     path: requestPath,
@@ -51,6 +52,15 @@ export async function createUrlIngestRequest(canisterId: string, databaseId: str
   });
   const trigger = await triggerWorker(databaseId, requestPath, session);
   return { requestPath, triggered: trigger.ok, triggerError: trigger.error };
+}
+
+async function ensureParentFolders(canisterId: string, databaseId: string, identity: Identity, path: string): Promise<void> {
+  const segments = path.split("/").filter(Boolean);
+  let current = "";
+  for (const segment of segments.slice(0, -1)) {
+    current = `${current}/${segment}`;
+    await mkdirNodeAuthenticated(canisterId, identity, { databaseId, path: current });
+  }
 }
 
 export async function ensureUrlIngestTriggerSession(canisterId: string, databaseId: string, identity: Identity): Promise<string> {

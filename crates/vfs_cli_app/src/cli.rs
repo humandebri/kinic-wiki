@@ -649,7 +649,10 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillImportCommand, SkillStatusArg};
+    use super::{
+        Cli, Command, DatabaseCommand, NodeKindArg, SkillCommand, SkillImportCommand,
+        SkillStatusArg,
+    };
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -746,6 +749,48 @@ mod tests {
             "index.md",
         ]);
         assert!(write.command.requires_identity());
+    }
+
+    #[test]
+    fn main_cli_rejects_folder_kind_for_write_and_append() {
+        let write = Cli::try_parse_from([
+            "vfs-cli",
+            "write-node",
+            "--path",
+            "/Wiki/folder",
+            "--kind",
+            "folder",
+            "--input",
+            "folder.md",
+        ]);
+        assert!(write.is_err());
+
+        let append = Cli::try_parse_from([
+            "vfs-cli",
+            "append-node",
+            "--path",
+            "/Wiki/folder",
+            "--kind",
+            "folder",
+            "--input",
+            "folder.md",
+        ]);
+        assert!(append.is_err());
+
+        let source = Cli::parse_from([
+            "vfs-cli",
+            "write-node",
+            "--path",
+            "/Sources/raw/source/source.md",
+            "--kind",
+            "source",
+            "--input",
+            "source.md",
+        ]);
+        let Command::WriteNode { kind, .. } = source.command else {
+            panic!("expected write-node command");
+        };
+        assert_eq!(kind, NodeKindArg::Source);
     }
 
     #[test]

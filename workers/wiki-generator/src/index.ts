@@ -3,7 +3,7 @@
 // Why: Generation should run outside the wiki browser UI server.
 import { isAuthorized } from "./auth.js";
 import { parseManualRunInput, parseQueueMessage, processQueueMessage, runManual } from "./processing.js";
-import { parseUrlIngestTriggerInput, triggerUrlIngestRequest } from "./url-ingest.js";
+import { parseUrlIngestTriggerInput, prepareUrlIngestTrigger, triggerUrlIngestRequest, UrlIngestTriggerError } from "./url-ingest.js";
 import type { QueueMessage } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
@@ -23,8 +23,15 @@ export default {
       if (typeof input === "string") {
         return jsonResponse({ error: input }, 400);
       }
+      let triggerContext: Awaited<ReturnType<typeof prepareUrlIngestTrigger>>;
+      try {
+        triggerContext = await prepareUrlIngestTrigger(env, input);
+      } catch (error) {
+        const status = error instanceof UrlIngestTriggerError ? error.status : 500;
+        return jsonResponse({ error: errorMessage(error) }, status);
+      }
       ctx.waitUntil(
-        triggerUrlIngestRequest(env, input).catch((error) => {
+        triggerUrlIngestRequest(env, input, triggerContext).catch((error) => {
           console.error("url ingest trigger failed", errorMessage(error));
         })
       );

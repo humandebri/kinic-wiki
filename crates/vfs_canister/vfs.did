@@ -209,8 +209,8 @@ type NodeEntry = record {
   path : text;
   has_children : bool;
 };
-type NodeEntryKind = variant { File; Source; Directory };
-type NodeKind = variant { File; Source };
+type NodeEntryKind = variant { Folder; File; Source; Directory };
+type NodeKind = variant { Folder; File; Source };
 type NodeMutationAck = record {
   updated_at : int64;
   etag : text;

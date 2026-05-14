@@ -15,6 +15,7 @@ const explorerTreeSource = readFileSync(new URL("../components/explorer-tree.tsx
 const documentPaneSource = readFileSync(new URL("../components/document-pane.tsx", import.meta.url), "utf8");
 const markdownEditDocumentSource = readFileSync(new URL("../components/markdown-edit-document.tsx", import.meta.url), "utf8");
 const markdownEditorSource = readFileSync(new URL("../components/markdown-editor.tsx", import.meta.url), "utf8");
+const panelSource = readFileSync(new URL("../components/panel.tsx", import.meta.url), "utf8");
 const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
 const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
 const vfsClientSource = readFileSync(new URL("../lib/vfs-client.ts", import.meta.url), "utf8");
@@ -23,12 +24,13 @@ const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), 
 assert.match(explorerTreeSource, /childNodesCache\.current\.get\(requestKey\)/);
 assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, data\)/);
 assert.match(explorerTreeSource, /key=\{`\$\{canisterId\}:\$\{databaseId\}:\/Wiki:/);
-assert.match(explorerTreeSource, /onCreateMarkdownFile/);
-assert.match(explorerTreeSource, /onDeleteMarkdownNode/);
-assert.match(explorerTreeSource, /normalizeMarkdownFileName/);
-assert.match(explorerTreeSource, /trimmed\.endsWith\("\.md"\) \? trimmed : `\$\{trimmed\}\.md`/);
-assert.match(explorerTreeSource, /currentDatabaseRole !== "writer" && props\.currentDatabaseRole !== "owner"/);
-assert.match(explorerTreeSource, /node\.kind === "file" && !node\.isVirtual && node\.path\.startsWith\("\/Wiki\/"\) && node\.path\.endsWith\("\.md"\)/);
+assert.match(explorerTreeSource, /onSelectedNode/);
+assert.doesNotMatch(explorerTreeSource, /onCreateMarkdownFile/);
+assert.doesNotMatch(explorerTreeSource, /onDeleteMarkdownNode/);
+assert.doesNotMatch(explorerTreeSource, /group-hover:opacity-100/);
+assert.doesNotMatch(explorerTreeSource, /New Markdown under/);
+assert.match(panelSource, /actions\?: ReactNode/);
+assert.match(panelSource, /\{actions \? <div className="shrink-0">\{actions\}<\/div> : null\}/);
 assert.match(wikiBrowserSource, /data-tid="header-login-button"/);
 assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
 assert.match(wikiBrowserSource, /LayoutDashboard/);
@@ -38,11 +40,31 @@ assert.match(wikiBrowserSource, /canLeaveDirtyEdit/);
 assert.match(wikiBrowserSource, /UNSAVED_MARKDOWN_MESSAGE/);
 assert.match(wikiBrowserSource, /deleteNodeAuthenticated/);
 assert.match(wikiBrowserSource, /writeNodeAuthenticated/);
+assert.match(wikiBrowserSource, /mkdirNodeAuthenticated/);
+assert.match(wikiBrowserSource, /moveNodeAuthenticated/);
 assert.match(wikiBrowserSource, /nodeContextCache\.current\.clear\(\)/);
 assert.match(wikiBrowserSource, /childNodesCache\.current\.clear\(\)/);
 assert.match(wikiBrowserSource, /expectedEtag: null/);
 assert.match(wikiBrowserSource, /memberDatabases\.find/);
+assert.match(wikiBrowserSource, /ExplorerHeaderActions/);
+assert.match(wikiBrowserSource, /ExplorerCreateForm/);
+assert.match(wikiBrowserSource, /ExplorerMoveForm/);
+assert.match(wikiBrowserSource, /FolderPlus/);
+assert.match(wikiBrowserSource, /Pencil/);
+assert.match(wikiBrowserSource, /MoveRight/);
+assert.match(wikiBrowserSource, /normalizeMarkdownFileName/);
+assert.match(wikiBrowserSource, /normalizePathSegment/);
+assert.match(wikiBrowserSource, /trimmed\.endsWith\("\.md"\) \? trimmed : `\$\{trimmed\}\.md`/);
+assert.match(wikiBrowserSource, /createDirectoryForExplorerNode/);
+assert.match(wikiBrowserSource, /currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner"/);
+assert.match(wikiBrowserSource, /isMutableWikiExplorerNode/);
+assert.match(wikiBrowserSource, /isProtectedRootFolder\(node\.path\)/);
+assert.match(wikiBrowserSource, /path === "\/Wiki" \|\| path === "\/Sources"/);
+assert.match(wikiBrowserSource, /node\.kind === "folder"/);
+assert.match(wikiBrowserSource, /!node\.hasChildren/);
+assert.match(wikiBrowserSource, /DocumentBreadcrumbs/);
 assert.match(documentPaneSource, /label="Edit"/);
+assert.match(documentPaneSource, /node\.data\?\.kind === "folder"/);
 assert.match(documentPaneSource, /node\.kind === "file" && node\.path\.endsWith\("\.md"\) && !node\.path\.startsWith\("\/Sources\/raw\/"\)/);
 assert.match(documentPaneSource, /readMode === "anonymous"/);
 assert.match(documentPaneSource, /Authenticated mode required/);
@@ -88,9 +110,9 @@ assert.equal(provenancePathFor("/Wiki/demo/provenance.md"), null);
 const sortedChildren = sortChildNodes([
   child("/Wiki/10.md", "10.md", "file"),
   child("/Wiki/2.md", "2.md", "file"),
-  child("/Wiki/beta", "beta", "directory"),
+  child("/Wiki/beta", "beta", "folder"),
   child("/Wiki/1.md", "1.md", "file"),
-  child("/Wiki/alpha", "alpha", "directory")
+  child("/Wiki/alpha", "alpha", "folder")
 ]);
 assert.deepEqual(
   sortedChildren.map((node) => node.path),
@@ -98,6 +120,7 @@ assert.deepEqual(
 );
 assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
 assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);
+assert.equal(canExpandChildNode(child("/Wiki/folder", "folder", "folder", false)), true);
 
 const hit = normalizeSearchHit({
   path: "/Wiki/demo.md",
@@ -127,6 +150,15 @@ assert.deepEqual(hit, {
   score: 0.75,
   matchReasons: ["content"]
 });
+const folderHit = normalizeSearchHit({
+  path: "/Wiki/demo",
+  kind: { Folder: null },
+  snippet: [],
+  preview: [],
+  score: 0.5,
+  match_reasons: ["path"]
+});
+assert.equal(folderHit.kind, "folder");
 
 assert.deepEqual(
   splitMarkdownPreviewSections("Intro\n\n# One\nBody\n## Two\nMore").map((section) => section.split("\n")[0]),

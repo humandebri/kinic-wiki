@@ -190,6 +190,8 @@ function normalizeResultAlias(value) {
   if (normalized === "Result_4") return "ResultDeleteNode";
   if (normalized === "Result_11") return "ResultMembers";
   if (normalized === "Result_12") return "ResultDatabases";
+  if (normalized === "Result_14") return "ResultMkdirNode";
+  if (normalized === "Result_15") return "ResultMoveNode";
   if (normalized === "Result_16") return "ResultQueryContext";
   if (normalized === "Result_18") return "ResultNode";
   if (normalized === "Result_19") return "ResultNodeContext";

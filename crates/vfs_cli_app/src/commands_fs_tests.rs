@@ -89,6 +89,7 @@ impl VfsApi for MockClient {
                 kind: match node.kind {
                     NodeKind::File => vfs_types::NodeEntryKind::File,
                     NodeKind::Source => vfs_types::NodeEntryKind::Source,
+                    NodeKind::Folder => vfs_types::NodeEntryKind::Folder,
                 },
                 updated_at: node.updated_at,
                 etag: node.etag.clone(),

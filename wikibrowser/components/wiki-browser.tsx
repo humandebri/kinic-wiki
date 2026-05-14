@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GitBranch, LayoutDashboard, Network, PanelRight, Search } from "lucide-react";
+import { Check, FilePlus, FolderPlus, GitBranch, LayoutDashboard, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -82,6 +82,14 @@ export function WikiBrowser() {
   const [childNodes, setChildNodes] = useState<BrowserLoadState<ChildNode[]>>(browserLoadingState(canisterId, databaseId, selectedPath));
   const [editState, setEditState] = useState<DocumentEditState>({ dirty: false, saveState: "idle" });
   const [explorerRevision, setExplorerRevision] = useState(0);
+  const [selectedExplorerState, setSelectedExplorerState] = useState<{ key: string; node: ChildNode } | null>(null);
+  const [explorerActionMode, setExplorerActionMode] = useState<"file" | "folder" | "rename" | null>(null);
+  const [explorerMoveOpen, setExplorerMoveOpen] = useState(false);
+  const [explorerMoveTarget, setExplorerMoveTarget] = useState("/Wiki");
+  const [explorerMoveTargets, setExplorerMoveTargets] = useState<string[]>(["/Wiki"]);
+  const [explorerDraftName, setExplorerDraftName] = useState("");
+  const [explorerActionError, setExplorerActionError] = useState<string | null>(null);
+  const [explorerBusyAction, setExplorerBusyAction] = useState<"file" | "folder" | "rename" | "move" | "delete" | null>(null);
   const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
   const [memberDatabases, setMemberDatabases] = useState<DatabaseSummary[]>([]);
   const [databaseListError, setDatabaseListError] = useState<string | null>(null);
@@ -156,11 +164,12 @@ export function WikiBrowser() {
     }
     const requestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
     const cached = readBrowserNodeCache(nodeContextCache.current, childNodesCache.current, requestKey);
-    if (cached) {
+    const cachedFolderNeedsChildren = cached?.kind === "node" && cached.context.node.kind === "folder" && !childNodesCache.current.has(requestKey);
+    if (cached && !cachedFolderNeedsChildren) {
       if (cached.kind === "node") {
         setNode({ requestKey, path: selectedPath, data: cached.context.node, error: null, loading: false });
         setNodeContext({ requestKey, path: selectedPath, data: cached.context, error: null, loading: false });
-        setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+        setChildNodes({ requestKey, path: selectedPath, data: childNodesCache.current.get(requestKey) ?? [], error: null, loading: false });
       } else {
         setNode({ requestKey, path: selectedPath, data: null, error: null, loading: false });
         setNodeContext({ requestKey, path: selectedPath, data: null, error: null, loading: false });
@@ -170,7 +179,7 @@ export function WikiBrowser() {
     }
     import("@/lib/vfs-client")
       .then(({ readNodeContext }) => readNodeContext(canisterId, databaseId, selectedPath, 20, effectiveReadIdentity ?? undefined))
-      .then((data) => {
+      .then(async (data) => {
         if (!cancelled) {
           if (!data) {
             throw new ApiError(`node not found: ${selectedPath}`, 404);
@@ -178,7 +187,16 @@ export function WikiBrowser() {
           nodeContextCache.current.set(requestKey, data);
           setNode({ requestKey, path: selectedPath, data: data.node, error: null, loading: false });
           setNodeContext({ requestKey, path: selectedPath, data, error: null, loading: false });
-          setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+          if (data.node.kind === "folder") {
+            const { listChildren } = await import("@/lib/vfs-client");
+            const children = await listChildren(canisterId, databaseId, selectedPath, effectiveReadIdentity ?? undefined);
+            if (!cancelled) {
+              childNodesCache.current.set(requestKey, children);
+              setChildNodes({ requestKey, path: selectedPath, data: children, error: null, loading: false });
+            }
+          } else {
+            setChildNodes({ requestKey, path: selectedPath, data: [], error: null, loading: false });
+          }
         }
       })
       .catch((nodeError: Error) => {
@@ -258,6 +276,7 @@ export function WikiBrowser() {
   const invalidateBrowserCaches = useCallback(() => {
     nodeContextCache.current.clear();
     childNodesCache.current.clear();
+    setSelectedExplorerState(null);
     setExplorerRevision((current) => current + 1);
   }, []);
 
@@ -278,6 +297,37 @@ export function WikiBrowser() {
     () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
     [databaseId, memberDatabases, readIdentity]
   );
+  const explorerSelectionKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
+  const selectedExplorerNode = selectedExplorerState?.key === explorerSelectionKey
+    ? selectedExplorerState.node
+    : explorerNodeFromSelection(selectedPath, currentNode, currentChildren);
+  const explorerWriteDisabledReason = writeDisabledReason(
+    readMode,
+    readIdentity,
+    currentDatabaseRole,
+    readIdentity && !currentDatabaseRole ? databaseListError : null
+  );
+  const explorerCreateDirectory = createDirectoryForExplorerNode(selectedExplorerNode);
+  const explorerMutationTarget = selectedExplorerNode && isMutableWikiExplorerNode(selectedExplorerNode) ? selectedExplorerNode : null;
+  const explorerDeleteTarget = explorerMutationTarget && isDeletableWikiExplorerNode(explorerMutationTarget) ? explorerMutationTarget : null;
+  useEffect(() => {
+    setExplorerMoveTargets(loadedWikiFolders(childNodesCache.current, explorerMutationTarget));
+  }, [explorerMutationTarget, explorerRevision]);
+  const rememberSelectedExplorerNode = useCallback((nextNode: ChildNode) => {
+    const key = nodeRequestKey(canisterId, databaseId, nextNode.path, readPrincipal);
+    setSelectedExplorerState((current) => {
+      if (
+        current?.key === key &&
+        current.node.path === nextNode.path &&
+        current.node.kind === nextNode.kind &&
+        current.node.etag === nextNode.etag &&
+        current.node.isVirtual === nextNode.isVirtual
+      ) {
+        return current;
+      }
+      return { key, node: nextNode };
+    });
+  }, [canisterId, databaseId, readPrincipal, setSelectedExplorerState]);
   const createMarkdownFile = useCallback(async (directoryPath: string, fileName: string) => {
     if (!canLeaveDirtyEdit()) return false;
     if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
@@ -298,12 +348,74 @@ export function WikiBrowser() {
     router.replace(hrefForPath(canisterId, databaseId, nextPath, "edit", tab, undefined, undefined, readMode));
     return true;
   }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, setEditState, tab]);
-  const deleteMarkdownNode = useCallback(async (target: ChildNode) => {
+  const createFolderNode = useCallback(async (directoryPath: string, folderName: string) => {
     if (!canLeaveDirtyEdit()) return false;
     if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
-    if (!readIdentity) throw new Error("Login with Internet Identity to delete Markdown files.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to create folders.");
     if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
-    if (!isDeletableWikiMarkdown(target)) throw new Error("Only /Wiki Markdown files can be deleted.");
+    const nextPath = wikiChildPath(directoryPath, folderName, "folder");
+    const { mkdirNodeAuthenticated } = await import("@/lib/vfs-client");
+    await mkdirNodeAuthenticated(canisterId, readIdentity, {
+      databaseId,
+      path: nextPath
+    });
+    invalidateBrowserCaches();
+    setEditState(EMPTY_EDIT_STATE);
+    router.replace(hrefForPath(canisterId, databaseId, nextPath, undefined, tab, undefined, undefined, readMode));
+    return true;
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, setEditState, tab]);
+  const renameExplorerNode = useCallback(async (target: ChildNode, nextName: string) => {
+    if (!canLeaveDirtyEdit()) return false;
+    if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to rename nodes.");
+    if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
+    if (!isMutableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and folders can be renamed.");
+    if (!target.etag) throw new Error("Cannot rename a node without an etag.");
+    const normalizedName = target.kind === "file" ? normalizeMarkdownFileName(nextName) : normalizePathSegment(nextName);
+    if (!normalizedName) throw new Error("Enter a single valid name.");
+    const nextPath = `${parentPath(target.path) ?? "/Wiki"}/${normalizedName}`;
+    const { moveNodeAuthenticated } = await import("@/lib/vfs-client");
+    await moveNodeAuthenticated(canisterId, readIdentity, {
+      databaseId,
+      fromPath: target.path,
+      toPath: nextPath,
+      expectedEtag: target.etag,
+      overwrite: false
+    });
+    invalidateBrowserCaches();
+    setEditState(EMPTY_EDIT_STATE);
+    router.replace(hrefForPath(canisterId, databaseId, nextPath, target.kind === "file" ? view : undefined, tab, undefined, undefined, readMode));
+    return true;
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, setEditState, tab, view]);
+  const moveExplorerNode = useCallback(async (target: ChildNode, targetDirectory: string) => {
+    if (!canLeaveDirtyEdit()) return false;
+    if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to move nodes.");
+    if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
+    if (!isMutableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and folders can be moved.");
+    if (!target.etag) throw new Error("Cannot move a node without an etag.");
+    if (!isWikiPath(targetDirectory)) throw new Error("Move destination must be under /Wiki.");
+    const nextPath = `${targetDirectory}/${target.name}`;
+    if (nextPath === target.path) return false;
+    const { moveNodeAuthenticated } = await import("@/lib/vfs-client");
+    await moveNodeAuthenticated(canisterId, readIdentity, {
+      databaseId,
+      fromPath: target.path,
+      toPath: nextPath,
+      expectedEtag: target.etag,
+      overwrite: false
+    });
+    invalidateBrowserCaches();
+    setEditState(EMPTY_EDIT_STATE);
+    router.replace(hrefForPath(canisterId, databaseId, nextPath, target.kind === "file" ? view : undefined, tab, undefined, undefined, readMode));
+    return true;
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, setEditState, tab, view]);
+  const deleteExplorerNode = useCallback(async (target: ChildNode) => {
+    if (!canLeaveDirtyEdit()) return false;
+    if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
+    if (!readIdentity) throw new Error("Login with Internet Identity to delete nodes.");
+    if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
+    if (!isDeletableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and empty folders can be deleted.");
     if (!target.etag) throw new Error("Cannot delete a node without an etag.");
     if (!window.confirm(`Delete ${target.path}?`)) return false;
     const { deleteNodeAuthenticated } = await import("@/lib/vfs-client");
@@ -319,6 +431,67 @@ export function WikiBrowser() {
     }
     return true;
   }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, selectedPath, setEditState, tab]);
+
+  async function submitExplorerCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setExplorerActionError(null);
+    if (!explorerActionMode) return;
+    const normalizedName = explorerActionMode === "folder" || (explorerActionMode === "rename" && explorerMutationTarget?.kind === "folder")
+      ? normalizePathSegment(explorerDraftName)
+      : normalizeMarkdownFileName(explorerDraftName);
+    if (!normalizedName) {
+      setExplorerActionError(explorerActionMode === "folder" ? "Enter a folder name, not a path." : "Enter a Markdown file name, not a path.");
+      return;
+    }
+    setExplorerBusyAction(explorerActionMode);
+    try {
+      const created = explorerActionMode === "rename" && explorerMutationTarget
+        ? await renameExplorerNode(explorerMutationTarget, normalizedName)
+        : explorerActionMode === "folder"
+          ? await createFolderNode(explorerCreateDirectory, normalizedName)
+          : await createMarkdownFile(explorerCreateDirectory, normalizedName);
+      if (created) {
+        setExplorerActionMode(null);
+        setExplorerDraftName("");
+      }
+    } catch (cause) {
+      setExplorerActionError(errorMessage(cause));
+    } finally {
+      setExplorerBusyAction(null);
+    }
+  }
+
+  async function runExplorerDelete() {
+    if (!explorerDeleteTarget) return;
+    setExplorerActionError(null);
+    setExplorerBusyAction("delete");
+    try {
+      const deleted = await deleteExplorerNode(explorerDeleteTarget);
+      if (deleted) {
+        setExplorerActionMode(null);
+      }
+    } catch (cause) {
+      setExplorerActionError(errorMessage(cause));
+    } finally {
+      setExplorerBusyAction(null);
+    }
+  }
+
+  async function runExplorerMove() {
+    if (!explorerMutationTarget) return;
+    setExplorerActionError(null);
+    setExplorerBusyAction("move");
+    try {
+      const moved = await moveExplorerNode(explorerMutationTarget, explorerMoveTarget);
+      if (moved) {
+        setExplorerMoveOpen(false);
+      }
+    } catch (cause) {
+      setExplorerActionError(errorMessage(cause));
+    } finally {
+      setExplorerBusyAction(null);
+    }
+  }
 
   useEffect(() => {
     const loadError = currentNode.error || currentChildren.error;
@@ -363,25 +536,96 @@ export function WikiBrowser() {
       />
       <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
-          <PanelHeader icon={<GitBranch size={15} />} title={tabTitle(tab)} />
+          <PanelHeader
+            icon={<GitBranch size={15} />}
+            title={tabTitle(tab)}
+            actions={tab === "explorer" ? (
+              <ExplorerHeaderActions
+                fileDisabled={Boolean(explorerWriteDisabledReason) || explorerBusyAction !== null}
+                folderDisabled={Boolean(explorerWriteDisabledReason) || explorerBusyAction !== null}
+                renameDisabled={Boolean(explorerWriteDisabledReason) || explorerBusyAction !== null || !explorerMutationTarget}
+                moveDisabled={Boolean(explorerWriteDisabledReason) || explorerBusyAction !== null || !explorerMutationTarget || explorerMoveTargets.length === 0}
+                deleteDisabled={Boolean(explorerWriteDisabledReason) || explorerBusyAction !== null || !explorerDeleteTarget}
+                fileTitle={explorerWriteDisabledReason ?? `New file in ${explorerCreateDirectory}`}
+                folderTitle={explorerWriteDisabledReason ?? `New folder in ${explorerCreateDirectory}`}
+                renameTitle={explorerWriteDisabledReason ?? (explorerMutationTarget ? `Rename ${explorerMutationTarget.path}` : "Select a /Wiki Markdown file or folder to rename")}
+                moveTitle={explorerWriteDisabledReason ?? (explorerMutationTarget ? `Move ${explorerMutationTarget.path}` : "Select a /Wiki Markdown file or folder to move")}
+                deleteTitle={explorerWriteDisabledReason ?? (explorerDeleteTarget ? `Delete ${explorerDeleteTarget.path}` : "Select a /Wiki Markdown file or empty folder to delete")}
+                onNewFile={() => {
+                  setExplorerActionError(null);
+                  setExplorerActionMode("file");
+                  setExplorerDraftName("");
+                  setExplorerMoveOpen(false);
+                }}
+                onNewFolder={() => {
+                  setExplorerActionError(null);
+                  setExplorerActionMode("folder");
+                  setExplorerDraftName("");
+                  setExplorerMoveOpen(false);
+                }}
+                onRename={() => {
+                  if (!explorerMutationTarget) return;
+                  setExplorerActionError(null);
+                  setExplorerActionMode("rename");
+                  setExplorerDraftName(explorerMutationTarget.name);
+                  setExplorerMoveOpen(false);
+                }}
+                onMove={() => {
+                  if (!explorerMutationTarget) return;
+                  setExplorerActionError(null);
+                  setExplorerActionMode(null);
+                  setExplorerMoveTarget(explorerMoveTargets[0] ?? "/Wiki");
+                  setExplorerMoveOpen(true);
+                }}
+                onDelete={() => void runExplorerDelete()}
+              />
+            ) : undefined}
+          />
           <ModeTabs canisterId={canisterId} databaseId={databaseId} selectedPath={selectedPath} tab={tab} readMode={readMode} />
+          {tab === "explorer" && explorerActionMode ? (
+            <ExplorerCreateForm
+              mode={explorerActionMode}
+              directoryPath={explorerCreateDirectory}
+              draftName={explorerDraftName}
+              error={explorerActionError}
+              busy={explorerBusyAction === explorerActionMode}
+              onCancel={() => {
+                setExplorerActionMode(null);
+                setExplorerDraftName("");
+                setExplorerActionError(null);
+              }}
+              onChange={setExplorerDraftName}
+              onSubmit={submitExplorerCreate}
+            />
+          ) : tab === "explorer" && explorerMoveOpen && explorerMutationTarget ? (
+            <ExplorerMoveForm
+              target={explorerMutationTarget}
+              folders={explorerMoveTargets}
+              value={explorerMoveTarget}
+              error={explorerActionError}
+              busy={explorerBusyAction === "move"}
+              onCancel={() => {
+                setExplorerMoveOpen(false);
+                setExplorerActionError(null);
+              }}
+              onChange={setExplorerMoveTarget}
+              onSubmit={() => void runExplorerMove()}
+            />
+          ) : tab === "explorer" && explorerActionError ? (
+            <ExplorerActionError message={explorerActionError} />
+          ) : null}
           <LeftPane
             tab={tab}
             canisterId={canisterId}
             databaseId={databaseId}
             selectedPath={selectedPath}
-            node={currentNode.data}
             childNodesCache={childNodesCache}
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
             readIdentity={readIdentity}
             effectiveReadIdentity={effectiveReadIdentity}
-            writeIdentity={readIdentity}
-            currentDatabaseRole={currentDatabaseRole}
-            databaseRoleError={readIdentity && !currentDatabaseRole ? databaseListError : null}
             readMode={readMode}
             explorerRevision={explorerRevision}
-            onCreateMarkdownFile={createMarkdownFile}
-            onDeleteMarkdownNode={deleteMarkdownNode}
+            onSelectedExplorerNode={rememberSelectedExplorerNode}
           />
         </aside>
         <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
@@ -403,8 +647,9 @@ export function WikiBrowser() {
                   }
                   router.replace(hrefForPath(canisterId, databaseId, selectedPath, nextView, tab, undefined, undefined, readMode));
                 }}
-                isDirectory={!currentNode.data && Boolean(currentChildren.data)}
+                isDirectory={currentNode.data?.kind === "folder" || (!currentNode.data && Boolean(currentChildren.data))}
               />
+              <DocumentBreadcrumbs canisterId={canisterId} databaseId={databaseId} path={selectedPath} readMode={readMode} />
               <DocumentPane
                 node={currentNode}
                 childrenState={currentChildren}
@@ -453,35 +698,25 @@ function LeftPane({
   canisterId,
   databaseId,
   selectedPath,
-  node,
   childNodesCache,
   autoExpandExplorer,
   readIdentity,
   effectiveReadIdentity,
-  writeIdentity,
-  currentDatabaseRole,
-  databaseRoleError,
   readMode,
   explorerRevision,
-  onCreateMarkdownFile,
-  onDeleteMarkdownNode
+  onSelectedExplorerNode
 }: {
   tab: ModeTab;
   canisterId: string;
   databaseId: string;
   selectedPath: string;
-  node: WikiNode | null;
   childNodesCache: { current: Map<string, ChildNode[]> };
   autoExpandExplorer: boolean;
   readIdentity: Identity | null;
   effectiveReadIdentity: Identity | null;
-  writeIdentity: Identity | null;
-  currentDatabaseRole: DatabaseRole | null;
-  databaseRoleError: string | null;
   readMode: "anonymous" | null;
   explorerRevision: number;
-  onCreateMarkdownFile: (directoryPath: string, fileName: string) => Promise<boolean>;
-  onDeleteMarkdownNode: (node: ChildNode) => Promise<boolean>;
+  onSelectedExplorerNode: (node: ChildNode) => void;
 }) {
   if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} readMode={readMode} />;
   if (tab === "ingest") return <IngestPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
@@ -494,31 +729,357 @@ function LeftPane({
       selectedPath={selectedPath}
       autoExpandSelected={autoExpandExplorer}
       readIdentity={effectiveReadIdentity}
-      writeIdentity={writeIdentity}
-      currentDatabaseRole={currentDatabaseRole}
-      databaseRoleError={databaseRoleError}
       readMode={readMode}
       childNodesCache={childNodesCache}
-      onCreateMarkdownFile={onCreateMarkdownFile}
-      onDeleteMarkdownNode={onDeleteMarkdownNode}
+      onSelectedNode={onSelectedExplorerNode}
     />
   );
 }
 
-function wikiMarkdownChildPath(directoryPath: string, fileName: string): string {
-  if (directoryPath !== "/Wiki" && !directoryPath.startsWith("/Wiki/")) {
-    throw new Error("Markdown files can only be created under /Wiki.");
-  }
-  const trimmed = fileName.trim();
-  if (!trimmed || trimmed.includes("/") || trimmed === "." || trimmed === ".." || trimmed === ".md") {
-    throw new Error("Enter a Markdown file name, not a path.");
-  }
-  const markdownFileName = trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
-  return `${directoryPath}/${markdownFileName}`;
+function ExplorerHeaderActions({
+  fileDisabled,
+  folderDisabled,
+  renameDisabled,
+  moveDisabled,
+  deleteDisabled,
+  fileTitle,
+  folderTitle,
+  renameTitle,
+  moveTitle,
+  deleteTitle,
+  onNewFile,
+  onNewFolder,
+  onRename,
+  onMove,
+  onDelete
+}: {
+  fileDisabled: boolean;
+  folderDisabled: boolean;
+  renameDisabled: boolean;
+  moveDisabled: boolean;
+  deleteDisabled: boolean;
+  fileTitle: string;
+  folderTitle: string;
+  renameTitle: string;
+  moveTitle: string;
+  deleteTitle: string;
+  onNewFile: () => void;
+  onNewFolder: () => void;
+  onRename: () => void;
+  onMove: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onNewFile}
+        disabled={fileDisabled}
+        title={fileTitle}
+        aria-label="New Markdown file"
+      >
+        <FilePlus size={15} />
+      </button>
+      <button
+        type="button"
+        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onNewFolder}
+        disabled={folderDisabled}
+        title={folderTitle}
+        aria-label="New folder"
+      >
+        <FolderPlus size={15} />
+      </button>
+      <button
+        type="button"
+        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onRename}
+        disabled={renameDisabled}
+        title={renameTitle}
+        aria-label="Rename selected node"
+      >
+        <Pencil size={15} />
+      </button>
+      <button
+        type="button"
+        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onMove}
+        disabled={moveDisabled}
+        title={moveTitle}
+        aria-label="Move selected node"
+      >
+        <MoveRight size={15} />
+      </button>
+      <button
+        type="button"
+        className="rounded-md p-1 text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onDelete}
+        disabled={deleteDisabled}
+        title={deleteTitle}
+        aria-label="Delete selected Markdown file"
+      >
+        <Trash2 size={15} />
+      </button>
+    </div>
+  );
 }
 
-function isDeletableWikiMarkdown(node: ChildNode): boolean {
-  return node.kind === "file" && !node.isVirtual && node.path.startsWith("/Wiki/") && node.path.endsWith(".md");
+function ExplorerCreateForm({
+  mode,
+  directoryPath,
+  draftName,
+  error,
+  busy,
+  onCancel,
+  onChange,
+  onSubmit
+}: {
+  mode: "file" | "folder" | "rename";
+  directoryPath: string;
+  draftName: string;
+  error: string | null;
+  busy: boolean;
+  onCancel: () => void;
+  onChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const label = mode === "rename" ? "Rename selected node" : mode === "folder" ? `New folder in ${directoryPath}` : `New file in ${directoryPath}`;
+  const placeholder = mode === "folder" ? "project" : "note.md";
+  const submitLabel = mode === "rename" ? "Rename selected node" : mode === "folder" ? "Create folder" : "Create Markdown file";
+  return (
+    <form className="border-b border-line px-3 py-2" onSubmit={onSubmit}>
+      <div className="mb-1 truncate text-[11px] text-muted">{label}</div>
+      <div className="flex items-center gap-1">
+        <input
+          className="min-w-0 flex-1 rounded-md border border-line bg-white px-2 py-1 text-xs outline-none focus:border-accent"
+          value={draftName}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          aria-label={label}
+          autoFocus
+        />
+        <button
+          type="submit"
+          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={busy}
+          aria-label={submitLabel}
+          title={submitLabel}
+        >
+          <Check size={15} />
+        </button>
+        <button
+          type="button"
+          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onCancel}
+          disabled={busy}
+          aria-label="Cancel Explorer action"
+          title="Cancel"
+        >
+          <X size={15} />
+        </button>
+      </div>
+      {error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null}
+    </form>
+  );
+}
+
+function ExplorerMoveForm({
+  target,
+  folders,
+  value,
+  error,
+  busy,
+  onCancel,
+  onChange,
+  onSubmit
+}: {
+  target: ChildNode;
+  folders: string[];
+  value: string;
+  error: string | null;
+  busy: boolean;
+  onCancel: () => void;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="border-b border-line px-3 py-2">
+      <div className="mb-1 truncate text-[11px] text-muted">Move {target.path}</div>
+      <div className="flex items-center gap-1">
+        <select
+          className="min-w-0 flex-1 rounded-md border border-line bg-white px-2 py-1 text-xs outline-none focus:border-accent"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          aria-label="Move destination folder"
+        >
+          {folders.map((folder) => (
+            <option key={folder} value={folder}>
+              {folder}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={busy || !value}
+          aria-label="Move selected node"
+          title="Move selected node"
+          onClick={onSubmit}
+        >
+          <Check size={15} />
+        </button>
+        <button
+          type="button"
+          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onCancel}
+          disabled={busy}
+          aria-label="Cancel move"
+          title="Cancel"
+        >
+          <X size={15} />
+        </button>
+      </div>
+      {error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null}
+    </div>
+  );
+}
+
+function ExplorerActionError({ message }: { message: string }) {
+  return <div className="border-b border-line px-3 py-2 text-xs text-red-600">{message}</div>;
+}
+
+function wikiMarkdownChildPath(directoryPath: string, fileName: string): string {
+  const markdownFileName = normalizeMarkdownFileName(fileName);
+  if (!markdownFileName) throw new Error("Enter a Markdown file name, not a path.");
+  return wikiChildPath(directoryPath, markdownFileName, "Markdown files");
+}
+
+function wikiChildPath(directoryPath: string, name: string, label: string): string {
+  if (!isWikiPath(directoryPath)) {
+    throw new Error(`${label} can only be created under /Wiki.`);
+  }
+  return `${directoryPath}/${name}`;
+}
+
+function normalizeMarkdownFileName(fileName: string): string | null {
+  const trimmed = fileName.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed === "." || trimmed === ".." || trimmed === ".md") {
+    return null;
+  }
+  return trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
+}
+
+function normalizePathSegment(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed === "." || trimmed === "..") {
+    return null;
+  }
+  return trimmed;
+}
+
+function createDirectoryForExplorerNode(node: ChildNode | null): string {
+  if (!node) {
+    return "/Wiki";
+  }
+  if ((node.kind === "directory" || node.kind === "folder") && isWikiPath(node.path)) {
+    return node.path;
+  }
+  if (node.kind === "file" && isWikiPath(node.path)) {
+    return parentPath(node.path) ?? "/Wiki";
+  }
+  return "/Wiki";
+}
+
+function isMutableWikiExplorerNode(node: ChildNode): boolean {
+  if (node.isVirtual || !node.etag || isProtectedRootFolder(node.path) || !node.path.startsWith("/Wiki/")) return false;
+  return (node.kind === "file" && node.path.endsWith(".md")) || node.kind === "folder";
+}
+
+function isDeletableWikiExplorerNode(node: ChildNode): boolean {
+  if (!isMutableWikiExplorerNode(node)) return false;
+  if (node.kind === "folder") return !node.hasChildren;
+  return true;
+}
+
+function loadedWikiFolders(cache: Map<string, ChildNode[]>, excludedNode: ChildNode | null): string[] {
+  const paths = new Set<string>(["/Wiki"]);
+  for (const children of cache.values()) {
+    for (const child of children) {
+      if (child.kind === "folder" && isWikiPath(child.path) && !isExcludedMoveFolder(child.path, excludedNode)) {
+        paths.add(child.path);
+      }
+    }
+  }
+  const excludedParent = excludedNode ? parentPath(excludedNode.path) : null;
+  if (excludedParent && isWikiPath(excludedParent)) {
+    paths.add(excludedParent);
+  }
+  return [...paths].sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function isExcludedMoveFolder(path: string, node: ChildNode | null): boolean {
+  if (!node) return false;
+  if (node.kind !== "folder") return false;
+  return path === node.path || path.startsWith(`${node.path}/`);
+}
+
+function isWikiPath(path: string): boolean {
+  return path === "/Wiki" || path.startsWith("/Wiki/");
+}
+
+function isProtectedRootFolder(path: string): boolean {
+  return path === "/Wiki" || path === "/Sources";
+}
+
+function writeDisabledReason(
+  readMode: "anonymous" | null,
+  writeIdentity: Identity | null,
+  currentDatabaseRole: DatabaseRole | null,
+  databaseRoleError: string | null
+): string | null {
+  if (readMode === "anonymous") return "Switch to authenticated mode to change files.";
+  if (!writeIdentity) return "Login with Internet Identity to change files.";
+  if (databaseRoleError) return databaseRoleError;
+  if (!currentDatabaseRole) return "Database role unavailable.";
+  if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") return "Writer or owner access required.";
+  return null;
+}
+
+function explorerNodeFromSelection(
+  selectedPath: string,
+  node: PathLoadState<WikiNode>,
+  children: PathLoadState<ChildNode[]>
+): ChildNode | null {
+  if (node.data) {
+    return {
+      path: node.data.path,
+      name: pathName(node.data.path),
+      kind: node.data.kind,
+      updatedAt: node.data.updatedAt,
+      etag: node.data.etag,
+      sizeBytes: null,
+      isVirtual: false,
+      hasChildren: node.data.kind === "folder" && Boolean(children.data?.length)
+    };
+  }
+  if (children.data) {
+    return {
+      path: selectedPath,
+      name: pathName(selectedPath),
+      kind: "directory",
+      updatedAt: null,
+      etag: null,
+      sizeBytes: null,
+      isVirtual: true,
+      hasChildren: true
+    };
+  }
+  return null;
+}
+
+function pathName(path: string): string {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function TopBar({
@@ -761,6 +1322,46 @@ function ModeTabs({
           </Link>
         ))}
       </div>
+    </nav>
+  );
+}
+
+function DocumentBreadcrumbs({
+  canisterId,
+  databaseId,
+  path,
+  readMode
+}: {
+  canisterId: string;
+  databaseId: string;
+  path: string;
+  readMode: "anonymous" | null;
+}) {
+  const segments = path.split("/").filter(Boolean);
+  const crumbs = segments.map((segment, index) => ({
+    segment,
+    path: `/${segments.slice(0, index + 1).join("/")}`,
+    last: index === segments.length - 1
+  }));
+  return (
+    <nav className="flex min-h-[36px] items-center gap-1 overflow-x-auto border-b border-line bg-white px-5 py-2 text-xs" aria-label="Breadcrumb">
+      {crumbs.map((crumb, index) => {
+        return (
+          <span key={crumb.path} className="flex items-center gap-1">
+            {index > 0 ? <span className="text-muted">/</span> : null}
+            {crumb.last ? (
+              <span className="max-w-[180px] truncate font-medium text-ink">{crumb.segment}</span>
+            ) : (
+              <Link
+                className="max-w-[180px] truncate rounded px-1 py-0.5 text-muted no-underline hover:bg-paper hover:text-ink"
+                href={hrefForPath(canisterId, databaseId, crumb.path, undefined, undefined, undefined, undefined, readMode)}
+              >
+                {crumb.segment}
+              </Link>
+            )}
+          </span>
+        );
+      })}
     </nav>
   );
 }

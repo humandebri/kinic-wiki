@@ -22,7 +22,7 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
   return {
     path,
     name: path.slice(1),
-    kind: "directory",
+    kind: "folder",
     updatedAt: null,
     etag: null,
     sizeBytes: null,
@@ -32,7 +32,7 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
 }
 
 export function canExpandChildNode(node: ChildNode): boolean {
-  return node.kind === "directory" || node.hasChildren;
+  return node.kind === "directory" || node.kind === "folder" || node.hasChildren;
 }
 
 export function errorMessage(error: unknown): string {

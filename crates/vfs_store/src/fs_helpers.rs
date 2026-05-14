@@ -78,6 +78,7 @@ fn node_kind_tag(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::File => "file",
         NodeKind::Source => "source",
+        NodeKind::Folder => "folder",
     }
 }
 
@@ -145,41 +146,17 @@ pub(crate) fn build_entries_from_rows(
 
     let mut entries = BTreeMap::new();
     for row in rows {
-        if let Some(child_path) = direct_child_path(prefix, &row.path) {
-            entries
-                .entry(child_path.clone())
-                .and_modify(|entry: &mut NodeEntry| {
-                    if child_path == row.path {
-                        entry.kind = entry_kind_from_node_kind(&row.kind);
-                        entry.updated_at = row.updated_at;
-                        entry.etag = row.etag.clone();
-                    } else if entry.kind == NodeEntryKind::Directory {
-                        entry.updated_at = directory_stats
-                            .get(&child_path)
-                            .map(|stats| stats.updated_at)
-                            .unwrap_or(entry.updated_at);
-                    }
-                    entry.has_children = directory_stats.contains_key(&child_path);
-                })
-                .or_insert_with(|| match child_path == row.path {
-                    true => NodeEntry {
-                        path: row.path.clone(),
-                        kind: entry_kind_from_node_kind(&row.kind),
-                        updated_at: row.updated_at,
-                        etag: row.etag.clone(),
-                        has_children: directory_stats.contains_key(&row.path),
-                    },
-                    false => NodeEntry {
-                        path: child_path.clone(),
-                        kind: NodeEntryKind::Directory,
-                        updated_at: directory_stats
-                            .get(&child_path)
-                            .map(|stats| stats.updated_at)
-                            .unwrap_or(0),
-                        etag: String::new(),
-                        has_children: true,
-                    },
-                });
+        if direct_child_path(prefix, &row.path).as_deref() == Some(row.path.as_str()) {
+            entries.insert(
+                row.path.clone(),
+                NodeEntry {
+                    path: row.path.clone(),
+                    kind: entry_kind_from_node_kind(&row.kind),
+                    updated_at: row.updated_at,
+                    etag: row.etag.clone(),
+                    has_children: directory_stats.contains_key(&row.path),
+                },
+            );
         }
     }
 
@@ -191,34 +168,15 @@ pub(crate) fn build_glob_entries_from_rows(
     prefix: &str,
 ) -> Vec<NodeEntry> {
     let directory_stats = directory_stats_by_path(rows, prefix);
-    let mut entries = BTreeMap::new();
-    for row in rows {
-        entries.insert(
-            row.path.clone(),
-            NodeEntry {
-                path: row.path.clone(),
-                kind: entry_kind_from_node_kind(&row.kind),
-                updated_at: row.updated_at,
-                etag: row.etag.clone(),
-                has_children: directory_stats.contains_key(&row.path),
-            },
-        );
-        for directory_path in ancestor_directory_paths(prefix, &row.path) {
-            entries
-                .entry(directory_path.clone())
-                .or_insert_with(|| NodeEntry {
-                    path: directory_path.clone(),
-                    kind: NodeEntryKind::Directory,
-                    updated_at: directory_stats
-                        .get(&directory_path)
-                        .map(|stats| stats.updated_at)
-                        .unwrap_or(0),
-                    etag: String::new(),
-                    has_children: true,
-                });
-        }
-    }
-    entries.into_values().collect()
+    rows.iter()
+        .map(|row| NodeEntry {
+            path: row.path.clone(),
+            kind: entry_kind_from_node_kind(&row.kind),
+            updated_at: row.updated_at,
+            etag: row.etag.clone(),
+            has_children: directory_stats.contains_key(&row.path),
+        })
+        .collect()
 }
 
 pub(crate) fn snapshot_revision_token(prefix: &str, revision: i64) -> String {
@@ -284,6 +242,7 @@ pub(crate) fn node_kind_to_db(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::File => "file",
         NodeKind::Source => "source",
+        NodeKind::Folder => "folder",
     }
 }
 
@@ -291,6 +250,7 @@ pub(crate) fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error
     match value {
         "file" => Ok(NodeKind::File),
         "source" => Ok(NodeKind::Source),
+        "folder" => Ok(NodeKind::Folder),
         _ => Err(rusqlite::Error::InvalidColumnType(
             1,
             "kind".to_string(),
@@ -403,5 +363,6 @@ fn entry_kind_from_node_kind(kind: &NodeKind) -> NodeEntryKind {
     match kind {
         NodeKind::File => NodeEntryKind::File,
         NodeKind::Source => NodeEntryKind::Source,
+        NodeKind::Folder => NodeEntryKind::Folder,
     }
 }

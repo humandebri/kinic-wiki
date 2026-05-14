@@ -88,6 +88,7 @@ impl VfsApi for ToolMockClient {
                     kind: match node.kind {
                         NodeKind::File => NodeEntryKind::File,
                         NodeKind::Source => NodeEntryKind::Source,
+                        NodeKind::Folder => NodeEntryKind::Folder,
                     },
                     updated_at: node.updated_at,
                     etag: node.etag.clone(),

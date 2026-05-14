@@ -2,8 +2,8 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, MoveNodeRequest, NodeKind,
-    WriteNodeRequest,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, MkdirNodeRequest,
+    MoveNodeRequest, NodeKind, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -22,6 +22,7 @@ fn write_node(
     expected_etag: Option<&str>,
     now: i64,
 ) -> String {
+    ensure_parent_folders(store, path, now - 1);
     store
         .write_node(
             WriteNodeRequest {
@@ -37,6 +38,27 @@ fn write_node(
         .expect("write should succeed")
         .node
         .etag
+}
+
+fn ensure_parent_folders(store: &FsStore, path: &str, now: i64) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        store
+            .mkdir_node(
+                MkdirNodeRequest {
+                    database_id: "default".to_string(),
+                    path: current.clone(),
+                },
+                now,
+            )
+            .expect("parent folder should exist or be created");
+    }
 }
 
 #[test]
@@ -388,6 +410,7 @@ fn fetch_updates_rejects_future_snapshot_revision() {
 fn fetch_updates_reports_old_path_when_node_is_moved() {
     let (_dir, store) = new_store();
     let alpha = write_node(&store, "/Wiki/alpha.md", "alpha", None, 10);
+    ensure_parent_folders(&store, "/Wiki/archive/alpha.md", 10);
     let base = store
         .export_snapshot(ExportSnapshotRequest {
             database_id: "default".to_string(),
@@ -530,6 +553,7 @@ fn fetch_updates_rejects_prefix_shrink_without_new_writes() {
 fn fetch_updates_rejects_scope_change_after_move() {
     let (_dir, store) = new_store();
     let source = write_node(&store, "/Wiki/a.md", "alpha", None, 10);
+    ensure_parent_folders(&store, "/Wiki/archive/a.md", 10);
     store
         .move_node(
             MoveNodeRequest {
@@ -641,8 +665,9 @@ fn export_snapshot_pages_nodes_by_path() {
         .expect("first page should succeed");
     assert_eq!(first.snapshot_session_id, None);
     assert_eq!(first.nodes.len(), 100);
-    assert_eq!(first.nodes[0].path, "/Wiki/000.md");
-    assert_eq!(first.next_cursor, Some("/Wiki/099.md".to_string()));
+    assert_eq!(first.nodes[0].path, "/Wiki");
+    assert_eq!(first.nodes[1].path, "/Wiki/000.md");
+    assert_eq!(first.next_cursor, Some("/Wiki/098.md".to_string()));
 
     let second = store
         .export_snapshot(ExportSnapshotRequest {
@@ -655,8 +680,9 @@ fn export_snapshot_pages_nodes_by_path() {
         })
         .expect("second page should succeed");
     assert_eq!(second.snapshot_revision, first.snapshot_revision);
-    assert_eq!(second.nodes.len(), 1);
-    assert_eq!(second.nodes[0].path, "/Wiki/100.md");
+    assert_eq!(second.nodes.len(), 2);
+    assert_eq!(second.nodes[0].path, "/Wiki/099.md");
+    assert_eq!(second.nodes[1].path, "/Wiki/100.md");
     assert_eq!(second.next_cursor, None);
 }
 
@@ -703,8 +729,9 @@ fn export_snapshot_allows_prefix_external_change_between_pages() {
         .expect("outside-prefix change should not invalidate snapshot page");
 
     assert_eq!(second.snapshot_revision, first.snapshot_revision);
-    assert_eq!(second.nodes.len(), 1);
-    assert_eq!(second.nodes[0].path, "/Wiki/100.md");
+    assert_eq!(second.nodes.len(), 2);
+    assert_eq!(second.nodes[0].path, "/Wiki/099.md");
+    assert_eq!(second.nodes[1].path, "/Wiki/100.md");
 }
 
 #[test]

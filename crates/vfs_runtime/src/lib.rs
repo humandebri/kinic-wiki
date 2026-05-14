@@ -934,11 +934,12 @@ impl VfsService {
         &self,
         caller: &str,
         request: MkdirNodeRequest,
+        now: i64,
     ) -> Result<MkdirNodeResult, String> {
         let database_id = request.database_id.clone();
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
-                store.mkdir_node(request)
+                store.mkdir_node(request, now)
             });
         if result.is_ok() {
             self.refresh_logical_size(&database_id)?;

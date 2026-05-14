@@ -3,7 +3,7 @@
 // Why: Queue, D1, VFS, and LLM code need one small typed vocabulary.
 export const SCHEMA_VERSION = 1;
 
-export type NodeKind = "file" | "source";
+export type NodeKind = "file" | "source" | "folder";
 
 export type WikiNode = {
   path: string;
@@ -33,6 +33,11 @@ export type WriteNodeAck = {
   path: string;
   kind: NodeKind;
   etag: string;
+};
+
+export type MkdirNodeRequest = {
+  databaseId: string;
+  path: string;
 };
 
 export type ExportSnapshotPage = {

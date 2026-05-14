@@ -21,6 +21,10 @@ test("queueUrlIngest writes request and triggers via wiki route", async () => {
           calls.push(["session", request.database_id, request.session_nonce]);
           return { Ok: null };
         },
+        async mkdir_node(request) {
+          calls.push(["mkdir", request.database_id, request.path]);
+          return { Ok: { created: true, path: request.path } };
+        },
         async write_node(request) {
           calls.push(["write", request.database_id, request.path, request.kind]);
           return { Ok: { created: true, node: { etag: "etag-request" } } };
@@ -39,10 +43,12 @@ test("queueUrlIngest writes request and triggers via wiki route", async () => {
     assert.equal(calls[1][0], "session");
     assert.equal(calls[1][1], "team-db");
     assert.equal(typeof calls[1][2], "string");
-    assert.equal(calls[2][0], "write");
-    assert.equal(calls[2][1], "team-db");
-    assert.match(calls[2][2], /^\/Sources\/ingest-requests\/.+\.md$/);
-    assert.deepEqual(calls[2][3], { File: null });
+    assert.deepEqual(calls[2], ["mkdir", "team-db", "/Sources"]);
+    assert.deepEqual(calls[3], ["mkdir", "team-db", "/Sources/ingest-requests"]);
+    assert.equal(calls[4][0], "write");
+    assert.equal(calls[4][1], "team-db");
+    assert.match(calls[4][2], /^\/Sources\/ingest-requests\/.+\.md$/);
+    assert.deepEqual(calls[4][3], { File: null });
     assert.equal(triggerCalls[0][0], "https://wiki.kinic.xyz/api/url-ingest/trigger");
     assert.equal(triggerCalls[0][1].method, "POST");
     assert.deepEqual(JSON.parse(triggerCalls[0][1].body), {
@@ -60,6 +66,9 @@ test("queueUrlIngest keeps request result when trigger fails", async () => {
     authSnapshot: async () => ({ isAuthenticated: true, identity: { tag: "identity" }, principal: "principal-1" }),
     fetch: async () => new Response("nope", { status: 502 }),
     createVfsActor: async () => ({
+      async mkdir_node(request) {
+        return { Ok: { created: true, path: request.path } };
+      },
       async write_node() {
         return { Ok: { created: true, node: { etag: "etag-request" } } };
       },
@@ -126,6 +135,10 @@ test("queueUrlIngest reuses session nonce inside ttl", async () => {
         calls.push(["session", request.session_nonce]);
         return { Ok: null };
       },
+      async mkdir_node(request) {
+        calls.push(["mkdir", request.path]);
+        return { Ok: { created: true, path: request.path } };
+      },
       async write_node(request) {
         calls.push(["write", request.path]);
         return { Ok: { created: true, node: { etag: `etag-${calls.length}` } } };
@@ -159,6 +172,10 @@ test("saveRawSource writes with authenticated identity", async () => {
           calls.push(["read", databaseId, path]);
           return { Ok: [{ etag: "etag-1" }] };
         },
+        async mkdir_node(request) {
+          calls.push(["mkdir", request.database_id, request.path]);
+          return { Ok: { created: true, path: request.path } };
+        },
         async write_node(request) {
           calls.push(["write", request.database_id, request.path, request.expected_etag]);
           return { Ok: { created: false, node: { etag: "etag-2" } } };
@@ -174,6 +191,9 @@ test("saveRawSource writes with authenticated identity", async () => {
     assert.deepEqual(calls, [
       ["create", { tag: "identity" }, "team-db"],
       ["read", "team-db", "/Sources/raw/chatgpt-abc/chatgpt-abc.md"],
+      ["mkdir", "team-db", "/Sources"],
+      ["mkdir", "team-db", "/Sources/raw"],
+      ["mkdir", "team-db", "/Sources/raw/chatgpt-abc"],
       ["write", "team-db", "/Sources/raw/chatgpt-abc/chatgpt-abc.md", ["etag-1"]]
     ]);
   } finally {

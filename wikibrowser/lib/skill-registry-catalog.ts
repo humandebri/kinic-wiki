@@ -74,7 +74,7 @@ export async function loadSkillCatalog(canisterId: string, databaseId: string, i
   const entryGroups = await Promise.all(
     REGISTRY_ROOTS.map(async (root) => {
       const entries = await listRegistryChildren(canisterId, databaseId, root.path, identity);
-      return entries.filter((entry) => entry.kind === "directory").map((entry) => ({ root, entry }));
+      return entries.filter((entry) => entry.kind === "directory" || entry.kind === "folder").map((entry) => ({ root, entry }));
     })
   );
   const loaded = await mapConcurrent<(typeof entryGroups)[number][number], CatalogSkill | null>(entryGroups.flat(), MANIFEST_READ_CONCURRENCY, async ({ root, entry }) => {

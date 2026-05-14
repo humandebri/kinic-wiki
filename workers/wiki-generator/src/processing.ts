@@ -7,7 +7,7 @@ import { generateDraft, validateDraftSources } from "./openai.js";
 import { ensureTargetCanBeWritten, renderDraftMarkdown, slugForDraft } from "./render.js";
 import { validateCanonicalSourcePath } from "./source-path.js";
 import { markIngestRequestCompleted, markIngestRequestFailed } from "./url-ingest.js";
-import { createVfsClient, type VfsClient } from "./vfs.js";
+import { createVfsClient, ensureParentFolders, type VfsClient } from "./vfs.js";
 import type { ManualRunInput, QueueMessage, SearchNodeHit, WikiNode, WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
@@ -139,6 +139,7 @@ async function readRequiredSource(vfs: VfsClient, databaseId: string, sourcePath
 async function writeGeneratedDraft(vfs: VfsClient, databaseId: string, targetPath: string, content: string, sourcePath: string): Promise<void> {
   const existing = await vfs.readNode(databaseId, targetPath);
   ensureTargetCanBeWritten(existing?.content ?? null, targetPath, sourcePath);
+  await ensureParentFolders(vfs, databaseId, targetPath);
   await vfs.writeNode({
     databaseId,
     path: targetPath,
@@ -154,6 +155,7 @@ async function appendWorkerLog(vfs: VfsClient, databaseId: string, targetRoot: s
   const current = await vfs.readNode(databaseId, logPath);
   const header = "# Conversation Worker Log\n\n";
   const entry = `- ${new Date().toISOString()} generated ${targetPath} from ${sourcePath}`;
+  await ensureParentFolders(vfs, databaseId, logPath);
   await vfs.writeNode({
     databaseId,
     path: logPath,

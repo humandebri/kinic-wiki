@@ -1,5 +1,5 @@
-export type NodeKind = "file" | "source";
-export type NodeEntryKind = "file" | "source" | "directory";
+export type NodeKind = "file" | "source" | "folder";
+export type NodeEntryKind = "file" | "source" | "directory" | "folder";
 
 export type WikiNode = {
   path: string;
@@ -33,6 +33,30 @@ export type DeleteNodeRequest = {
 
 export type DeleteNodeResult = {
   path: string;
+};
+
+export type MkdirNodeRequest = {
+  databaseId: string;
+  path: string;
+};
+
+export type MkdirNodeResult = {
+  path: string;
+  created: boolean;
+};
+
+export type MoveNodeRequest = {
+  databaseId: string;
+  fromPath: string;
+  toPath: string;
+  expectedEtag: string | null;
+  overwrite: boolean;
+};
+
+export type MoveNodeResult = {
+  fromPath: string;
+  node: RecentNode;
+  overwrote: boolean;
 };
 
 export type UrlIngestTriggerSessionRequest = {

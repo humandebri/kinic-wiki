@@ -407,8 +407,8 @@ fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
 #[update]
 fn mkdir_node(request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
     let database_id = request.database_id.clone();
-    with_usage("mkdir_node", Some(database_id), |service, caller, _now| {
-        service.mkdir_node(caller, request)
+    with_usage("mkdir_node", Some(database_id), |service, caller, now| {
+        service.mkdir_node(caller, request, now)
     })
 }
 

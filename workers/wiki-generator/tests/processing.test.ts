@@ -35,6 +35,7 @@ function failingLogVfs(): VfsClient {
     writeNode: async (): Promise<WriteNodeAck> => {
       throw new Error("etag conflict");
     },
+    mkdirNode: async (): Promise<void> => {},
     searchNodes: async (): Promise<SearchNodeHit[]> => [],
     exportSnapshot: async (): Promise<ExportSnapshotPage> => ({ snapshotRevision: "rev", nodes: [], nextCursor: null }),
     fetchUpdates: async (): Promise<FetchUpdatesPage> => ({ snapshotRevision: "rev", changedNodes: [], removedPaths: [], nextCursor: null })
