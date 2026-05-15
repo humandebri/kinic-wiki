@@ -209,7 +209,7 @@ function AuthRequiredState({ authReady, onLogin }: { authReady: boolean; mode: "
         <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
         <p className="mt-3 text-sm leading-6 text-muted">This database is not public. Login with Internet Identity to read databases linked to your principal.</p>
         <button
-          className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-5 rounded-2xl border border-action bg-action px-4 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
           disabled={!authReady}
           data-tid="login-button"
           type="button"
@@ -245,7 +245,7 @@ function NotFoundState({
         <p className="mt-3 break-all font-mono text-xs text-muted">{path}</p>
         <div className="mt-5 flex flex-wrap gap-2 text-sm">
           <Link
-            className="rounded-lg bg-accent px-3 py-2 text-white no-underline"
+            className="rounded-2xl bg-action px-3 py-2 font-bold text-white no-underline hover:bg-accent"
             href={hrefForPath(canisterId, databaseId, "/Wiki", undefined, undefined, undefined, undefined, readMode)}
           >
             Open /Wiki
@@ -385,7 +385,7 @@ function EditDocument({
           <p className="mt-3 text-sm leading-6 text-muted">Login with Internet Identity to save Markdown changes.</p>
           {onLogin ? (
             <button
-              className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-5 rounded-2xl border border-action bg-action px-4 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
               disabled={!authReady}
               type="button"
               onClick={onLogin}
@@ -533,7 +533,7 @@ function LargeContentState({
       </p>
       {reason ? <p className="mt-3 text-muted">{reason}</p> : null}
       <Link
-        className="mt-5 inline-flex rounded-lg bg-accent px-3 py-2 text-white no-underline"
+        className="mt-5 inline-flex rounded-2xl bg-action px-3 py-2 font-bold text-white no-underline hover:bg-accent"
         href={hrefForPath(canisterId, databaseId, nodePath, "raw", undefined, undefined, undefined, readMode)}
       >
         Open raw view
@@ -749,7 +749,7 @@ function HeaderBadge({ label, tone }: { label: string; tone: "blue" | "green" | 
       ? "bg-emerald-100 text-emerald-900"
       : tone === "yellow"
         ? "bg-yellow-100 text-yellow-900"
-        : "bg-blue-100 text-blue-900";
+        : "bg-accentSoft text-accentText";
   return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{label}</span>;
 }
 
@@ -773,7 +773,7 @@ function EditorUnavailable({ title, message, actionHref, actionLabel }: { title:
         <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">{title}</h3>
         <p className="mt-3 text-sm leading-6 text-muted">{message}</p>
         {actionHref && actionLabel ? (
-          <Link className="mt-5 inline-flex rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white no-underline" href={actionHref}>
+          <Link className="mt-5 inline-flex rounded-2xl border border-action bg-action px-4 py-2 text-sm font-bold text-white no-underline hover:-translate-y-[3px] hover:border-accent hover:bg-accent" href={actionHref}>
             {actionLabel}
           </Link>
         ) : null}

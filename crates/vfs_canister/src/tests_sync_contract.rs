@@ -9,8 +9,9 @@ use vfs_types::{
 };
 
 use super::{
-    HttpRequest, II_ALTERNATIVE_ORIGINS_PATH, SERVICE, delete_node, export_snapshot, fetch_updates,
-    http_request, mkdir_node, search_node_paths, search_nodes, write_node,
+    HttpRequest, ICP_CLI_LOGIN_DISCOVERY_PATH, ICP_CLI_LOGIN_PATH, II_ALTERNATIVE_ORIGINS_PATH,
+    SERVICE, delete_node, export_snapshot, fetch_updates, http_request, mkdir_node,
+    search_node_paths, search_nodes, write_node,
 };
 use ic_http_certification::CERTIFICATE_EXPRESSION_HEADER_NAME;
 
@@ -59,6 +60,58 @@ fn http_request_serves_certified_ii_alternative_origins() {
     let headers = response.headers;
     assert!(headers.iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("Content-Type") && value == "application/json; charset=utf-8"
+    }));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, _)| { name.eq_ignore_ascii_case(CERTIFICATE_EXPRESSION_HEADER_NAME) })
+    );
+}
+
+#[test]
+fn http_request_serves_icp_cli_login_discovery() {
+    let response = http_request(test_http_get(ICP_CLI_LOGIN_DISCOVERY_PATH));
+
+    assert_eq!(response.status_code, 200);
+    assert_eq!(
+        String::from_utf8(response.body).expect("body should be utf8"),
+        ICP_CLI_LOGIN_PATH
+    );
+    let headers = response.headers;
+    assert!(headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("Content-Type") && value == "text/plain; charset=utf-8"
+    }));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, _)| { name.eq_ignore_ascii_case(CERTIFICATE_EXPRESSION_HEADER_NAME) })
+    );
+}
+
+#[test]
+fn http_request_serves_icp_cli_login_page() {
+    let response = http_request(test_http_get(ICP_CLI_LOGIN_PATH));
+
+    assert_eq!(response.status_code, 200);
+    let body = String::from_utf8(response.body).expect("body should be utf8");
+    let compact_body = body
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(body.contains("<h1>CLI login</h1>"));
+    assert!(body.contains("http://id.ai.localhost:"));
+    assert!(body.contains("https://xis3j-paaaa-aaaai-axumq-cai.icp0.io"));
+    assert!(compact_body.contains("endsWith(\".localhost\")?"));
+    assert!(compact_body.contains("derivationOrigin:"));
+    assert!(compact_body.contains(r#"method:"POST""#));
+    assert!(compact_body.contains(r#""content-type":"application/json""#));
+    assert!(compact_body.contains("redirect:\"error\""));
+    assert!(body.contains("CLI login complete."));
+    assert!(!body.contains("https://esm.sh/"));
+    assert!(!body.contains(r#"<script type="module">"#));
+    let headers = response.headers;
+    assert!(headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("Content-Type") && value == "text/html; charset=utf-8"
     }));
     assert!(
         headers

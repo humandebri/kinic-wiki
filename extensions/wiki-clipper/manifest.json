@@ -31,6 +31,12 @@
       "run_at": "document_start"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon-32.png"],
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"]
+    }
+  ],
   "permissions": ["storage", "activeTab", "offscreen", "contextMenus"],
   "host_permissions": [
     "https://wiki.kinic.xyz/*",

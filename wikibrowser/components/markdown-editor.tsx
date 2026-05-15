@@ -41,7 +41,7 @@ export function MarkdownEditor({
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-line bg-paper/95 px-4 py-3 backdrop-blur">
         <button
           aria-busy={busy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-2xl bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-50"
           disabled={!canSave}
           type="button"
           onClick={onSave}
@@ -98,7 +98,7 @@ function statusLabel(state: EditorSaveState): string {
 
 function statusClassName(state: EditorSaveState): string {
   if (state === "dirty") return "bg-yellow-100 text-yellow-900";
-  if (state === "saving") return "bg-blue-100 text-blue-900";
+  if (state === "saving") return "bg-accentSoft text-accentText";
   if (state === "saved") return "bg-emerald-100 text-emerald-900";
   if (state === "error") return "bg-red-100 text-red-900";
   return "bg-white text-muted";

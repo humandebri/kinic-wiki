@@ -23,6 +23,7 @@ const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx",
 const opsPanelSource = readFileSync(new URL("../components/ops-panel.tsx", import.meta.url), "utf8");
 const vfsClientSource = readFileSync(new URL("../lib/vfs-client.ts", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+const tailwindConfig = readFileSync(new URL("../tailwind.config.ts", import.meta.url), "utf8");
 
 assert.match(explorerTreeSource, /childNodesCache\.current\.get\(requestKey\)/);
 assert.match(explorerTreeSource, /childNodesCache\.current\.set\(requestKey, data\)/);
@@ -37,10 +38,11 @@ assert.match(panelSource, /actions\?: ReactNode/);
 assert.match(panelSource, /\{actions \? <div className="shrink-0">\{actions\}<\/div> : null\}/);
 assert.match(wikiBrowserSource, /data-tid="header-login-button"/);
 assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
-assert.match(wikiBrowserSource, /LayoutDashboard/);
+assert.match(wikiBrowserSource, /src="\/icon\.png"/);
+assert.doesNotMatch(wikiBrowserSource, /LayoutDashboard/);
 assert.match(wikiBrowserSource, /aria-label="Back to database dashboard"/);
 assert.match(wikiBrowserSource, /md:grid-cols-\[auto_auto_minmax\(0,1fr\)\]/);
-assert.match(wikiBrowserSource, /inline-flex items-center gap-1 rounded-lg border border-line/);
+assert.match(wikiBrowserSource, /inline-flex items-center gap-1 rounded-lg border px-3 py-2/);
 assert.doesNotMatch(wikiBrowserSource, /hidden items-center gap-1 rounded-lg border border-line[\s\S]*md:flex/);
 assert.match(wikiBrowserSource, /value === "edit"/);
 assert.match(wikiBrowserSource, /canLeaveDirtyEdit/);
@@ -105,9 +107,14 @@ assert.match(vfsClientSource, /delete_node/);
 assert.match(markdownEditorSource, /@uiw\/react-codemirror/);
 assert.match(markdownEditorSource, /Cmd\/Ctrl\+S|Save/);
 assert.match(globalsCss, /button:not\(:disabled\):active/);
-assert.match(globalsCss, /transform: scale\(0\.98\)/);
+assert.match(globalsCss, /transform: translateY\(-1px\)/);
 assert.match(globalsCss, /button\[aria-busy="true"\]/);
 assert.match(globalsCss, /prefers-reduced-motion/);
+assert.match(tailwindConfig, /accent: "#ff2686"/);
+assert.match(tailwindConfig, /action: "#000000"/);
+assert.match(tailwindConfig, /paper: "#f8f8f8"/);
+assert.doesNotMatch(tailwindConfig, /#1f6feb|#7c3aed|#6d28d9|#f6f1e8|#fffdf8|#ded7cb/);
+assert.doesNotMatch(globalsCss, /#1f6feb|#7c3aed|#6d28d9|#f6f1e8|#efe7d8|#ded7cb/);
 
 const factsHints = collectLintHints("/Wiki/demo/facts.md", "Deadline is May 10.\nStable value is blue.");
 assert.equal(factsHints.length, 1);

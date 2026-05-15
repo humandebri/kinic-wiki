@@ -26,7 +26,7 @@ export function AuthControls({
   if (!principal) {
     return (
       <button
-        className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+        className="rounded-2xl border border-action bg-action px-4 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
         disabled={!authReady}
         data-tid="login-button"
         type="button"

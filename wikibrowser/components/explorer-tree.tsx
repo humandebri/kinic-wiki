@@ -159,7 +159,7 @@ function TreeNode({
     <div>
       <div
         className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm ${
-          selected ? "bg-blue-50 text-accent" : "text-ink hover:bg-white"
+          selected ? "bg-accentSoft text-accentText" : "text-ink hover:bg-white"
         }`}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
       >
