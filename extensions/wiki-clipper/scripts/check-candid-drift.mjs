@@ -47,13 +47,13 @@ const expectedTypes = {
   },
   MkdirNodeRequest: { kind: "record", fields: { database_id: "text", path: "text" } },
   MkdirNodeResult: { kind: "record", fields: { path: "text", created: "bool" } },
-  UrlIngestTriggerSessionRequest: { kind: "record", fields: { database_id: "text", session_nonce: "text" } },
-  NodeMutationAck: { kind: "record", fields: { path: "text", kind: "NodeKind", updated_at: "int64", etag: "text" } },
-  WriteNodeResult: { kind: "record", fields: { node: "NodeMutationAck", created: "bool" } }
+  OpsAnswerSessionRequest: { kind: "record", fields: { database_id: "text", session_nonce: "text" } },
+  RecentNodeHit: { kind: "record", fields: { updated_at: "int64", etag: "text", kind: "NodeKind", path: "text" } },
+  WriteNodeResult: { kind: "record", fields: { created: "bool", node: "RecentNodeHit" } }
 };
 
 const expectedMethods = {
-  authorize_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionRequest"], output: "ResultUnit", mode: "update" },
+  authorize_url_ingest_trigger_session: { input: ["OpsAnswerSessionRequest"], output: "ResultUnit", mode: "update" },
   list_databases: { input: [], output: "ResultDatabases", mode: "query" },
   mkdir_node: { input: ["MkdirNodeRequest"], output: "ResultMkdirNode", mode: "update" },
   read_node: { input: ["text", "text"], output: "ResultNode", mode: "query" },
@@ -160,9 +160,9 @@ function normalizeDidShape(value) {
 function normalizeDidResult(value) {
   const normalized = normalizeDidShape(value).replace(/,$/, "");
   if (normalized === "Result_1") return "ResultUnit";
-  if (normalized === "Result_12") return "ResultDatabases";
-  if (normalized === "Result_14") return "ResultMkdirNode";
-  if (normalized === "Result_18") return "ResultNode";
+  if (normalized === "Result_13") return "ResultDatabases";
+  if (normalized === "Result_15") return "ResultMkdirNode";
+  if (normalized === "Result_19") return "ResultNode";
   if (normalized === "Result") return "ResultWriteNode";
   return normalized;
 }
@@ -203,9 +203,5 @@ function actorResultName(okShape) {
 
 function canonicalTypeShape(shape) {
   if (!shape) return shape;
-  const fields = {};
-  for (const [key, value] of Object.entries(shape.fields)) {
-    fields[key] = value === "RecentNodeHit" ? "NodeMutationAck" : value;
-  }
-  return { kind: shape.kind, fields };
+  return shape;
 }

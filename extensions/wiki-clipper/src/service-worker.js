@@ -452,8 +452,7 @@ async function setActionBadge(text, color) {
 }
 
 async function openSettings() {
-  const url = chrome.runtime.getURL("popup/popup.html");
-  await chrome.tabs.create({ url });
+  await chrome.runtime.openOptionsPage();
 }
 
 async function openSettingsOnce(open = openSettings) {

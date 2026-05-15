@@ -58,6 +58,7 @@ pub async fn run_command(
             url,
             source_path,
             yes,
+            force_target_prefix,
             json,
         } => {
             purge_url_ingest(
@@ -66,6 +67,7 @@ pub async fn run_command(
                 url.as_deref(),
                 source_path.as_deref(),
                 yes,
+                force_target_prefix.as_deref(),
                 json,
             )
             .await?;

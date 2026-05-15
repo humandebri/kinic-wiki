@@ -19,8 +19,8 @@ http://localhost:3000/<database-id>/Wiki
 The dashboard can create databases after Internet Identity login. CLI setup is still useful for scripted local setup:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database create
-cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
 `database create` prints the generated database ID. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `NEXT_PUBLIC_II_PROVIDER_URL` overrides the Internet Identity frontend URL for local II. `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
@@ -36,6 +36,17 @@ NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io
 NEXT_PUBLIC_II_PROVIDER_URL=https://id.ai
 NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 ```
+
+Ops Q&A uses `DEEPSEEK_API_KEY` only in the server runtime. Store it in `wikibrowser/.env.local` for local runs. For production, set it as a Cloudflare Worker secret:
+
+```bash
+pnpm exec wrangler secret put DEEPSEEK_API_KEY
+pnpm exec wrangler kv namespace create OPS_ANSWER_RATE_LIMIT
+```
+
+Copy the returned KV namespace id into the `OPS_ANSWER_RATE_LIMIT` binding in `wrangler.jsonc` before deploy. Never expose the API key as `NEXT_PUBLIC_DEEPSEEK_API_KEY`.
+
+Ops Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic counter, so the limit is a practical abuse throttle, not an exact quota under concurrent requests.
 
 ## Scope
 

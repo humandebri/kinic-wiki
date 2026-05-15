@@ -7,8 +7,11 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use vfs_client::VfsApi;
 use vfs_types::{DeleteNodeRequest, ListNodesRequest, Node, NodeKind};
+use wiki_domain::validate_canonical_source_path;
 
 const REQUEST_PREFIX: &str = "/Sources/ingest-requests";
+const GENERATED_TARGET_PREFIX: &str = "/Wiki/conversations";
+const WIDE_DELETE_PATH_COUNT: usize = 1;
 
 #[derive(Debug, Default, Deserialize)]
 struct Frontmatter {
@@ -39,6 +42,16 @@ struct PurgeReport {
     errors: Vec<String>,
 }
 
+struct DeletePlan {
+    paths: Vec<String>,
+    target_groups: Vec<TargetDeleteGroup>,
+}
+
+struct TargetDeleteGroup {
+    target_path: String,
+    paths: Vec<String>,
+}
+
 enum SourceLookup {
     Matched(Vec<MatchedRequest>),
     Skipped(String),
@@ -50,15 +63,17 @@ pub async fn purge_url_ingest(
     url: Option<&str>,
     source_path: Option<&str>,
     yes: bool,
+    force_target_prefix: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let normalized_url = url.map(normalize_url).transpose()?;
+    let normalized_source_path = source_path.map(normalize_source_path).transpose()?;
     let mut matched = BTreeMap::new();
     let mut skipped_paths = Vec::new();
     for request in find_matching_requests(client, database_id, normalized_url.as_deref()).await? {
         matched.insert(request.path.clone(), request);
     }
-    if let Some(source_path) = source_path {
+    if let Some(source_path) = normalized_source_path.as_deref() {
         match request_for_source(client, database_id, source_path).await? {
             SourceLookup::Matched(requests) => {
                 for request in requests {
@@ -74,12 +89,13 @@ pub async fn purge_url_ingest(
         ok: true,
         dry_run: !yes,
         matched_requests,
-        delete_plan,
+        delete_plan: delete_plan.paths,
         deleted_paths: Vec::new(),
         skipped_paths,
         errors: Vec::new(),
     };
     if yes {
+        validate_target_force(force_target_prefix, &delete_plan.target_groups)?;
         execute_delete_plan(client, database_id, &mut report).await?;
     }
     report.ok = report.errors.is_empty();
@@ -109,6 +125,12 @@ async fn find_matching_requests(
         .await?;
     let mut matched = Vec::new();
     for entry in entries {
+        if !is_same_or_descendant(&entry.path, REQUEST_PREFIX) {
+            return Err(anyhow!(
+                "list_nodes returned path outside ingest request prefix: {}",
+                entry.path
+            ));
+        }
         let Some(node) = client.read_node(database_id, &entry.path).await? else {
             continue;
         };
@@ -156,6 +178,12 @@ async fn request_for_source(
         .await?;
     let mut matched = Vec::new();
     for entry in entries {
+        if !is_same_or_descendant(&entry.path, REQUEST_PREFIX) {
+            return Err(anyhow!(
+                "list_nodes returned path outside ingest request prefix: {}",
+                entry.path
+            ));
+        }
         let Some(node) = client.read_node(database_id, &entry.path).await? else {
             continue;
         };
@@ -178,22 +206,32 @@ async fn build_delete_plan(
     client: &impl VfsApi,
     database_id: &str,
     requests: &[MatchedRequest],
-) -> Result<Vec<String>> {
+) -> Result<DeletePlan> {
     let mut paths = BTreeSet::new();
+    let mut target_groups = Vec::new();
     for request in requests {
         paths.insert(request.path.clone());
         if let Some(source_path) = &request.source_path {
-            paths.insert(source_path.clone());
+            paths.insert(normalize_source_path(source_path)?);
         }
         if let Some(target_path) = &request.target_path {
-            for path in list_tree_paths(client, database_id, target_path).await? {
-                paths.insert(path);
+            let target_path = normalize_target_path(target_path)?;
+            let target_paths = list_tree_paths(client, database_id, &target_path).await?;
+            for path in &target_paths {
+                paths.insert(path.clone());
             }
+            target_groups.push(TargetDeleteGroup {
+                target_path,
+                paths: target_paths,
+            });
         }
     }
     let mut ordered = paths.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
-    Ok(ordered)
+    Ok(DeletePlan {
+        paths: ordered,
+        target_groups,
+    })
 }
 
 async fn list_tree_paths(
@@ -208,7 +246,17 @@ async fn list_tree_paths(
             recursive: true,
         })
         .await?;
-    Ok(entries.into_iter().map(|entry| entry.path).collect())
+    let mut paths = Vec::new();
+    for entry in entries {
+        if !is_same_or_descendant(&entry.path, path) {
+            return Err(anyhow!(
+                "list_nodes returned path outside target prefix: {}",
+                entry.path
+            ));
+        }
+        paths.push(entry.path);
+    }
+    Ok(paths)
 }
 
 async fn execute_delete_plan(
@@ -238,6 +286,7 @@ async fn execute_delete_plan(
 }
 
 fn parse_request_node(node: &Node) -> Result<Option<MatchedRequest>> {
+    let path = normalize_request_path(&node.path)?;
     if node.kind != NodeKind::File {
         return Ok(None);
     }
@@ -251,7 +300,7 @@ fn parse_request_node(node: &Node) -> Result<Option<MatchedRequest>> {
         return Ok(None);
     };
     Ok(Some(MatchedRequest {
-        path: node.path.clone(),
+        path,
         url,
         source_path: frontmatter.source_path,
         target_path: frontmatter.target_path,
@@ -276,6 +325,93 @@ fn normalize_url(value: &str) -> Result<String> {
     }
     parsed.set_fragment(None);
     Ok(parsed.to_string())
+}
+
+fn validate_target_force(
+    force_target_prefix: Option<&str>,
+    target_groups: &[TargetDeleteGroup],
+) -> Result<()> {
+    let wide_groups = target_groups
+        .iter()
+        .filter(|group| group.paths.len() > WIDE_DELETE_PATH_COUNT)
+        .collect::<Vec<_>>();
+    if wide_groups.is_empty() {
+        return Ok(());
+    }
+    let Some(force_target_prefix) = force_target_prefix else {
+        let targets = wide_groups
+            .iter()
+            .map(|group| format!("{} ({} paths)", group.target_path, group.paths.len()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(anyhow!(
+            "wide target delete requires --force-target-prefix: {targets}"
+        ));
+    };
+    let force_target_prefix = normalize_target_path(force_target_prefix)?;
+    for group in wide_groups {
+        if group.target_path != force_target_prefix {
+            return Err(anyhow!(
+                "--force-target-prefix must match target_path exactly: {}",
+                group.target_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_request_path(path: &str) -> Result<String> {
+    let path = normalize_absolute_path(path, "request_path")?;
+    if !is_same_or_descendant(&path, REQUEST_PREFIX) || path == REQUEST_PREFIX {
+        return Err(anyhow!(
+            "request_path outside ingest request prefix: {path}"
+        ));
+    }
+    Ok(path)
+}
+
+fn normalize_source_path(path: &str) -> Result<String> {
+    let path = normalize_absolute_path(path, "source_path")?;
+    validate_canonical_source_path(&path).map_err(anyhow::Error::msg)?;
+    Ok(path)
+}
+
+fn normalize_target_path(path: &str) -> Result<String> {
+    let path = normalize_absolute_path(path, "target_path")?;
+    if path == "/" || path == "/Wiki" || path == "/Sources" || path == GENERATED_TARGET_PREFIX {
+        return Err(anyhow!("refusing protected target_path: {path}"));
+    }
+    if !is_same_or_descendant(&path, GENERATED_TARGET_PREFIX) {
+        return Err(anyhow!(
+            "target_path must be under {GENERATED_TARGET_PREFIX}: {path}"
+        ));
+    }
+    Ok(path)
+}
+
+fn normalize_absolute_path(path: &str, field: &str) -> Result<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("{field} is empty"));
+    }
+    if !trimmed.starts_with('/') {
+        return Err(anyhow!("{field} must be absolute: {path}"));
+    }
+    let mut segments = Vec::new();
+    for segment in trimmed.split('/').filter(|segment| !segment.is_empty()) {
+        if segment == "." || segment == ".." {
+            return Err(anyhow!("{field} contains invalid segment: {path}"));
+        }
+        segments.push(segment);
+    }
+    if segments.is_empty() {
+        return Ok("/".to_string());
+    }
+    Ok(format!("/{}", segments.join("/")))
+}
+
+fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
+    path == prefix || path.starts_with(&format!("{prefix}/"))
 }
 
 fn print_report(report: &PurgeReport, json: bool) -> Result<()> {

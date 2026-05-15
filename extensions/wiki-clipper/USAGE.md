@@ -29,6 +29,14 @@ The build creates:
 - `dist/popup.js`
 - `dist/service-worker.js`
 
+For Chrome Web Store packaging:
+
+```bash
+npm run release:package
+```
+
+The release package excludes source files, tests, `node_modules`, and local `.env` files.
+
 ## Load in Chrome
 
 1. Open `chrome://extensions`.
@@ -90,7 +98,7 @@ Confirm that `/Sources/raw/...` or `/Sources/ingest-requests/...` is created in 
 ChatGPT export only writes raw evidence. Generate wiki pages from the CLI:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- generate-conversation-wiki --source-path /Sources/raw/chatgpt-<conversationId>/chatgpt-<conversationId>.md
 ```
 
 This command creates a wiki scaffold. Re-running it preserves existing `summary.md`, `facts.md`, `events.md`, `plans.md`, `preferences.md`, and `open_questions.md`. Use `--force` only when those pages should be regenerated.

@@ -1048,6 +1048,84 @@ fn fs_folder_migration_reports_promoted_folder_in_sync_delta() {
 }
 
 #[test]
+fn fs_folder_migration_keeps_legacy_nodes_usable_with_current_etags() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    insert_legacy_node(
+        &conn,
+        "/Sources/raw/web/web.md",
+        "source",
+        "raw",
+        r#"{"source_type":"url"}"#,
+    );
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should succeed");
+
+    let file = store
+        .read_node("/Wiki/foo/bar.md")
+        .expect("legacy file should read")
+        .expect("legacy file should exist");
+    assert_eq!(file.kind, NodeKind::File);
+    assert_eq!(file.content, "bar");
+    let source = store
+        .read_node("/Sources/raw/web/web.md")
+        .expect("legacy source should read")
+        .expect("legacy source should exist");
+    assert_eq!(source.kind, NodeKind::Source);
+    assert_eq!(source.metadata_json, r#"{"source_type":"url"}"#);
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/foo".to_string(),
+        })
+        .expect("backfilled folder should list children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].path, "/Wiki/foo/bar.md");
+
+    let updated = store
+        .write_node(
+            WriteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/foo/bar.md".to_string(),
+                kind: NodeKind::File,
+                content: "bar updated".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: Some(file.etag),
+            },
+            30,
+        )
+        .expect("legacy file update with migrated etag should succeed");
+    store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/foo/bar.md".to_string(),
+                to_path: "/Wiki/foo/baz.md".to_string(),
+                expected_etag: Some(updated.node.etag),
+                overwrite: false,
+            },
+            31,
+        )
+        .expect("legacy file move with updated etag should succeed");
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Sources/raw/web/web.md".to_string(),
+                expected_etag: Some(source.etag),
+                expected_folder_index_etag: None,
+            },
+            32,
+        )
+        .expect("legacy source delete with migrated etag should succeed");
+}
+
+#[test]
 fn fs_folder_migration_rejects_content_file_parent_conflict() {
     let (_dir, store) = old_fs_schema_store();
     let conn = Connection::open(store.database_path()).expect("db should open");

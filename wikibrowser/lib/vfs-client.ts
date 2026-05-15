@@ -21,6 +21,9 @@ import type {
   NodeContext,
   NodeEntryKind,
   NodeKind,
+  OpsAnswerSessionCheckRequest,
+  OpsAnswerSessionCheckResult,
+  OpsAnswerSessionRequest,
   RecentNode,
   SearchNodeHit,
   UrlIngestTriggerSessionCheckRequest,
@@ -141,6 +144,20 @@ type RawUrlIngestTriggerSessionCheckRequest = {
   session_nonce: string;
 };
 
+type RawOpsAnswerSessionRequest = {
+  database_id: string;
+  session_nonce: string;
+};
+
+type RawOpsAnswerSessionCheckRequest = {
+  database_id: string;
+  session_nonce: string;
+};
+
+type RawOpsAnswerSessionCheckResult = {
+  principal: string;
+};
+
 type RawLinkEdge = {
   source_path: string;
   target_path: string;
@@ -157,8 +174,10 @@ type RawNodeContext = {
 };
 
 type VfsActor = {
+  authorize_ops_answer_session: (request: RawOpsAnswerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   authorize_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   canister_health: () => Promise<RawCanisterHealth>;
+  check_ops_answer_session: (request: RawOpsAnswerSessionCheckRequest) => Promise<{ Ok: RawOpsAnswerSessionCheckResult } | { Err: string }>;
   check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
   delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
@@ -425,6 +444,33 @@ export async function checkUrlIngestTriggerSession(canisterId: string, request: 
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }
+  });
+}
+
+export async function authorizeOpsAnswerSession(
+  canisterId: string,
+  identity: Identity,
+  request: OpsAnswerSessionRequest
+): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.authorize_ops_answer_session(rawOpsAnswerSessionRequest(request));
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+  });
+}
+
+export async function checkOpsAnswerSession(canisterId: string, request: OpsAnswerSessionCheckRequest): Promise<OpsAnswerSessionCheckResult> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
+    const result = await actor.check_ops_answer_session(rawOpsAnswerSessionCheckRequest(request));
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return {
+      principal: result.Ok.principal
+    };
   });
 }
 
@@ -729,6 +775,20 @@ function rawUrlIngestTriggerSessionCheckRequest(request: UrlIngestTriggerSession
   return {
     database_id: request.databaseId,
     request_path: request.requestPath,
+    session_nonce: request.sessionNonce
+  };
+}
+
+function rawOpsAnswerSessionRequest(request: OpsAnswerSessionRequest): RawOpsAnswerSessionRequest {
+  return {
+    database_id: request.databaseId,
+    session_nonce: request.sessionNonce
+  };
+}
+
+function rawOpsAnswerSessionCheckRequest(request: OpsAnswerSessionCheckRequest): RawOpsAnswerSessionCheckRequest {
+  return {
+    database_id: request.databaseId,
     session_nonce: request.sessionNonce
   };
 }

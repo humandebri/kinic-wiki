@@ -40,7 +40,7 @@ augment_environment_json "${ENVIRONMENT_FILE}" "${REPLICA_HOST}" "${CANISTER_ID}
 
 bench_log "building vfs_bench binary"
 cd "$(bench_repo_root)"
-cargo build -p vfs-cli --bin vfs_bench >/dev/null
+cargo build -p kinic-vfs-cli --bin vfs_bench >/dev/null
 BENCH_BIN="$(bench_vfs_bench_bin)"
 
 node -e '

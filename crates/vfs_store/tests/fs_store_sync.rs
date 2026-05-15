@@ -2,8 +2,9 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, MkdirNodeRequest,
-    MoveNodeRequest, NodeKind, WriteNodeRequest,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListNodesRequest,
+    MkdirNodeRequest, MoveNodeRequest, NodeKind, OutgoingLinksRequest, SearchNodesRequest,
+    SearchPreviewMode, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -449,6 +450,154 @@ fn fetch_updates_reports_old_path_when_node_is_moved() {
     assert_eq!(updates.changed_nodes.len(), 1);
     assert_eq!(updates.changed_nodes[0].path, "/Wiki/archive/alpha.md");
     assert_eq!(updates.removed_paths, vec!["/Wiki/alpha.md".to_string()]);
+}
+
+#[test]
+fn folder_move_updates_sync_export_search_and_links() {
+    let (_dir, store) = new_store();
+    write_node(
+        &store,
+        "/Wiki/project/index.md",
+        "uniquealpha [Raw](/Sources/raw/a/a.md)",
+        None,
+        10,
+    );
+    write_node(
+        &store,
+        "/Wiki/project/notes/todo.md",
+        "todo uniquealpha",
+        None,
+        11,
+    );
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/archive".to_string(),
+            },
+            12,
+        )
+        .expect("archive folder should create");
+    let base = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect("base snapshot should succeed");
+    let folder = store
+        .read_node("/Wiki/project")
+        .expect("folder read should succeed")
+        .expect("folder should exist");
+
+    store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/project".to_string(),
+                to_path: "/Wiki/archive/project".to_string(),
+                expected_etag: Some(folder.etag),
+                overwrite: false,
+            },
+            13,
+        )
+        .expect("folder move should succeed");
+
+    let old_entries = store
+        .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
+            prefix: "/Wiki/project".to_string(),
+            recursive: true,
+        })
+        .expect("old subtree list should succeed");
+    assert!(old_entries.is_empty());
+    let new_entries = store
+        .list_nodes(ListNodesRequest {
+            database_id: "default".to_string(),
+            prefix: "/Wiki/archive/project".to_string(),
+            recursive: true,
+        })
+        .expect("new subtree list should succeed");
+    assert!(
+        new_entries
+            .iter()
+            .any(|entry| entry.path == "/Wiki/archive/project/index.md")
+    );
+    assert!(
+        new_entries
+            .iter()
+            .any(|entry| entry.path == "/Wiki/archive/project/notes/todo.md")
+    );
+
+    let snapshot = store
+        .export_snapshot(ExportSnapshotRequest {
+            database_id: "default".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            snapshot_revision: None,
+            snapshot_session_id: None,
+        })
+        .expect("snapshot should succeed");
+    assert!(
+        snapshot
+            .nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/archive/project/index.md")
+    );
+    assert!(
+        !snapshot
+            .nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/project/index.md")
+    );
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            database_id: "default".to_string(),
+            known_snapshot_revision: base.snapshot_revision,
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            target_snapshot_revision: None,
+        })
+        .expect("updates should succeed");
+    assert!(
+        updates
+            .removed_paths
+            .contains(&"/Wiki/project/index.md".to_string())
+    );
+    assert!(
+        updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/archive/project/index.md")
+    );
+
+    let hits = store
+        .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
+            query_text: "uniquealpha".to_string(),
+            prefix: Some("/Wiki/archive/project".to_string()),
+            top_k: 10,
+            preview_mode: Some(SearchPreviewMode::None),
+        })
+        .expect("search should succeed");
+    assert!(
+        hits.iter()
+            .any(|hit| hit.path == "/Wiki/archive/project/index.md")
+    );
+    let outgoing = store
+        .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/archive/project/index.md".to_string(),
+            limit: 10,
+        })
+        .expect("outgoing links should load");
+    assert_eq!(outgoing[0].target_path, "/Sources/raw/a/a.md");
 }
 
 #[test]

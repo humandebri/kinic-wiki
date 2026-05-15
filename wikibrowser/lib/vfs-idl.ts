@@ -170,6 +170,15 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     request_path: idl.Text,
     session_nonce: idl.Text
   });
+  const OpsAnswerSessionRequest = idl.Record({
+    database_id: idl.Text,
+    session_nonce: idl.Text
+  });
+  const OpsAnswerSessionCheckRequest = idl.Record({
+    database_id: idl.Text,
+    session_nonce: idl.Text
+  });
+  const OpsAnswerSessionCheckResult = idl.Record({ principal: idl.Text });
   const SearchNodePathsRequest = idl.Record({
     database_id: idl.Text,
     query_text: idl.Text,
@@ -214,10 +223,13 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const MoveNodeResult = idl.Record({ from_path: idl.Text, node: NodeMutationAck, overwrote: idl.Bool });
   const ResultMoveNode = idl.Variant({ Ok: MoveNodeResult, Err: idl.Text });
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
+  const ResultOpsAnswerSessionCheck = idl.Variant({ Ok: OpsAnswerSessionCheckResult, Err: idl.Text });
 
   return idl.Service({
+    authorize_ops_answer_session: idl.Func([OpsAnswerSessionRequest], [ResultUnit], []),
     authorize_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionRequest], [ResultUnit], []),
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
+    check_ops_answer_session: idl.Func([OpsAnswerSessionCheckRequest], [ResultOpsAnswerSessionCheck], ["query"]),
     check_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionCheckRequest], [ResultUnit], ["query"]),
     create_database: idl.Func([], [ResultCreateDatabase], []),
     delete_node: idl.Func([DeleteNodeRequest], [ResultDeleteNode], []),

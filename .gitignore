@@ -26,6 +26,7 @@ node_modules/
 *.tsbuildinfo
 .playwright-cli/
 .pnpm-store/
+.worktrees/
 __pycache__/
 *.pyc
 
@@ -35,24 +36,17 @@ __pycache__/
 
 # icp-cli local state
 /.icp/cache/
+/.icp/data/
+
+# Local hooks and helper scripts
+/.githooks/
+/.local/
 /.canbench/
 /.canbench-tools/
 /canbench_results.yml
 /canbench_results.csv
 /.benchmarks/
 /artifacts/
-/extensions/
-!/extensions/
-!/extensions/wiki-clipper/
-!/extensions/wiki-clipper/offscreen/
-!/extensions/wiki-clipper/offscreen/offscreen.html
-!/extensions/wiki-clipper/src/
-!/extensions/wiki-clipper/src/auth-client.js
-!/extensions/wiki-clipper/src/offscreen.js
-!/extensions/wiki-clipper/src/url-ingest-request.js
-!/extensions/wiki-clipper/tests/
-!/extensions/wiki-clipper/tests/settings.test.mjs
-!/extensions/wiki-clipper/tests/url-ingest-request.test.mjs
 extensions/wiki-clipper/release/
 
 # Keep ic-hybrid-sqlite as its own repo for now

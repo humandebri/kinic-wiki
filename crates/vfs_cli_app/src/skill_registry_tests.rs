@@ -1,7 +1,8 @@
 use crate::cli::{SkillRunOutcomeArg, SkillStatusArg};
 use crate::skill_registry::{
-    SkillRunInput, approve_proposal, find_skills, inspect_skill, markdown_target_package_key,
-    propose_improvement, record_skill_run, set_skill_status, upsert_skill,
+    SkillRunInput, approve_proposal, find_skills, inspect_skill, install_skill_lockfile,
+    markdown_target_package_key, propose_improvement, record_skill_run, set_skill_status,
+    upsert_skill,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,6 +25,7 @@ use vfs_types::{
 #[derive(Default)]
 struct SkillMockClient {
     nodes: Mutex<BTreeMap<String, Node>>,
+    mkdirs: Mutex<Vec<String>>,
     searches: Mutex<Vec<SearchNodesRequest>>,
     writes: AtomicUsize,
 }
@@ -130,6 +132,10 @@ impl VfsApi for SkillMockClient {
     }
 
     async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+        self.mkdirs
+            .lock()
+            .expect("mkdir lock")
+            .push(request.path.clone());
         Ok(MkdirNodeResult {
             path: request.path,
             created: true,
@@ -248,6 +254,10 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     )
     .await
     .expect("upsert");
+    assert_mkdirs_include(
+        &client,
+        &["/Wiki", "/Wiki/skills", "/Wiki/skills/legal-review"],
+    );
     assert!(
         client
             .read_node("default", "/Wiki/skills/legal-review/SKILL.md")
@@ -395,6 +405,14 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     )
     .await
     .expect("record run");
+    assert_mkdirs_include(
+        &client,
+        &[
+            "/Sources",
+            "/Sources/skill-runs",
+            "/Sources/skill-runs/legal-review",
+        ],
+    );
     assert!(
         run["run_path"]
             .as_str()
@@ -423,6 +441,63 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
         .await
         .expect("inspect with run summary");
     assert_eq!(inspected["run_summary"]["runs"], 1);
+}
+
+#[tokio::test]
+async fn skill_install_writes_lockfile_without_local_package_install() {
+    let client = SkillMockClient::default();
+    client
+        .write_node(WriteNodeRequest {
+            database_id: "team-db".to_string(),
+            path: "/Wiki/skills/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: manifest("reviewed"),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await
+        .expect("seed manifest");
+    client
+        .write_node(WriteNodeRequest {
+            database_id: "team-db".to_string(),
+            path: "/Wiki/skills/legal-review/SKILL.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Legal Review\n".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await
+        .expect("seed skill");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lockfile = temp.path().join("skill.lock.json");
+
+    let result = install_skill_lockfile(&client, "team-db", "legal-review", &lockfile, false)
+        .await
+        .expect("install lockfile");
+
+    assert_eq!(result["lockfile"], lockfile.display().to_string());
+    let lock: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&lockfile).expect("lockfile should exist"))
+            .expect("lockfile json");
+    assert_eq!(lock["schema_version"], 1);
+    assert_eq!(lock["database_id"], "team-db");
+    assert_eq!(lock["id"], "legal-review");
+    assert_eq!(lock["public"], false);
+    assert_eq!(
+        lock["manifest_path"],
+        "/Wiki/skills/legal-review/manifest.md"
+    );
+    assert_eq!(lock["entry_path"], "/Wiki/skills/legal-review/SKILL.md");
+    assert!(lock["manifest_hash"].as_str().unwrap().len() == 64);
+    assert!(lock["entry_hash"].as_str().unwrap().len() == 64);
+    assert!(lock["installed_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(
+        client
+            .read_node("team-db", "/Wiki/skills/legal-review/installed/SKILL.md")
+            .await
+            .expect("read nonexistent install target"),
+        None
+    );
 }
 
 #[tokio::test]
@@ -826,6 +901,15 @@ async fn skill_improvement_proposal_is_recorded_and_approved_without_editing_ski
     )
     .await
     .expect("proposal");
+    assert_mkdirs_include(
+        &client,
+        &[
+            "/Wiki",
+            "/Wiki/skills",
+            "/Wiki/skills/legal-review",
+            "/Wiki/skills/legal-review/improvement-proposals",
+        ],
+    );
     let proposal_path = proposal["proposal_path"].as_str().unwrap();
     let proposal_name = proposal_path
         .strip_prefix("/Wiki/skills/legal-review/improvement-proposals/")
@@ -964,6 +1048,16 @@ fn assert_rfc3339_field(content: &str, key: &str) {
         .unwrap_or_else(|| panic!("{key} should exist"));
     DateTime::parse_from_rfc3339(value).expect("timestamp should be RFC3339");
     assert!(value.ends_with('Z'));
+}
+
+fn assert_mkdirs_include(client: &SkillMockClient, expected: &[&str]) {
+    let mkdirs = client.mkdirs.lock().expect("mkdir lock");
+    for path in expected {
+        assert!(
+            mkdirs.iter().any(|mkdir| mkdir == path),
+            "expected mkdir for {path}, got {mkdirs:?}"
+        );
+    }
 }
 
 fn proposal_content(skill_id: &str, status: &str) -> String {

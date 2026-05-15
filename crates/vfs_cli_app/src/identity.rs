@@ -1,6 +1,6 @@
 // Where: crates/vfs_cli_app/src/identity.rs
 // What: Load the active icp-cli identity for authenticated canister calls.
-// Why: vfs-cli updates must use the caller selected by `icp identity default`.
+// Why: kinic-vfs-cli updates must use the caller selected by `icp identity default`.
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::process::Command;
 

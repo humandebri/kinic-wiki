@@ -36,7 +36,8 @@ export function DocumentHeader({
   onViewChange,
   isDirectory,
   canEditDirectory,
-  editState
+  editState,
+  rawContent
 }: {
   canisterId: string;
   databaseId: string;
@@ -46,7 +47,17 @@ export function DocumentHeader({
   isDirectory: boolean;
   canEditDirectory: boolean;
   editState: DocumentEditState;
+  rawContent: string | null;
 }) {
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  async function copyText(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus(`${label} copied`);
+    } catch {
+      setCopyStatus(`${label} copy failed`);
+    }
+  }
   return (
     <div className="flex min-h-[60px] flex-col gap-2 border-b border-line bg-paper/80 px-5 py-3 md:flex-row md:items-center md:justify-between">
       <div className="min-w-0">
@@ -57,12 +68,25 @@ export function DocumentHeader({
           {view === "edit" && editState.dirty ? <HeaderBadge label="Unsaved" tone="yellow" /> : null}
           {view === "edit" && editState.saveState === "saving" ? <HeaderBadge label="Saving" tone="blue" /> : null}
           {view === "edit" && editState.saveState === "saved" ? <HeaderBadge label="Saved" tone="green" /> : null}
+          {copyStatus ? <HeaderBadge label={copyStatus} tone={copyStatus.endsWith("failed") ? "yellow" : "green"} /> : null}
         </div>
       </div>
-      <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
-        <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
-        <ViewButton active={view === "raw"} label="Raw" onClick={() => onViewChange("raw")} />
-        {!isDirectory || canEditDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
+          <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
+          <ViewButton active={view === "raw"} label="Raw" onClick={() => onViewChange("raw")} />
+          {!isDirectory || canEditDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
+        </div>
+        <div className="flex rounded-xl border border-line bg-white p-1 text-xs">
+          <button className="rounded-lg px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink" type="button" onClick={() => void copyText("Path", path)}>
+            Copy path
+          </button>
+          {rawContent !== null ? (
+            <button className="rounded-lg px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink" type="button" onClick={() => void copyText("Raw", rawContent)}>
+              Copy raw
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -97,7 +121,7 @@ export function DocumentPane({
   view: ViewMode;
   canisterId: string;
   databaseId: string;
-  authPrompt?: "private" | "write" | null;
+  authPrompt?: "private" | null;
   authReady?: boolean;
   onLogin?: () => void;
   writeIdentity?: Identity | null;
@@ -177,16 +201,13 @@ export function DocumentPane({
   );
 }
 
-function AuthRequiredState({ authReady, mode, onLogin }: { authReady: boolean; mode: "private" | "write"; onLogin: () => void }) {
-  const isWriteAction = mode === "write";
+function AuthRequiredState({ authReady, onLogin }: { authReady: boolean; mode: "private"; onLogin: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
       <section className="max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
-        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">{isWriteAction ? "Write access" : "Private database"}</p>
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Private database</p>
         <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-ink">Login required</h3>
-        <p className="mt-3 text-sm leading-6 text-muted">
-          {isWriteAction ? "Login with Internet Identity to queue URL ingest or save source clips for this database." : "This database is not public. Login with Internet Identity to read databases linked to your principal."}
-        </p>
+        <p className="mt-3 text-sm leading-6 text-muted">This database is not public. Login with Internet Identity to read databases linked to your principal.</p>
         <button
           className="mt-5 rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
           disabled={!authReady}

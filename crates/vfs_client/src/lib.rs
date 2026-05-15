@@ -113,6 +113,11 @@ pub trait VfsApi: Sync {
             "finalize_database_restore is not implemented by this client"
         ))
     }
+    async fn cancel_database_restore(&self, _database_id: &str) -> Result<()> {
+        Err(anyhow!(
+            "cancel_database_restore is not implemented by this client"
+        ))
+    }
     async fn read_node(&self, database_id: &str, path: &str) -> Result<Option<Node>>;
     async fn read_node_context(&self, _request: NodeContextRequest) -> Result<Option<NodeContext>> {
         Err(anyhow!(
@@ -467,6 +472,13 @@ impl VfsApi for CanisterVfsClient {
     async fn finalize_database_restore(&self, database_id: &str) -> Result<()> {
         let result: Result<(), String> = self
             .update("finalize_database_restore", &database_id.to_string())
+            .await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn cancel_database_restore(&self, database_id: &str) -> Result<()> {
+        let result: Result<(), String> = self
+            .update("cancel_database_restore", &database_id.to_string())
             .await?;
         result.map_err(|error| anyhow!(error))
     }

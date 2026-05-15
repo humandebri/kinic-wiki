@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import worker from "../src/index.js";
+import { processQueueMessage } from "../src/processing.js";
 import { testEnv, TestQueue } from "./url-ingest-fixtures.js";
 
 Object.defineProperty(crypto.subtle, "timingSafeEqual", {
@@ -22,37 +23,79 @@ test("url ingest trigger requires worker token config", async () => {
 });
 
 test("url ingest trigger rejects missing bearer token", async () => {
-  const response = await fetchWorker(urlIngestRequest(), testEnv(new TestQueue()));
+  const queue = new TestQueue();
+  const response = await fetchWorker(urlIngestRequest(), testEnv(queue));
 
   assert.equal(response.status, 401);
   assert.match(await response.text(), /unauthorized/);
+  assert.equal(queue.messages.length, 0);
+});
+
+test("url ingest trigger enqueues URL ingest message without background work", async () => {
+  const context = recordingCtx();
+  const queue = new TestQueue();
+  const response = await fetchWorker(authorizedUrlIngestRequest(), testEnv(queue), context);
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    accepted: true,
+    databaseId: "db_1",
+    requestPath: "/Sources/ingest-requests/1.md"
+  });
+  assert.equal(context.waitUntilCount, 0);
+  assert.deepEqual(queue.messages, [
+    {
+      kind: "url_ingest",
+      canisterId: "xis3j-paaaa-aaaai-axumq-cai",
+      databaseId: "db_1",
+      requestPath: "/Sources/ingest-requests/1.md"
+    }
+  ]);
 });
 
 test("url ingest trigger rejects invalid request path before background work", async () => {
   const context = recordingCtx();
-  const response = await fetchWorker(authorizedUrlIngestRequest({ requestPath: "/Sources/raw/1.md" }), testEnv(new TestQueue()), context);
+  const queue = new TestQueue();
+  const response = await fetchWorker(authorizedUrlIngestRequest({ requestPath: "/Sources/raw/1.md" }), testEnv(queue), context);
 
   assert.equal(response.status, 400);
   assert.match(await response.text(), /non-canonical ingest request path/);
   assert.equal(context.waitUntilCount, 0);
+  assert.equal(queue.messages.length, 0);
 });
 
 test("url ingest trigger rejects missing canister config before background work", async () => {
   const context = recordingCtx();
-  const response = await fetchWorker(authorizedUrlIngestRequest(), { ...testEnv(new TestQueue()), KINIC_WIKI_CANISTER_ID: "" }, context);
+  const queue = new TestQueue();
+  const response = await fetchWorker(authorizedUrlIngestRequest(), { ...testEnv(queue), KINIC_WIKI_CANISTER_ID: "" }, context);
 
   assert.equal(response.status, 500);
   assert.match(await response.text(), /KINIC_WIKI_CANISTER_ID is required/);
   assert.equal(context.waitUntilCount, 0);
+  assert.equal(queue.messages.length, 0);
 });
 
 test("url ingest trigger rejects canister mismatches before background work", async () => {
   const context = recordingCtx();
-  const response = await fetchWorker(authorizedUrlIngestRequest({ canisterId: "aaaaa-aa" }), testEnv(new TestQueue()), context);
+  const queue = new TestQueue();
+  const response = await fetchWorker(authorizedUrlIngestRequest({ canisterId: "aaaaa-aa" }), testEnv(queue), context);
 
   assert.equal(response.status, 400);
   assert.match(await response.text(), /canisterId does not match worker canister config/);
   assert.equal(context.waitUntilCount, 0);
+  assert.equal(queue.messages.length, 0);
+});
+
+test("queue URL ingest message failures reject for retry", async () => {
+  await assert.rejects(
+    processQueueMessage(testEnv(new TestQueue()), {
+      kind: "url_ingest",
+      canisterId: "aaaaa-aa",
+      databaseId: "db_1",
+      requestPath: "/Sources/ingest-requests/1.md"
+    }),
+    /canisterId does not match worker canister config/
+  );
 });
 
 test("worker does not expose scheduled cron handler", () => {

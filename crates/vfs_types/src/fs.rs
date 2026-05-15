@@ -171,6 +171,23 @@ pub struct UrlIngestTriggerSessionCheckRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionCheckRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionCheckResult {
+    pub principal: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct NodeMutationAck {
     pub path: String,
     pub kind: NodeKind,

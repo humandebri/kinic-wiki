@@ -218,6 +218,11 @@ type NodeMutationAck = record {
   kind : NodeKind;
   path : text;
 };
+type OpsAnswerSessionCheckResult = record { "principal" : text };
+type OpsAnswerSessionRequest = record {
+  session_nonce : text;
+  database_id : text;
+};
 type QueryContext = record {
   truncated : bool;
   task : text;
@@ -249,27 +254,28 @@ type RecentNodesRequest = record {
 };
 type Result = variant { Ok : WriteNodeResult; Err : text };
 type Result_1 = variant { Ok; Err : text };
-type Result_10 = variant { Ok : vec ChildNode; Err : text };
-type Result_11 = variant { Ok : vec DatabaseMember; Err : text };
-type Result_12 = variant { Ok : vec DatabaseSummary; Err : text };
-type Result_13 = variant { Ok : vec NodeEntry; Err : text };
-type Result_14 = variant { Ok : MkdirNodeResult; Err : text };
-type Result_15 = variant { Ok : MoveNodeResult; Err : text };
-type Result_16 = variant { Ok : QueryContext; Err : text };
-type Result_17 = variant { Ok : DatabaseArchiveChunk; Err : text };
-type Result_18 = variant { Ok : opt Node; Err : text };
-type Result_19 = variant { Ok : opt NodeContext; Err : text };
+type Result_10 = variant { Ok : vec LinkEdge; Err : text };
+type Result_11 = variant { Ok : vec ChildNode; Err : text };
+type Result_12 = variant { Ok : vec DatabaseMember; Err : text };
+type Result_13 = variant { Ok : vec DatabaseSummary; Err : text };
+type Result_14 = variant { Ok : vec NodeEntry; Err : text };
+type Result_15 = variant { Ok : MkdirNodeResult; Err : text };
+type Result_16 = variant { Ok : MoveNodeResult; Err : text };
+type Result_17 = variant { Ok : QueryContext; Err : text };
+type Result_18 = variant { Ok : DatabaseArchiveChunk; Err : text };
+type Result_19 = variant { Ok : opt Node; Err : text };
 type Result_2 = variant { Ok : DatabaseArchiveInfo; Err : text };
-type Result_20 = variant { Ok : vec RecentNodeHit; Err : text };
-type Result_21 = variant { Ok : vec SearchNodeHit; Err : text };
-type Result_22 = variant { Ok : SourceEvidence; Err : text };
-type Result_3 = variant { Ok : text; Err : text };
-type Result_4 = variant { Ok : DeleteNodeResult; Err : text };
-type Result_5 = variant { Ok : EditNodeResult; Err : text };
-type Result_6 = variant { Ok : ExportSnapshotResponse; Err : text };
-type Result_7 = variant { Ok : FetchUpdatesResponse; Err : text };
-type Result_8 = variant { Ok : vec GlobNodeHit; Err : text };
-type Result_9 = variant { Ok : vec LinkEdge; Err : text };
+type Result_20 = variant { Ok : opt NodeContext; Err : text };
+type Result_21 = variant { Ok : vec RecentNodeHit; Err : text };
+type Result_22 = variant { Ok : vec SearchNodeHit; Err : text };
+type Result_23 = variant { Ok : SourceEvidence; Err : text };
+type Result_3 = variant { Ok : OpsAnswerSessionCheckResult; Err : text };
+type Result_4 = variant { Ok : text; Err : text };
+type Result_5 = variant { Ok : DeleteNodeResult; Err : text };
+type Result_6 = variant { Ok : EditNodeResult; Err : text };
+type Result_7 = variant { Ok : ExportSnapshotResponse; Err : text };
+type Result_8 = variant { Ok : FetchUpdatesResponse; Err : text };
+type Result_9 = variant { Ok : vec GlobNodeHit; Err : text };
 type SearchNodeHit = record {
   preview : opt SearchPreview;
   kind : NodeKind;
@@ -314,10 +320,6 @@ type UrlIngestTriggerSessionCheckRequest = record {
   session_nonce : text;
   database_id : text;
 };
-type UrlIngestTriggerSessionRequest = record {
-  session_nonce : text;
-  database_id : text;
-};
 type WriteNodeRequest = record {
   content : text;
   kind : NodeKind;
@@ -329,48 +331,51 @@ type WriteNodeRequest = record {
 type WriteNodeResult = record { created : bool; node : RecentNodeHit };
 service : () -> {
   append_node : (AppendNodeRequest) -> (Result);
-  authorize_url_ingest_trigger_session : (UrlIngestTriggerSessionRequest) -> (
+  authorize_ops_answer_session : (OpsAnswerSessionRequest) -> (Result_1);
+  authorize_url_ingest_trigger_session : (OpsAnswerSessionRequest) -> (
       Result_1,
     );
   begin_database_archive : (text) -> (Result_2);
   begin_database_restore : (text, blob, nat64) -> (Result_1);
   cancel_database_archive : (text) -> (Result_1);
+  cancel_database_restore : (text) -> (Result_1);
   canister_health : () -> (CanisterHealth) query;
+  check_ops_answer_session : (OpsAnswerSessionRequest) -> (Result_3) query;
   check_url_ingest_trigger_session : (UrlIngestTriggerSessionCheckRequest) -> (
       Result_1,
     ) query;
-  create_database : () -> (Result_3);
+  create_database : () -> (Result_4);
   delete_database : (text) -> (Result_1);
-  delete_node : (DeleteNodeRequest) -> (Result_4);
-  edit_node : (EditNodeRequest) -> (Result_5);
-  export_snapshot : (ExportSnapshotRequest) -> (Result_6) query;
-  fetch_updates : (FetchUpdatesRequest) -> (Result_7) query;
+  delete_node : (DeleteNodeRequest) -> (Result_5);
+  edit_node : (EditNodeRequest) -> (Result_6);
+  export_snapshot : (ExportSnapshotRequest) -> (Result_7) query;
+  fetch_updates : (FetchUpdatesRequest) -> (Result_8) query;
   finalize_database_archive : (text, blob) -> (Result_1);
   finalize_database_restore : (text) -> (Result_1);
-  glob_nodes : (GlobNodesRequest) -> (Result_8) query;
+  glob_nodes : (GlobNodesRequest) -> (Result_9) query;
   grant_database_access : (text, text, DatabaseRole) -> (Result_1);
-  graph_links : (GraphLinksRequest) -> (Result_9) query;
-  graph_neighborhood : (GraphNeighborhoodRequest) -> (Result_9) query;
+  graph_links : (GraphLinksRequest) -> (Result_10) query;
+  graph_neighborhood : (GraphNeighborhoodRequest) -> (Result_10) query;
   http_request : (HttpRequest) -> (HttpResponse) query;
-  incoming_links : (IncomingLinksRequest) -> (Result_9) query;
-  list_children : (ListChildrenRequest) -> (Result_10) query;
-  list_database_members : (text) -> (Result_11) query;
-  list_databases : () -> (Result_12) query;
-  list_nodes : (ListNodesRequest) -> (Result_13) query;
+  incoming_links : (IncomingLinksRequest) -> (Result_10) query;
+  list_children : (ListChildrenRequest) -> (Result_11) query;
+  list_database_members : (text) -> (Result_12) query;
+  list_databases : () -> (Result_13) query;
+  list_nodes : (ListNodesRequest) -> (Result_14) query;
   memory_manifest : () -> (MemoryManifest) query;
-  mkdir_node : (MkdirNodeRequest) -> (Result_14);
-  move_node : (MoveNodeRequest) -> (Result_15);
-  multi_edit_node : (MultiEditNodeRequest) -> (Result_5);
-  outgoing_links : (OutgoingLinksRequest) -> (Result_9) query;
-  query_context : (QueryContextRequest) -> (Result_16) query;
-  read_database_archive_chunk : (text, nat64, nat32) -> (Result_17) query;
-  read_node : (text, text) -> (Result_18) query;
-  read_node_context : (NodeContextRequest) -> (Result_19) query;
-  recent_nodes : (RecentNodesRequest) -> (Result_20) query;
+  mkdir_node : (MkdirNodeRequest) -> (Result_15);
+  move_node : (MoveNodeRequest) -> (Result_16);
+  multi_edit_node : (MultiEditNodeRequest) -> (Result_6);
+  outgoing_links : (OutgoingLinksRequest) -> (Result_10) query;
+  query_context : (QueryContextRequest) -> (Result_17) query;
+  read_database_archive_chunk : (text, nat64, nat32) -> (Result_18) query;
+  read_node : (text, text) -> (Result_19) query;
+  read_node_context : (NodeContextRequest) -> (Result_20) query;
+  recent_nodes : (RecentNodesRequest) -> (Result_21) query;
   revoke_database_access : (text, text) -> (Result_1);
-  search_node_paths : (SearchNodePathsRequest) -> (Result_21) query;
-  search_nodes : (SearchNodesRequest) -> (Result_21) query;
-  source_evidence : (SourceEvidenceRequest) -> (Result_22) query;
+  search_node_paths : (SearchNodePathsRequest) -> (Result_22) query;
+  search_nodes : (SearchNodesRequest) -> (Result_22) query;
+  source_evidence : (SourceEvidenceRequest) -> (Result_23) query;
   status : (text) -> (Status) query;
   write_database_restore_chunk : (DatabaseRestoreChunkRequest) -> (Result_1);
   write_node : (WriteNodeRequest) -> (Result);

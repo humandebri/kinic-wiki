@@ -13,11 +13,15 @@ use model::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 pub(crate) use vfs_cli::skill_kb::{find_skills, inspect_skill};
 use vfs_client::VfsApi;
-use vfs_types::{DeleteNodeRequest, ListNodesRequest, NodeEntryKind, NodeKind, WriteNodeRequest};
+use vfs_types::{
+    DeleteNodeRequest, ListNodesRequest, MkdirNodeRequest, NodeEntryKind, NodeKind,
+    WriteNodeRequest,
+};
 
 pub async fn run_skill_command(
     client: &impl VfsApi,
@@ -121,6 +125,15 @@ pub async fn run_skill_command(
             json,
         } => print(
             approve_proposal(client, database_id, &id, &proposal_path).await?,
+            json,
+        )?,
+        SkillCommand::Install {
+            id,
+            lockfile,
+            public,
+            json,
+        } => print(
+            install_skill_lockfile(client, database_id, &id, &lockfile, public).await?,
             json,
         )?,
     }
@@ -350,6 +363,7 @@ pub(crate) async fn propose_improvement(
     let content = format!(
         "---\nkind: kinic.skill_improvement_proposal\nschema_version: 1\nskill_id: {id}\nstatus: proposed\nsource_runs:\n{source_runs}\ncreated_at: {created_at}\ncreated_by: cli\n---\n# Skill Improvement Proposal\n\n## Summary\n\n{summary}\n\n## Evidence\n\n{evidence_links}\n\n## Proposed Diff\n\n```diff\n{diff}\n```\n"
     );
+    ensure_parent_folders(client, database_id, &proposal_path).await?;
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.to_string(),
@@ -388,6 +402,49 @@ pub(crate) async fn approve_proposal(
         })
         .await?;
     Ok(json!({ "id": id, "proposal_path": proposal_path, "status": "approved" }))
+}
+
+pub(crate) async fn install_skill_lockfile(
+    client: &impl VfsApi,
+    database_id: &str,
+    id: &str,
+    lockfile: &Path,
+    public: bool,
+) -> Result<serde_json::Value> {
+    let skill_id = SkillId::parse(id)?;
+    let base_path = skill_base_path(&skill_id, public);
+    let manifest_path = format!("{base_path}/manifest.md");
+    let entry_path = format!("{base_path}/SKILL.md");
+    let manifest = client
+        .read_node(database_id, &manifest_path)
+        .await?
+        .ok_or_else(|| anyhow!("manifest not found: {manifest_path}"))?;
+    let entry = client
+        .read_node(database_id, &entry_path)
+        .await?
+        .ok_or_else(|| anyhow!("SKILL.md not found: {entry_path}"))?;
+    let value = json!({
+        "schema_version": 1,
+        "database_id": database_id,
+        "id": skill_id.to_string(),
+        "public": public,
+        "manifest_path": manifest_path,
+        "entry_path": entry_path,
+        "manifest_etag": manifest.etag.clone(),
+        "entry_etag": entry.etag.clone(),
+        "manifest_hash": sha256_hex(&manifest.content),
+        "entry_hash": sha256_hex(&entry.content),
+        "installed_at": now_rfc3339()
+    });
+    std::fs::write(lockfile, serde_json::to_string_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", lockfile.display()))?;
+    Ok(json!({
+        "id": skill_id.to_string(),
+        "catalog": catalog(public),
+        "lockfile": lockfile.display().to_string(),
+        "manifest_path": value["manifest_path"],
+        "entry_path": value["entry_path"]
+    }))
 }
 
 #[derive(Deserialize)]
@@ -435,6 +492,7 @@ async fn write_file_node(
     path: &str,
     content: String,
 ) -> Result<()> {
+    ensure_parent_folders(client, database_id, path).await?;
     let current = client.read_node(database_id, path).await?;
     client
         .write_node(WriteNodeRequest {
@@ -446,6 +504,25 @@ async fn write_file_node(
             expected_etag: current.map(|node| node.etag),
         })
         .await?;
+    Ok(())
+}
+
+async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &str) -> Result<()> {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        client
+            .mkdir_node(MkdirNodeRequest {
+                database_id: database_id.to_string(),
+                path: current.clone(),
+            })
+            .await?;
+    }
     Ok(())
 }
 
@@ -606,6 +683,11 @@ fn path_to_package_key(path: &Path) -> Option<String> {
 
 fn read_optional(source_dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(source_dir.join(name)).ok()
+}
+
+fn sha256_hex(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl SkillStatusArg {
