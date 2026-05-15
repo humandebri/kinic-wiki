@@ -226,12 +226,24 @@ async fn build_delete_plan(
             });
         }
     }
+    remove_folder_indexes_with_planned_parent(&mut paths);
     let mut ordered = paths.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
     Ok(DeletePlan {
         paths: ordered,
         target_groups,
     })
+}
+
+fn remove_folder_indexes_with_planned_parent(paths: &mut BTreeSet<String>) {
+    let nested_indexes = paths
+        .iter()
+        .filter(|path| folder_index_parent(path).is_some_and(|parent| paths.contains(&parent)))
+        .cloned()
+        .collect::<Vec<_>>();
+    for path in nested_indexes {
+        paths.remove(&path);
+    }
 }
 
 async fn list_tree_paths(
@@ -264,11 +276,7 @@ async fn execute_delete_plan(
     database_id: &str,
     report: &mut PurgeReport,
 ) -> Result<()> {
-    let planned_paths = report.delete_plan.iter().cloned().collect::<BTreeSet<_>>();
     for path in report.delete_plan.clone() {
-        if folder_index_parent(&path).is_some_and(|parent| planned_paths.contains(&parent)) {
-            continue;
-        }
         let Some(node) = client.read_node(database_id, &path).await? else {
             report.skipped_paths.push(path);
             continue;
@@ -464,4 +472,186 @@ fn print_report(report: &PurgeReport, json: bool) -> Result<()> {
         println!("error\t{error}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use async_trait::async_trait;
+    use vfs_types::*;
+
+    #[derive(Default)]
+    struct PlanClient {
+        entries: Vec<NodeEntry>,
+    }
+
+    #[async_trait]
+    impl VfsApi for PlanClient {
+        async fn status(&self, _database_id: &str) -> Result<Status> {
+            unimplemented!()
+        }
+
+        async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
+            unimplemented!()
+        }
+
+        async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
+            Ok(self
+                .entries
+                .iter()
+                .filter(|entry| entry.path.starts_with(&request.prefix))
+                .cloned()
+                .collect())
+        }
+
+        async fn list_children(&self, _request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
+            unimplemented!()
+        }
+
+        async fn write_node(&self, _request: WriteNodeRequest) -> Result<WriteNodeResult> {
+            unimplemented!()
+        }
+
+        async fn append_node(&self, _request: AppendNodeRequest) -> Result<WriteNodeResult> {
+            unimplemented!()
+        }
+
+        async fn edit_node(&self, _request: EditNodeRequest) -> Result<EditNodeResult> {
+            unimplemented!()
+        }
+
+        async fn delete_node(&self, _request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+            unimplemented!()
+        }
+
+        async fn move_node(&self, _request: MoveNodeRequest) -> Result<MoveNodeResult> {
+            unimplemented!()
+        }
+
+        async fn mkdir_node(&self, _request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+            unimplemented!()
+        }
+
+        async fn glob_nodes(&self, _request: GlobNodesRequest) -> Result<Vec<GlobNodeHit>> {
+            unimplemented!()
+        }
+
+        async fn recent_nodes(&self, _request: RecentNodesRequest) -> Result<Vec<RecentNodeHit>> {
+            unimplemented!()
+        }
+
+        async fn multi_edit_node(
+            &self,
+            _request: MultiEditNodeRequest,
+        ) -> Result<MultiEditNodeResult> {
+            unimplemented!()
+        }
+
+        async fn search_nodes(&self, _request: SearchNodesRequest) -> Result<Vec<SearchNodeHit>> {
+            unimplemented!()
+        }
+
+        async fn search_node_paths(
+            &self,
+            _request: SearchNodePathsRequest,
+        ) -> Result<Vec<SearchNodeHit>> {
+            unimplemented!()
+        }
+
+        async fn export_snapshot(
+            &self,
+            _request: ExportSnapshotRequest,
+        ) -> Result<ExportSnapshotResponse> {
+            unimplemented!()
+        }
+
+        async fn fetch_updates(
+            &self,
+            _request: FetchUpdatesRequest,
+        ) -> Result<FetchUpdatesResponse> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn build_delete_plan_omits_folder_index_when_folder_is_planned() -> Result<()> {
+        let client = PlanClient {
+            entries: vec![
+                node_entry("/Wiki/conversations/web-1", NodeEntryKind::Folder),
+                node_entry("/Wiki/conversations/web-1/index.md", NodeEntryKind::File),
+                node_entry("/Wiki/conversations/web-1/facts.md", NodeEntryKind::File),
+            ],
+        };
+        let request = matched_request(Some("/Wiki/conversations/web-1"));
+
+        let plan = build_delete_plan(&client, "default", &[request]).await?;
+
+        assert!(
+            plan.paths
+                .contains(&"/Sources/ingest-requests/r1.md".to_string())
+        );
+        assert!(
+            plan.paths
+                .contains(&"/Sources/raw/web-1/web-1.md".to_string())
+        );
+        assert!(
+            plan.paths
+                .contains(&"/Wiki/conversations/web-1".to_string())
+        );
+        assert!(
+            plan.paths
+                .contains(&"/Wiki/conversations/web-1/facts.md".to_string())
+        );
+        assert!(
+            !plan
+                .paths
+                .contains(&"/Wiki/conversations/web-1/index.md".to_string())
+        );
+        assert!(
+            plan.target_groups[0]
+                .paths
+                .contains(&"/Wiki/conversations/web-1/index.md".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_delete_plan_keeps_standalone_folder_index() -> Result<()> {
+        let client = PlanClient {
+            entries: vec![node_entry(
+                "/Wiki/conversations/web-1/index.md",
+                NodeEntryKind::File,
+            )],
+        };
+        let request = matched_request(Some("/Wiki/conversations/web-1/index.md"));
+
+        let plan = build_delete_plan(&client, "default", &[request]).await?;
+
+        assert!(
+            plan.paths
+                .contains(&"/Wiki/conversations/web-1/index.md".to_string())
+        );
+        Ok(())
+    }
+
+    fn matched_request(target_path: Option<&str>) -> MatchedRequest {
+        MatchedRequest {
+            path: "/Sources/ingest-requests/r1.md".to_string(),
+            url: "https://example.com/page".to_string(),
+            source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+            target_path: target_path.map(ToString::to_string),
+            status: Some("completed".to_string()),
+        }
+    }
+
+    fn node_entry(path: &str, kind: NodeEntryKind) -> NodeEntry {
+        NodeEntry {
+            path: path.to_string(),
+            kind,
+            updated_at: 1,
+            etag: format!("etag:{path}"),
+            has_children: false,
+        }
+    }
 }
