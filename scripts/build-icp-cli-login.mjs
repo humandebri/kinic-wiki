@@ -23,7 +23,7 @@ const [templateSource, bundled] = await Promise.all([
     write: false,
     format: "iife",
     platform: "browser",
-    target: "chrome120",
+    target: ["es2020", "chrome120", "firefox115", "safari17"],
     minify: true,
     legalComments: "none",
     nodePaths: [nodeModulesPath],

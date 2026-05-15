@@ -73,8 +73,6 @@ fn is_database_access_denied(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("principal has no access to database")
-            || message.contains("no access to database")
-            || message.contains("permission denied")
     })
 }
 
@@ -84,7 +82,23 @@ mod tests {
     use crate::cli::{DatabaseCommand, SkillCommand};
 
     #[test]
-    fn auto_uses_identity_for_public_database_membership() {
+    fn auto_public_read_falls_back_to_anonymous_when_membership_check_is_unavailable() {
+        let command = Command::ReadNode {
+            path: "/Wiki/index.md".to_string(),
+            metadata_only: false,
+            fields: None,
+            json: false,
+        };
+
+        assert_eq!(
+            resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(true), None)
+                .unwrap(),
+            ClientIdentityMode::Anonymous
+        );
+    }
+
+    #[test]
+    fn auto_public_read_uses_identity_when_identity_is_database_member() {
         let command = Command::ReadNode {
             path: "/Wiki/index.md".to_string(),
             metadata_only: false,
@@ -97,16 +111,17 @@ mod tests {
                 .unwrap(),
             ClientIdentityMode::Identity
         );
-        assert_eq!(
-            resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(true), Some(false))
-                .unwrap(),
-            ClientIdentityMode::Anonymous
-        );
-        assert_eq!(
-            resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(true), None)
-                .unwrap(),
-            ClientIdentityMode::Anonymous
-        );
+    }
+
+    #[test]
+    fn auto_private_read_requires_identity_when_anonymous_cannot_read() {
+        let command = Command::ReadNode {
+            path: "/Wiki/index.md".to_string(),
+            metadata_only: false,
+            fields: None,
+            json: false,
+        };
+
         assert_eq!(
             resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(false), None)
                 .unwrap(),
@@ -165,10 +180,17 @@ mod tests {
     }
 
     #[test]
-    fn access_denied_detection_checks_error_chain() {
+    fn access_denied_detection_checks_known_database_access_message() {
         let error = anyhow!("principal has no access to database: private")
             .context("query failed for status");
 
         assert!(is_database_access_denied(&error));
+    }
+
+    #[test]
+    fn access_denied_detection_ignores_generic_permission_denied() {
+        let error = anyhow!("permission denied").context("query failed for status");
+
+        assert!(!is_database_access_denied(&error));
     }
 }

@@ -100,6 +100,7 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --database-id <database-id> re
 
 `--host` must point at the wiki canister origin, not the Cloudflare browser host. The canister serves `/.well-known/ic-cli-login` and `/login`, so Internet Identity derives the same principal used by browser flows that pin the wiki canister as `derivationOrigin`.
 If Internet Identity asks for an identity number during this flow, that is the II account selector, not a Kinic DB index or VFS path. II needs it to choose the user identity before it can issue a delegation to the local `icp` session key.
+The browser posts the delegation to the loopback callback URL opened by `icp-cli`. That local callback must answer CORS preflight with `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods: POST, OPTIONS`, and `Access-Control-Allow-Headers: content-type`. Its `POST` response must also include `Access-Control-Allow-Origin`. If the callback URL carries a state or nonce query, the local CLI must verify it as one-time data before accepting the delegation.
 
 Refresh expired II delegations before running private DB commands:
 

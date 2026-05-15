@@ -22,14 +22,14 @@ export async function collectQueryAnswerContext(input: {
   readIdentity: Identity | null;
 }): Promise<QueryAnswerContext[]> {
   const nodes = new Map<string, WikiNode>();
-  if (input.currentNode && isContextPath(input.currentNode.path)) {
+  if (input.currentNode && isAnswerContextNode(input.currentNode)) {
     nodes.set(input.currentNode.path, input.currentNode);
   }
   const context = await queryContext(input.canisterId, input.databaseId, input.question, CONTEXT_BUDGET_TOKENS, input.readIdentity ?? undefined);
   for (const nodeContext of context.nodes) {
     if (nodes.size >= MAX_CONTEXT_ITEMS) break;
     const node = nodeContext.node;
-    if (node.kind === "file" && isContextPath(node.path) && !nodes.has(node.path)) nodes.set(node.path, node);
+    if (isAnswerContextNode(node) && !nodes.has(node.path)) nodes.set(node.path, node);
   }
   return trimContext([...nodes.values()].map((node) => contextFromNode(node, context.nodes.find((item) => item.node.path === node.path) ?? null)));
 }
@@ -49,6 +49,7 @@ function trimContext(items: QueryAnswerContext[]): QueryAnswerContext[] {
     if (total >= MAX_CONTEXT_CHARS) break;
     const remaining = MAX_CONTEXT_CHARS - total;
     const excerpt = item.excerpt.slice(0, remaining);
+    if (!excerpt.trim()) continue;
     total += excerpt.length;
     trimmed.push({ ...item, excerpt });
   }
@@ -67,4 +68,8 @@ function excerptForNode(node: WikiNode, context: NodeContext | null): string {
 
 function isContextPath(path: string): boolean {
   return path === "/Wiki" || path.startsWith("/Wiki/") || path === "/Sources" || path.startsWith("/Sources/");
+}
+
+function isAnswerContextNode(node: WikiNode): boolean {
+  return node.kind === "file" && isContextPath(node.path) && node.content.trim().length > 0;
 }

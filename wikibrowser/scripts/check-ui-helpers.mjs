@@ -21,6 +21,7 @@ const panelSource = readFileSync(new URL("../components/panel.tsx", import.meta.
 const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
 const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
 const queryPanelSource = readFileSync(new URL("../components/query-panel.tsx", import.meta.url), "utf8");
+const queryContextSource = readFileSync(new URL("../lib/query-context.ts", import.meta.url), "utf8");
 const vfsClientSource = readFileSync(new URL("../lib/vfs-client.ts", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 const tailwindConfig = readFileSync(new URL("../tailwind.config.ts", import.meta.url), "utf8");
@@ -68,6 +69,8 @@ assert.match(queryPanelSource, /htmlFor="query-command">Query/);
 assert.match(queryPanelSource, /LLM answer/);
 assert.match(queryPanelSource, /LLM for ask/);
 assert.match(queryPanelSource, /read-only/);
+assert.match(queryContextSource, /isAnswerContextNode\(input\.currentNode\)/);
+assert.match(queryContextSource, /node\.kind === "file" && isContextPath\(node\.path\) && node\.content\.trim\(\)\.length > 0/);
 assert.match(wikiBrowserSource, /ExplorerHeaderActions/);
 assert.match(wikiBrowserSource, /ExplorerCreateForm/);
 assert.match(wikiBrowserSource, /ExplorerMoveForm/);

@@ -124,6 +124,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extensions/wiki-clipper/package-lock.json
+      - name: Install login page dependencies
+        run: npm ci --prefix extensions/wiki-clipper
+      - name: Check generated CLI login page
+        run: |
+          node scripts/build-icp-cli-login.mjs
+          git diff --exit-code crates/vfs_canister/src/icp_cli_login.html
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:

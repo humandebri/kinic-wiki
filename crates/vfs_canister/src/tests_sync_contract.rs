@@ -99,6 +99,11 @@ fn http_request_serves_icp_cli_login_page() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(body.contains("<h1>CLI login</h1>"));
+    assert!(body.contains("Delegation recipient"));
+    assert!(body.contains("Local CLI callback"));
+    assert!(body.contains("Callback host/port"));
+    assert!(body.contains("Derivation origin"));
+    assert!(body.contains("Delegation TTL"));
     assert!(body.contains("http://id.ai.localhost:"));
     assert!(body.contains("https://xis3j-paaaa-aaaai-axumq-cai.icp0.io"));
     assert!(compact_body.contains("endsWith(\".localhost\")?"));
