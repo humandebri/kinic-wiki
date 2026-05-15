@@ -1,5 +1,7 @@
 # Skill Registry
 
+This document is the canonical Skill Registry reference.
+
 Skill Registry stores Agent Skills-compatible `SKILL.md` packages as ordinary wiki nodes.
 It is a DB-backed skill knowledge base, not a GitHub or Vercel marketplace replacement.
 GitHub is provenance/source context; the DB copy is the runtime source of truth.
@@ -136,7 +138,7 @@ There is no separate `skill-cli` binary in v1.
 
 Use `database link` once, then run `skill` commands without repeating `--database-id`.
 They are thin wrappers over normal VFS nodes and do not add canister schema or path-level ACL.
-For the full first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
+For the manual first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
 
 ```bash
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database create team-skills
