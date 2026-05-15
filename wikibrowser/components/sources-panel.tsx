@@ -128,7 +128,7 @@ export function SourcesPanel({
           <div className="flex items-center justify-between gap-2">
             <StatusText status={saveStatus} error={saveError} />
             <button
-              className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-1 rounded-2xl bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
               disabled={!url.trim() || saveStatus === "extracting" || saveStatus === "saving"}
               type="submit"
             >

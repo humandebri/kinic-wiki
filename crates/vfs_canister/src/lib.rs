@@ -36,7 +36,7 @@ use vfs_types::{
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
     SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
-    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,6 +45,9 @@ const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
 const DATABASES_DIR: &str = "./DB/databases";
 const II_ALTERNATIVE_ORIGINS_PATH: &str = "/.well-known/ii-alternative-origins";
 const II_ALTERNATIVE_ORIGINS_BODY: &str = r#"{"alternativeOrigins":["https://wiki.kinic.xyz","https://kinic.xyz","chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj","chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"]}"#;
+const ICP_CLI_LOGIN_DISCOVERY_PATH: &str = "/.well-known/ic-cli-login";
+const ICP_CLI_LOGIN_PATH: &str = "/login";
+const ICP_CLI_LOGIN_HTML: &str = include_str!("icp_cli_login.html");
 #[cfg(target_arch = "wasm32")]
 const INDEX_DB_MEMORY_ID: u16 = 10;
 
@@ -88,25 +91,27 @@ fn post_upgrade_hook() {
 
 #[query]
 fn http_request(request: HttpRequest) -> HttpResponse {
-    if request.method != "GET" || request_path(&request.url) != II_ALTERNATIVE_ORIGINS_PATH {
+    if request.method != "GET" {
         return HttpResponse {
-            status_code: 404,
-            headers: vec![(
-                "Content-Type".to_string(),
-                "text/plain; charset=utf-8".to_string(),
-            )],
-            body: b"Not found".to_vec(),
+            status_code: 405,
+            headers: text_headers(),
+            body: b"Method not allowed".to_vec(),
             upgrade: Some(false),
         };
     }
-
-    let (path, entry, tree, mut response) = certified_alternative_origins_response();
+    let request_path = request_path(&request.url);
+    let Some((path, entry, tree, mut response)) = certified_static_response(request_path) else {
+        return HttpResponse {
+            status_code: 404,
+            headers: text_headers(),
+            body: b"Not found".to_vec(),
+            upgrade: Some(false),
+        };
+    };
     if let Some(certificate) = data_certificate() {
-        let witness = tree
-            .witness(&entry, II_ALTERNATIVE_ORIGINS_PATH)
-            .unwrap_or_else(|error| {
-                ic_cdk::trap(format!("HTTP certification witness failed: {error}"))
-            });
+        let witness = tree.witness(&entry, request_path).unwrap_or_else(|error| {
+            ic_cdk::trap(format!("HTTP certification witness failed: {error}"))
+        });
         add_v2_certificate_header(&certificate, &mut response, &witness, &path.to_expr_path());
     }
     http_response_from_certified(response)
@@ -372,6 +377,14 @@ fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
     let database_id = request.database_id.clone();
     with_usage("write_node", Some(database_id), |service, caller, now| {
         service.write_node(caller, request, now)
+    })
+}
+
+#[update]
+fn write_nodes(request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>, String> {
+    let database_id = request.database_id.clone();
+    with_usage("write_nodes", Some(database_id), |service, caller, now| {
+        service.write_nodes(caller, request, now)
     })
 }
 
@@ -746,14 +759,85 @@ fn canonical_roles() -> Vec<CanonicalRole> {
 }
 
 fn certify_http_responses() {
-    let (_, _, tree, _) = certified_alternative_origins_response();
+    let tree = certified_static_tree();
     set_certified_data(tree.root_hash());
 }
 
-fn certified_alternative_origins_response() -> (
+fn certified_static_response(
+    request_path: &str,
+) -> Option<(
     HttpCertificationPath<'static>,
     HttpCertificationTreeEntry<'static>,
     HttpCertificationTree,
+    CertifiedHttpResponse<'static>,
+)> {
+    let responses = certified_static_responses();
+    let tree = certified_static_tree_from_entries(
+        responses
+            .iter()
+            .map(|(_, entry, _)| entry.clone())
+            .collect::<Vec<_>>(),
+    );
+    responses
+        .into_iter()
+        .find(|(path, _, _)| *path == request_path)
+        .map(|(path, entry, response)| (HttpCertificationPath::exact(path), entry, tree, response))
+}
+
+fn certified_static_tree() -> HttpCertificationTree {
+    certified_static_tree_from_entries(
+        certified_static_responses()
+            .into_iter()
+            .map(|(_, entry, _)| entry)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn certified_static_tree_from_entries(
+    entries: Vec<HttpCertificationTreeEntry<'static>>,
+) -> HttpCertificationTree {
+    let mut tree = HttpCertificationTree::default();
+    for entry in entries {
+        tree.insert(&entry);
+    }
+    tree
+}
+
+fn certified_static_responses() -> Vec<(
+    &'static str,
+    HttpCertificationTreeEntry<'static>,
+    CertifiedHttpResponse<'static>,
+)> {
+    vec![
+        certified_static_response_entry(
+            II_ALTERNATIVE_ORIGINS_PATH,
+            II_ALTERNATIVE_ORIGINS_BODY.as_bytes().to_vec(),
+            "application/json; charset=utf-8",
+            true,
+        ),
+        certified_static_response_entry(
+            ICP_CLI_LOGIN_DISCOVERY_PATH,
+            ICP_CLI_LOGIN_PATH.as_bytes().to_vec(),
+            "text/plain; charset=utf-8",
+            true,
+        ),
+        certified_static_response_entry(
+            ICP_CLI_LOGIN_PATH,
+            ICP_CLI_LOGIN_HTML.as_bytes().to_vec(),
+            "text/html; charset=utf-8",
+            false,
+        ),
+    ]
+}
+
+fn certified_static_response_entry(
+    path: &'static str,
+    body: Vec<u8>,
+    content_type: &'static str,
+    cors: bool,
+) -> (
+    &'static str,
+    HttpCertificationTreeEntry<'static>,
     CertifiedHttpResponse<'static>,
 ) {
     let cel_expr = DefaultCelBuilder::response_only_certification()
@@ -765,37 +849,36 @@ fn certified_alternative_origins_response() -> (
             ],
         ))
         .build();
-    let response = alternative_origins_response(cel_expr.to_string());
+    let response = static_response(body, content_type, cors, cel_expr.to_string());
     let certification = HttpCertification::response_only(&cel_expr, &response, None)
         .unwrap_or_else(|error| ic_cdk::trap(format!("HTTP certification failed: {error}")));
-    let path = HttpCertificationPath::exact(II_ALTERNATIVE_ORIGINS_PATH);
-    let entry = HttpCertificationTreeEntry::new(path.clone(), certification);
-    let mut tree = HttpCertificationTree::default();
-    tree.insert(&entry);
-    (path, entry, tree, response)
+    let entry = HttpCertificationTreeEntry::new(HttpCertificationPath::exact(path), certification);
+    (path, entry, response)
 }
 
-fn alternative_origins_response(certificate_expression: String) -> CertifiedHttpResponse<'static> {
-    CertifiedHttpResponse::ok(
-        II_ALTERNATIVE_ORIGINS_BODY.as_bytes().to_vec(),
-        vec![
-            (
-                "Content-Type".to_string(),
-                "application/json; charset=utf-8".to_string(),
-            ),
-            (
-                "Cache-Control".to_string(),
-                "public, max-age=300".to_string(),
-            ),
-            ("Access-Control-Allow-Origin".to_string(), "*".to_string()),
-            (
-                CERTIFICATE_EXPRESSION_HEADER_NAME.to_string(),
-                certificate_expression,
-            ),
-        ],
-    )
-    .with_upgrade(false)
-    .build()
+fn static_response(
+    body: Vec<u8>,
+    content_type: &str,
+    cors: bool,
+    certificate_expression: String,
+) -> CertifiedHttpResponse<'static> {
+    let mut headers = vec![
+        ("Content-Type".to_string(), content_type.to_string()),
+        (
+            "Cache-Control".to_string(),
+            "public, max-age=300".to_string(),
+        ),
+        (
+            CERTIFICATE_EXPRESSION_HEADER_NAME.to_string(),
+            certificate_expression,
+        ),
+    ];
+    if cors {
+        headers.push(("Access-Control-Allow-Origin".to_string(), "*".to_string()));
+    }
+    CertifiedHttpResponse::ok(body, headers)
+        .with_upgrade(false)
+        .build()
 }
 
 fn http_response_from_certified(response: CertifiedHttpResponse<'static>) -> HttpResponse {
@@ -809,6 +892,13 @@ fn http_response_from_certified(response: CertifiedHttpResponse<'static>) -> Htt
 
 fn request_path(url: &str) -> &str {
     url.split_once('?').map_or(url, |(path, _)| path)
+}
+
+fn text_headers() -> Vec<(String, String)> {
+    vec![(
+        "Content-Type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    )]
 }
 
 #[cfg(target_arch = "wasm32")]

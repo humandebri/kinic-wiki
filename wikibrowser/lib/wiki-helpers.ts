@@ -1,7 +1,7 @@
 import type { ChildNode } from "@/lib/types";
 
 export type ViewMode = "preview" | "raw" | "edit";
-export type ModeTab = "explorer" | "ops" | "ingest" | "sources";
+export type ModeTab = "explorer" | "query" | "ingest" | "sources";
 export type ReadIdentityMode = "anonymous" | "user";
 
 export type LoadState<T> = {
@@ -37,7 +37,7 @@ export function canExpandChildNode(node: ChildNode): boolean {
 }
 
 export function parseModeTab(value: string | null): ModeTab {
-  if (value === "ops" || value === "recent") return "ops";
+  if (value === "query") return "query";
   if (value === "ingest" || value === "sources" || value === "explorer") return value;
   return "explorer";
 }

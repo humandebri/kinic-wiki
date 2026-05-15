@@ -7,8 +7,8 @@ use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use vfs_runtime::{
-    MAX_ARCHIVE_CHUNK_BYTES, MAX_DATABASE_SIZE_BYTES, MAX_RESTORE_CHUNK_BYTES,
-    USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService,
+    DEFAULT_LLM_WRITER_PRINCIPAL, MAX_ARCHIVE_CHUNK_BYTES, MAX_DATABASE_SIZE_BYTES,
+    MAX_RESTORE_CHUNK_BYTES, USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService,
 };
 use vfs_types::{
     AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, MkdirNodeRequest, NodeKind,
@@ -442,6 +442,43 @@ fn url_ingest_trigger_session_requires_writer_and_allows_replay() {
 }
 
 #[test]
+fn url_ingest_trigger_session_requires_default_llm_writer() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+    service
+        .authorize_url_ingest_trigger_session(
+            "owner",
+            url_ingest_session_request("alpha", "session-1"),
+            100,
+        )
+        .expect("default LLM writer should allow session");
+
+    service
+        .revoke_database_access("alpha", "owner", DEFAULT_LLM_WRITER_PRINCIPAL)
+        .expect("owner should revoke LLM writer");
+    let check = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            101,
+        )
+        .expect_err("revoked LLM writer should fail session check");
+    assert!(check.contains("LLM writer principal lacks writer access"));
+
+    let authorize = service
+        .authorize_url_ingest_trigger_session(
+            "owner",
+            url_ingest_session_request("alpha", "session-2"),
+            102,
+        )
+        .expect_err("revoked LLM writer should fail session authorization");
+    assert!(authorize.contains("LLM writer principal lacks writer access"));
+}
+
+#[test]
 fn url_ingest_trigger_session_rejects_invalid_request_nodes() {
     let service = service();
     service
@@ -727,7 +764,7 @@ fn generated_database_create_returns_hash_id_and_owner_member() {
 
     assert_generated_database_id(&meta.database_id);
     assert_eq!(meta.mount_id, 11);
-    assert_eq!(database_member_count(&root, &meta.database_id), 1);
+    assert_eq!(database_member_count(&root, &meta.database_id), 2);
     let row = database_index_row(&root, &meta.database_id);
     assert_eq!(row.0, "hot");
     assert_eq!(row.1, Some(11));
@@ -929,7 +966,7 @@ fn discards_failed_database_reservation_for_retry() {
     service
         .reserve_database("retryable", "owner", 1)
         .expect("reservation should create");
-    assert_eq!(database_member_count(&root, "retryable"), 1);
+    assert_eq!(database_member_count(&root, "retryable"), 2);
 
     service
         .discard_database_reservation("retryable")
@@ -940,7 +977,7 @@ fn discards_failed_database_reservation_for_retry() {
         .create_database("retryable", "owner", 2)
         .expect("same database_id should create after discard");
     assert_eq!(meta.database_id, "retryable");
-    assert_eq!(database_member_count(&root, "retryable"), 1);
+    assert_eq!(database_member_count(&root, "retryable"), 2);
 }
 
 #[test]
@@ -2241,7 +2278,15 @@ fn enforces_reader_writer_owner_roles() {
     let members = service
         .list_database_members("shared", "owner")
         .expect("owner should list members");
-    assert_eq!(members.len(), 3);
+    assert_eq!(members.len(), 4);
+
+    service
+        .grant_database_access("shared", "owner", "2vxsx-fae", DatabaseRole::Reader, 15)
+        .expect("anonymous public grant should succeed");
+    let public_members = service
+        .list_database_members("shared", "2vxsx-fae")
+        .expect("anonymous should list members for public database");
+    assert_eq!(public_members.len(), 5);
 
     service
         .revoke_database_access("shared", "owner", "reader")

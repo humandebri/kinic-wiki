@@ -5,7 +5,7 @@ use vfs_types::{
     DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, NodeEntryKind, NodeKind,
     OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
-    SearchPreviewField, SearchPreviewMode, WriteNodeRequest,
+    SearchPreviewField, SearchPreviewMode, WriteNodeItem, WriteNodeRequest, WriteNodesRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -512,6 +512,177 @@ fn status_counts_live_files_and_sources() {
     assert_eq!(status.file_count, 0);
     assert_eq!(status.source_count, 1);
     assert_eq!(source.node.kind, NodeKind::Source);
+}
+
+#[test]
+fn write_nodes_creates_files_and_sources_atomically() {
+    let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Sources/raw/source/source.md", 9);
+
+    let results = store
+        .write_nodes(
+            WriteNodesRequest {
+                database_id: "default".to_string(),
+                nodes: vec![
+                    WriteNodeItem {
+                        path: "/Wiki/batch-a.md".to_string(),
+                        kind: NodeKind::File,
+                        content: "alpha link [[batch-b]]".to_string(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: None,
+                    },
+                    WriteNodeItem {
+                        path: "/Sources/raw/source/source.md".to_string(),
+                        kind: NodeKind::Source,
+                        content: "source alpha".to_string(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: None,
+                    },
+                ],
+            },
+            10,
+        )
+        .expect("batch write should succeed");
+
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|result| result.created));
+    assert!(
+        store
+            .read_node("/Wiki/batch-a.md")
+            .expect("read should succeed")
+            .is_some()
+    );
+    assert!(
+        store
+            .read_node("/Sources/raw/source/source.md")
+            .expect("read should succeed")
+            .is_some()
+    );
+}
+
+#[test]
+fn write_nodes_rolls_back_when_later_item_fails() {
+    let (_dir, store) = new_store();
+    let existing = write_file(&store, "/Wiki/existing.md", None, 9);
+
+    let error = store
+        .write_nodes(
+            WriteNodesRequest {
+                database_id: "default".to_string(),
+                nodes: vec![
+                    WriteNodeItem {
+                        path: "/Wiki/new-before-error.md".to_string(),
+                        kind: NodeKind::File,
+                        content: "new content".to_string(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: None,
+                    },
+                    WriteNodeItem {
+                        path: "/Wiki/existing.md".to_string(),
+                        kind: NodeKind::File,
+                        content: "stale update".to_string(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: Some("stale".to_string()),
+                    },
+                ],
+            },
+            10,
+        )
+        .expect_err("stale item should fail");
+
+    assert!(error.contains("expected_etag"));
+    assert!(
+        store
+            .read_node("/Wiki/new-before-error.md")
+            .expect("read should succeed")
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .read_node("/Wiki/existing.md")
+            .expect("read should succeed")
+            .expect("existing node should remain")
+            .etag,
+        existing
+    );
+}
+
+#[test]
+fn write_nodes_rejects_folder_item_without_partial_write() {
+    let (_dir, store) = new_store();
+
+    let error = store
+        .write_nodes(
+            WriteNodesRequest {
+                database_id: "default".to_string(),
+                nodes: vec![
+                    WriteNodeItem {
+                        path: "/Wiki/new-before-folder.md".to_string(),
+                        kind: NodeKind::File,
+                        content: "new content".to_string(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: None,
+                    },
+                    WriteNodeItem {
+                        path: "/Wiki/folder".to_string(),
+                        kind: NodeKind::Folder,
+                        content: String::new(),
+                        metadata_json: "{}".to_string(),
+                        expected_etag: None,
+                    },
+                ],
+            },
+            10,
+        )
+        .expect_err("folder item should fail");
+
+    assert!(error.contains("write_node cannot create folders"));
+    assert!(
+        store
+            .read_node("/Wiki/new-before-folder.md")
+            .expect("read should succeed")
+            .is_none()
+    );
+}
+
+#[test]
+fn write_nodes_updates_search_and_links() {
+    let (_dir, store) = new_store();
+
+    store
+        .write_nodes(
+            WriteNodesRequest {
+                database_id: "default".to_string(),
+                nodes: vec![WriteNodeItem {
+                    path: "/Wiki/linking.md".to_string(),
+                    kind: NodeKind::File,
+                    content: "batch-token links to [[target]]".to_string(),
+                    metadata_json: "{}".to_string(),
+                    expected_etag: None,
+                }],
+            },
+            10,
+        )
+        .expect("batch write should succeed");
+
+    let hits = store
+        .search_nodes(SearchNodesRequest {
+            database_id: "default".to_string(),
+            query_text: "batch-token".to_string(),
+            prefix: Some("/Wiki".to_string()),
+            top_k: 10,
+            preview_mode: Some(SearchPreviewMode::None),
+        })
+        .expect("search should succeed");
+    assert!(hits.iter().any(|hit| hit.path == "/Wiki/linking.md"));
+    let links = store
+        .outgoing_links(OutgoingLinksRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/linking.md".to_string(),
+            limit: 10,
+        })
+        .expect("links should load");
+    assert!(links.iter().any(|link| link.target_path == "/Wiki/target"));
 }
 
 #[test]

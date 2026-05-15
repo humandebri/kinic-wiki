@@ -135,9 +135,12 @@ export default function HomePage() {
     <main className="min-h-screen px-6 py-8">
       <section className="mx-auto flex max-w-6xl flex-col gap-6">
         <header className="flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Kinic Wiki</p>
-            <h1 className="mt-2 text-3xl font-semibold text-ink">Database dashboard</h1>
+          <div className="flex min-w-0 items-center gap-3">
+            <img className="h-11 w-11 rounded-xl shadow-sm" src="/icon.png" alt="" />
+            <div className="min-w-0">
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Kinic Wiki</p>
+              <h1 className="mt-1 text-3xl font-semibold text-ink">Database dashboard</h1>
+            </div>
           </div>
           <AuthControls
             authReady={Boolean(authClient)}
@@ -163,7 +166,7 @@ export default function HomePage() {
                 <p className="mt-1 font-mono text-xs text-muted">{principal}</p>
               </div>
               <button
-                className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
                 disabled={creating || loadState === "loading"}
                 type="button"
                 onClick={createDatabase}

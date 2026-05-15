@@ -196,6 +196,27 @@ export function OwnerPanel(props: {
   );
 }
 
+export function ReadonlyMembersPanel(props: { memberError: string | null; members: DatabaseMember[]; principal: string }) {
+  return (
+    <section className="rounded-lg border border-line bg-paper shadow-sm">
+      <div className="grid gap-2 border-b border-line px-4 py-4">
+        <h2 className="text-lg font-semibold text-ink">Members</h2>
+        <p className="text-sm leading-6 text-muted">Public database access is read-only for this principal.</p>
+      </div>
+      {props.memberError ? <div className="border-b border-line px-4 py-3 text-sm text-red-900">{props.memberError}</div> : null}
+      <MemberTable
+        busy={false}
+        busyAction={null}
+        members={props.members}
+        principal={props.principal}
+        readOnly
+        onRevoke={() => {}}
+        onRoleChange={() => {}}
+      />
+    </section>
+  );
+}
+
 export function StatusPanel({ tone, message }: { tone: "error" | "info"; message: string }) {
   const toneClass = tone === "error" ? "border-red-200 bg-red-50 text-red-900" : "border-line bg-paper text-ink";
   return <div className={`rounded-lg border px-4 py-3 text-sm ${toneClass}`}>{message}</div>;

@@ -298,8 +298,8 @@ async fn write_node_accepts_canonical_source_paths_only() {
                     database_id: Some("default".to_string()),
                     local: false,
                     replica_host: None,
-                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
+                    identity_mode: IdentityModeArg::Auto,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -341,8 +341,8 @@ async fn write_node_rejects_non_canonical_source_paths() {
                     database_id: Some("default".to_string()),
                     local: false,
                     replica_host: None,
-                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
+                    identity_mode: IdentityModeArg::Auto,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -365,6 +365,64 @@ async fn write_node_rejects_non_canonical_source_paths() {
 }
 
 #[tokio::test]
+async fn delete_node_autofills_folder_index_etag() {
+    let client = MockClient {
+        nodes: vec![
+            Node {
+                path: "/Wiki/topic".to_string(),
+                kind: NodeKind::Folder,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 2,
+                etag: "etag-folder".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            Node {
+                path: "/Wiki/topic/index.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Topic".to_string(),
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-index".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                replica_host: None,
+                canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
+            },
+            command: Command::DeleteNode {
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some("etag-folder".to_string()),
+                expected_folder_index_etag: None,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("folder delete should succeed");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].path, "/Wiki/topic");
+    assert_eq!(deletes[0].expected_etag.as_deref(), Some("etag-folder"));
+    assert_eq!(
+        deletes[0].expected_folder_index_etag.as_deref(),
+        Some("etag-index")
+    );
+}
+
+#[tokio::test]
 async fn purge_url_ingest_dry_run_does_not_delete() {
     let client = MockClient {
         nodes: url_ingest_nodes(),
@@ -378,8 +436,8 @@ async fn purge_url_ingest_dry_run_does_not_delete() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page#fragment".to_string()),
@@ -412,8 +470,8 @@ async fn purge_url_ingest_requires_force_for_wide_target_delete() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -447,8 +505,8 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -497,8 +555,8 @@ async fn purge_url_ingest_rejects_unsafe_target_paths() {
                     database_id: Some("default".to_string()),
                     local: false,
                     replica_host: None,
-                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
+                    identity_mode: IdentityModeArg::Auto,
                 },
                 command: Command::PurgeUrlIngest {
                     url: Some("https://example.com/page".to_string()),
@@ -547,8 +605,8 @@ async fn purge_url_ingest_rejects_prefix_bleed_from_list_nodes() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -582,8 +640,8 @@ async fn purge_url_ingest_rejects_request_paths_outside_ingest_prefix() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -628,8 +686,8 @@ async fn purge_url_ingest_rejects_noncanonical_request_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -662,8 +720,8 @@ async fn purge_url_ingest_returns_error_when_delete_fails() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -709,8 +767,8 @@ async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -760,8 +818,8 @@ async fn purge_url_ingest_source_path_requires_matching_request() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -806,8 +864,8 @@ async fn purge_url_ingest_source_path_requires_request_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -853,8 +911,8 @@ async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -887,8 +945,8 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -961,8 +1019,8 @@ async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
                 database_id: Some("default".to_string()),
                 local: false,
                 replica_host: None,
-                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,

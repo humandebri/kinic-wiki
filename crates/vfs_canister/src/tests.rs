@@ -11,7 +11,7 @@ use vfs_types::{
     ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
     MultiEditNodeRequest, NodeContextRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest,
     QueryContextRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
-    SearchPreviewMode, SourceEvidenceRequest, WriteNodeRequest,
+    SearchPreviewMode, SourceEvidenceRequest, WriteNodeItem, WriteNodeRequest, WriteNodesRequest,
 };
 
 use super::{
@@ -19,10 +19,11 @@ use super::{
     create_database, delete_node, edit_node, export_snapshot,
     fail_next_mount_database_file_for_test, fetch_updates, finalize_database_archive,
     finalize_database_restore, glob_nodes, grant_database_access, graph_links, graph_neighborhood,
-    incoming_links, list_children, list_databases, list_nodes, memory_manifest, mkdir_node,
-    move_node, multi_edit_node, outgoing_links, query_context, read_database_archive_chunk,
-    read_node, read_node_context, recent_nodes, revoke_database_access, search_node_paths,
-    search_nodes, source_evidence, status, write_database_restore_chunk, write_node,
+    incoming_links, list_children, list_database_members, list_databases, list_nodes,
+    memory_manifest, mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
+    read_database_archive_chunk, read_node, read_node_context, recent_nodes,
+    revoke_database_access, search_node_paths, search_nodes, source_evidence, status,
+    write_database_restore_chunk, write_node, write_nodes,
 };
 
 fn install_test_service() {
@@ -146,6 +147,91 @@ fn update_entrypoints_record_usage_events() {
 }
 
 #[test]
+fn write_nodes_records_one_usage_event_and_writes_nodes() {
+    install_test_service();
+
+    let results = write_nodes(WriteNodesRequest {
+        database_id: "default".to_string(),
+        nodes: vec![
+            WriteNodeItem {
+                path: "/Wiki/batch-a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            WriteNodeItem {
+                path: "/Wiki/batch-b.md".to_string(),
+                kind: NodeKind::File,
+                content: "beta".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+        ],
+    })
+    .expect("batch write should succeed");
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(usage_event_count(), 1);
+    assert!(
+        read_node("default".to_string(), "/Wiki/batch-a.md".to_string())
+            .expect("read should succeed")
+            .is_some()
+    );
+}
+
+#[test]
+fn write_nodes_rejects_reader_role() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let service = VfsService::new(root.join("index.sqlite3"), root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("index migrations should run");
+    service
+        .create_database("public", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("public", "owner", "2vxsx-fae", DatabaseRole::Reader, 2)
+        .expect("anonymous reader should grant");
+    SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
+
+    let error = write_nodes(WriteNodesRequest {
+        database_id: "public".to_string(),
+        nodes: vec![WriteNodeItem {
+            path: "/Wiki/nope.md".to_string(),
+            kind: NodeKind::File,
+            content: "nope".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        }],
+    })
+    .expect_err("reader should not write");
+
+    assert!(error.contains("principal lacks required database role"));
+}
+
+#[test]
+fn write_nodes_rejects_invalid_source_path() {
+    install_test_service();
+
+    let error = write_nodes(WriteNodesRequest {
+        database_id: "default".to_string(),
+        nodes: vec![WriteNodeItem {
+            path: "/Sources/not-raw.md".to_string(),
+            kind: NodeKind::Source,
+            content: "invalid source path".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        }],
+    })
+    .expect_err("invalid source path should fail");
+
+    assert!(error.contains("source path"));
+    assert_eq!(usage_event_count(), 1);
+}
+
+#[test]
 fn canister_create_database_returns_generated_id_for_followup_reads() {
     install_empty_test_service();
 
@@ -235,6 +321,13 @@ fn anonymous_reader_grant_allows_public_read() {
         .expect("anonymous reader query should pass role check");
 
     assert_eq!(node, None);
+    let members = list_database_members("public".to_string())
+        .expect("anonymous reader should list public database members");
+    assert!(
+        members
+            .iter()
+            .any(|member| member.principal == "owner" && member.role == DatabaseRole::Owner)
+    );
 }
 
 #[test]

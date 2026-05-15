@@ -22,7 +22,7 @@ use vfs_types::{
     NodeEntry, NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest,
     RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
     SearchPreviewMode, SourceEvidence, SourceEvidenceRef, SourceEvidenceRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    WriteNodeItem, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 
 use crate::{
@@ -50,6 +50,7 @@ const QUERY_RESULT_LIMIT_MAX: u32 = 100;
 const WIKI_ROOT_PATH: &str = "/Wiki";
 const CONTEXT_LINK_LIMIT: u32 = 20;
 const CONTEXT_SEARCH_LIMIT: u32 = 10;
+const WRITE_NODES_BATCH_LIMIT_MAX: usize = 100;
 const TOKEN_CHAR_APPROX: usize = 4;
 const SNAPSHOT_REVISION_NO_LONGER_CURRENT: &str = "snapshot_revision is no longer current";
 const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
@@ -199,30 +200,25 @@ impl FsStore {
         request: WriteNodeRequest,
         now: i64,
     ) -> Result<WriteNodeResult, String> {
-        let path = normalize_node_path(&request.path, false)?;
+        self.write_conn(|tx| write_node_in_tx(tx, request, now))
+    }
+
+    pub fn write_nodes(
+        &self,
+        request: WriteNodesRequest,
+        now: i64,
+    ) -> Result<Vec<WriteNodeResult>, String> {
+        validate_write_nodes_count(request.nodes.len())?;
         self.write_conn(|tx| {
-            let existing = load_stored_node(&tx, &path)?;
-            if existing
-                .as_ref()
-                .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
-            {
-                return Err(format!("cannot overwrite folder with file node: {path}"));
+            let mut results = Vec::with_capacity(request.nodes.len());
+            for item in request.nodes {
+                results.push(write_node_in_tx(
+                    tx,
+                    write_node_request_from_item(&request.database_id, item),
+                    now,
+                )?);
             }
-            let created = existing.is_none();
-            let mut node = match existing.as_ref() {
-                Some(current) => update_existing_node(current.node.clone(), request, now)?,
-                None => create_new_node(path, request, now)?,
-            };
-            let revision = record_change(&tx, &node)?;
-            update_path_state(&tx, &node.path, revision)?;
-            node.etag = compute_node_etag(&node);
-            let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
-            sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
-            sync_node_links(&tx, &node)?;
-            Ok(WriteNodeResult {
-                node: node_ack(&node),
-                created,
-            })
+            Ok(results)
         })
     }
 
@@ -1061,6 +1057,56 @@ fn record_change(tx: &Transaction<'_>, node: &Node) -> Result<i64, String> {
     )
     .map_err(|error| error.to_string())?;
     crate::sqlite::last_insert_rowid(tx).map_err(|error| error.to_string())
+}
+
+fn write_node_in_tx(
+    tx: &Transaction<'_>,
+    request: WriteNodeRequest,
+    now: i64,
+) -> Result<WriteNodeResult, String> {
+    let path = normalize_node_path(&request.path, false)?;
+    let existing = load_stored_node(tx, &path)?;
+    if existing
+        .as_ref()
+        .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
+    {
+        return Err(format!("cannot overwrite folder with file node: {path}"));
+    }
+    let created = existing.is_none();
+    let mut node = match existing.as_ref() {
+        Some(current) => update_existing_node(current.node.clone(), request, now)?,
+        None => create_new_node(path, request, now)?,
+    };
+    let revision = record_change(tx, &node)?;
+    update_path_state(tx, &node.path, revision)?;
+    node.etag = compute_node_etag(&node);
+    let row_id = save_node(tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
+    sync_node_fts(tx, existing.as_ref(), Some((row_id, &node)))?;
+    sync_node_links(tx, &node)?;
+    Ok(WriteNodeResult {
+        node: node_ack(&node),
+        created,
+    })
+}
+
+fn write_node_request_from_item(database_id: &str, item: WriteNodeItem) -> WriteNodeRequest {
+    WriteNodeRequest {
+        database_id: database_id.to_string(),
+        path: item.path,
+        kind: item.kind,
+        content: item.content,
+        metadata_json: item.metadata_json,
+        expected_etag: item.expected_etag,
+    }
+}
+
+fn validate_write_nodes_count(count: usize) -> Result<(), String> {
+    if count == 0 || count > WRITE_NODES_BATCH_LIMIT_MAX {
+        return Err(format!(
+            "write_nodes node count must be between 1 and {WRITE_NODES_BATCH_LIMIT_MAX}"
+        ));
+    }
+    Ok(())
 }
 
 fn record_path_removal(tx: &Transaction<'_>, path: &str) -> Result<i64, String> {

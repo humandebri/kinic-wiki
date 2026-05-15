@@ -28,7 +28,7 @@ use vfs_types::{
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
     SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
-    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -58,6 +58,9 @@ const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
 const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
 const FNV1A64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV1A64_PRIME: u64 = 0x0000_0100_0000_01b3;
+pub const DEFAULT_LLM_WRITER_PRINCIPAL: &str =
+    "ckurn-x74ln-nemlm-42vfv-gej7r-4cc3e-v22e5-otcod-jndlh-pbst4-3qe";
+const ANONYMOUS_PRINCIPAL: &str = "2vxsx-fae";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatabaseMeta {
@@ -257,13 +260,7 @@ impl VfsService {
             )
             .map_err(|error| error.to_string())?;
             record_mount_history(&tx, &database_id, mount_id, "create", now)?;
-            tx.execute(
-                "INSERT INTO database_members
-             (database_id, principal, role, created_at_ms)
-             VALUES (?1, ?2, 'owner', ?3)",
-                params![database_id, caller, now],
-            )
-            .map_err(|error| error.to_string())?;
+            insert_initial_database_members(&tx, &database_id, caller, now)?;
             Ok(DatabaseMeta {
                 database_id,
                 db_file_name,
@@ -302,13 +299,7 @@ impl VfsService {
             )
             .map_err(|error| error.to_string())?;
             record_mount_history(&tx, database_id, mount_id, "create", now)?;
-            tx.execute(
-                "INSERT INTO database_members
-             (database_id, principal, role, created_at_ms)
-             VALUES (?1, ?2, 'owner', ?3)",
-                params![database_id, caller, now],
-            )
-            .map_err(|error| error.to_string())?;
+            insert_initial_database_members(&tx, database_id, caller, now)?;
             Ok(DatabaseMeta {
                 database_id: database_id.to_string(),
                 db_file_name,
@@ -789,9 +780,18 @@ impl VfsService {
         database_id: &str,
         caller: &str,
     ) -> Result<Vec<DatabaseMember>, String> {
-        self.require_role(database_id, caller, RequiredRole::Owner)?;
         self.database_meta(database_id)?;
         self.read_index(|conn| {
+            let caller_role = load_member_role(conn, database_id, caller)?
+                .ok_or_else(|| format!("principal has no access to database: {database_id}"))?;
+            if caller_role != DatabaseRole::Owner
+                && !(caller == ANONYMOUS_PRINCIPAL
+                    && role_allows(caller_role, RequiredRole::Reader))
+            {
+                return Err(format!(
+                    "principal lacks required database role: {database_id}"
+                ));
+            }
             let mut stmt = conn
                 .prepare(
                     "SELECT database_id, principal, role, created_at_ms
@@ -840,6 +840,12 @@ impl VfsService {
             return Err("anonymous caller not allowed".to_string());
         }
         self.require_role(&request.database_id, caller, RequiredRole::Writer)?;
+        self.require_role(
+            &request.database_id,
+            DEFAULT_LLM_WRITER_PRINCIPAL,
+            RequiredRole::Writer,
+        )
+        .map_err(|error| format!("LLM writer principal lacks writer access: {error}"))?;
         self.write_index(|conn| {
             purge_expired_url_ingest_trigger_sessions(conn, now)?;
             conn.execute(
@@ -870,6 +876,12 @@ impl VfsService {
         now: i64,
     ) -> Result<(), String> {
         validate_url_ingest_trigger_session_check_request(&request)?;
+        self.require_role(
+            &request.database_id,
+            DEFAULT_LLM_WRITER_PRINCIPAL,
+            RequiredRole::Writer,
+        )
+        .map_err(|error| format!("LLM writer principal lacks writer access: {error}"))?;
         let principal: String = self.read_index(|conn| {
             conn.query_row(
                 "SELECT principal FROM url_ingest_trigger_sessions
@@ -980,6 +992,26 @@ impl VfsService {
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
                 store.write_node(request, now)
+            });
+        if result.is_ok() {
+            self.refresh_logical_size(&database_id)?;
+        }
+        result
+    }
+
+    pub fn write_nodes(
+        &self,
+        caller: &str,
+        request: WriteNodesRequest,
+        now: i64,
+    ) -> Result<Vec<WriteNodeResult>, String> {
+        for node in &request.nodes {
+            validate_source_path_for_kind(&node.path, &node.kind)?;
+        }
+        let database_id = request.database_id.clone();
+        let result =
+            self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
+                store.write_nodes(request, now)
             });
         if result.is_ok() {
             self.refresh_logical_size(&database_id)?;
@@ -2427,6 +2459,31 @@ fn database_exists(conn: &Connection, database_id: &str) -> Result<bool, String>
     .optional()
     .map(|row| row.is_some())
     .map_err(|error| error.to_string())
+}
+
+fn insert_initial_database_members(
+    tx: &Transaction<'_>,
+    database_id: &str,
+    caller: &str,
+    now: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO database_members
+         (database_id, principal, role, created_at_ms)
+         VALUES (?1, ?2, 'owner', ?3)",
+        params![database_id, caller, now],
+    )
+    .map_err(|error| error.to_string())?;
+    if caller != DEFAULT_LLM_WRITER_PRINCIPAL {
+        tx.execute(
+            "INSERT INTO database_members
+             (database_id, principal, role, created_at_ms)
+             VALUES (?1, ?2, 'writer', ?3)",
+            params![database_id, DEFAULT_LLM_WRITER_PRINCIPAL, now],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn allocate_mount_id(conn: &Connection) -> Result<u16, String> {

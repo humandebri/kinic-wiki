@@ -7,7 +7,7 @@ use candid::{Decode, Encode};
 use ic_agent::{
     Agent,
     export::Principal,
-    identity::{BasicIdentity, Identity, Secp256k1Identity},
+    identity::{BasicIdentity, Prime256v1Identity, Secp256k1Identity},
 };
 use k256::{SecretKey, pkcs8::DecodePrivateKey};
 use vfs_types::{
@@ -21,6 +21,7 @@ use vfs_types::{
     NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
     RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
     SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    WriteNodesRequest,
 };
 
 #[async_trait]
@@ -127,6 +128,9 @@ pub trait VfsApi: Sync {
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>>;
     async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>>;
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult>;
+    async fn write_nodes(&self, _request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>> {
+        Err(anyhow!("write_nodes is not implemented by this client"))
+    }
     async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult>;
     async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult>;
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult>;
@@ -197,7 +201,7 @@ impl CanisterVfsClient {
     pub async fn new_with_boxed_identity(
         replica_host: &str,
         canister_id: &str,
-        identity: Box<dyn Identity>,
+        identity: Box<dyn ic_agent::Identity>,
     ) -> Result<Self> {
         let agent = Agent::builder()
             .with_url(replica_host)
@@ -326,6 +330,9 @@ impl CanisterVfsClient {
 
 pub fn identity_from_pem(identity_pem: &[u8]) -> Result<Box<dyn ic_agent::Identity>> {
     if let Ok(identity) = Secp256k1Identity::from_pem(identity_pem) {
+        return Ok(Box::new(identity));
+    }
+    if let Ok(identity) = Prime256v1Identity::from_pem(identity_pem) {
         return Ok(Box::new(identity));
     }
     if let Ok(identity) = BasicIdentity::from_pem(identity_pem) {
@@ -516,6 +523,12 @@ impl VfsApi for CanisterVfsClient {
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
         let result: Result<WriteNodeResult, String> = self.update("write_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn write_nodes(&self, request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>> {
+        let result: Result<Vec<WriteNodeResult>, String> =
+            self.update("write_nodes", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 

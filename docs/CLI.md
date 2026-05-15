@@ -93,6 +93,46 @@ For public browser reads, grant anonymous reader access explicitly:
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
+## Identity Mode
+
+Authenticated CLI calls depend on `icp-cli`.
+`kinic-vfs-cli` shells out to `icp identity default`, `icp identity export <name>`, and for II identities expects the delegation created by `icp identity link ii` / refreshed by `icp identity login`.
+Install an `icp` version that supports II linking:
+
+```bash
+icp identity link ii --help
+```
+
+The CLI uses the default `icp identity` for mutating and owner operations.
+Read-only DB commands default to `--identity-mode auto`: private databases use the selected `icp identity`; public databases use the selected identity when it is a DB member, otherwise anonymous.
+The auto check calls `status` as anonymous once. If anonymous can read, it checks `list_databases` with the selected identity so owner/writer/reader context is preserved for public DBs owned by the caller.
+
+```bash
+icp identity link ii kinic-ii --host https://<wiki-canister-id>.icp0.io
+icp identity default kinic-ii
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --database-id <database-id> read-node --path /Wiki/index.md
+```
+
+`--host` must point at the wiki canister origin, not the Cloudflare browser host. The canister serves `/.well-known/ic-cli-login` and `/login`, so Internet Identity derives the same principal used by browser flows that pin the wiki canister as `derivationOrigin`.
+If Internet Identity asks for an identity number during this flow, that is the II account selector, not a Kinic DB index or VFS path. II needs it to choose the user identity before it can issue a delegation to the local `icp` session key.
+The browser posts the delegation to the loopback callback URL opened by `icp-cli`. That local callback must answer CORS preflight with `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods: POST, OPTIONS`, and `Access-Control-Allow-Headers: content-type`. Its `POST` response must also include `Access-Control-Allow-Origin`. If the callback URL carries a state or nonce query, the local CLI must verify it as one-time data before accepting the delegation.
+
+Refresh expired II delegations before running private DB commands:
+
+```bash
+icp identity login kinic-ii
+```
+
+Use explicit modes when automation must avoid auto selection:
+
+```bash
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode identity --database-id <database-id> read-node --path /Wiki/index.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode anonymous --database-id <public-database-id> read-node --path /Wiki/index.md
+```
+
+`--identity-mode anonymous` is valid only for read-only public operations.
+Writes, database grants, archive operations, private Skill Registry writes, and owner commands require `--identity-mode identity` or `auto`.
+
 ## Archive and Restore
 
 Archive exports one database as SQLite snapshot bytes and then finalizes the database into `archived` status.

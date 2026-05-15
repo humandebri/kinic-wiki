@@ -5,7 +5,6 @@
 mod agent_tools_tests;
 pub mod beam_bench;
 pub mod cli;
-pub mod client_mode;
 pub mod commands;
 #[cfg(test)]
 mod commands_fs_tests;
@@ -16,6 +15,7 @@ mod facts_policy;
 pub mod github_ingest;
 pub mod github_source;
 pub mod identity;
+pub mod identity_mode;
 pub mod maintenance;
 mod purge_url_ingest;
 pub mod skill_registry;

@@ -158,6 +158,21 @@ pub struct WriteNodeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct WriteNodeItem {
+    pub path: String,
+    pub kind: NodeKind,
+    pub content: String,
+    pub metadata_json: String,
+    pub expected_etag: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct WriteNodesRequest {
+    pub database_id: String,
+    pub nodes: Vec<WriteNodeItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
 pub struct UrlIngestTriggerSessionRequest {
     pub database_id: String,
     pub session_nonce: String,
