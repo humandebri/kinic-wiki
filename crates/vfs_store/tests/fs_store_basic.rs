@@ -1983,6 +1983,34 @@ fn list_children_returns_direct_children_with_folders() {
 }
 
 #[test]
+fn list_children_excludes_folder_index_from_has_children() {
+    let (_dir, store) = new_store();
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+            },
+            10,
+        )
+        .expect("folder should create");
+    write_file(&store, "/Wiki/topic/index.md", None, 11);
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki".to_string(),
+        })
+        .expect("children should list");
+    let topic = children
+        .iter()
+        .find(|child| child.path == "/Wiki/topic")
+        .expect("topic folder should exist");
+    assert_eq!(topic.kind, NodeEntryKind::Folder);
+    assert!(!topic.has_children);
+}
+
+#[test]
 fn list_children_reports_missing_directory_paths() {
     let (_dir, store) = new_store();
 

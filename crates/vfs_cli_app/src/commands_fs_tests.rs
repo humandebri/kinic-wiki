@@ -528,8 +528,74 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
         .collect::<Vec<_>>();
     assert!(deleted.contains(&("/Sources/ingest-requests/r1.md", Some("etag-request"))));
     assert!(deleted.contains(&("/Sources/raw/web-1/web-1.md", Some("etag-source"))));
-    assert!(deleted.contains(&("/Wiki/conversations/web-1/index.md", Some("etag-index"))));
     assert!(deleted.contains(&("/Wiki/conversations/web-1/facts.md", Some("etag-facts"))));
+    assert!(deleted.contains(&("/Wiki/conversations/web-1", Some("etag-folder"))));
+    assert!(
+        !deleted
+            .iter()
+            .any(|(path, _)| *path == "/Wiki/conversations/web-1/index.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index")
+    );
+}
+
+#[tokio::test]
+async fn purge_url_ingest_deletes_index_only_folder_with_folder_index_etag() {
+    let mut nodes = url_ingest_nodes();
+    nodes.retain(|node| node.path != "/Wiki/conversations/web-1/facts.md");
+    let index = nodes
+        .iter_mut()
+        .find(|node| node.path == "/Wiki/conversations/web-1/index.md")
+        .expect("index node should exist");
+    index.etag = "etag-index-only".to_string();
+    let client = MockClient {
+        nodes,
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                replica_host: None,
+                canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                force_target_prefix: Some("/Wiki/conversations/web-1".to_string()),
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("purge should delete index-only folder");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(
+        !deletes
+            .iter()
+            .any(|request| request.path == "/Wiki/conversations/web-1/index.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index-only")
+    );
 }
 
 #[tokio::test]
@@ -973,7 +1039,7 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
             .any(|request| request.path == "/Sources/raw/web-1/web-1.md")
     );
     assert!(
-        deletes
+        !deletes
             .iter()
             .any(|request| request.path == "/Wiki/conversations/web-1/index.md")
     );
@@ -981,6 +1047,14 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
         deletes
             .iter()
             .any(|request| request.path == "/Wiki/conversations/web-1/facts.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index")
     );
 }
 
@@ -1089,6 +1163,15 @@ fn url_ingest_nodes() -> Vec<Node> {
             created_at: 1,
             updated_at: 3,
             etag: "etag-source".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+        Node {
+            path: "/Wiki/conversations/web-1".to_string(),
+            kind: NodeKind::Folder,
+            content: "".to_string(),
+            created_at: 1,
+            updated_at: 4,
+            etag: "etag-folder".to_string(),
             metadata_json: "{}".to_string(),
         },
         Node {

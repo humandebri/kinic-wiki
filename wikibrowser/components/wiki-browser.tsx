@@ -5,6 +5,7 @@ import type { Identity } from "@icp-sdk/core/agent";
 import type { ChangeEvent, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, FilePlus, FolderPlus, GitBranch, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
@@ -1235,7 +1236,7 @@ function TopBar({
     <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
       <div className="min-w-0">
         <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
-          <img className="h-5 w-5 rounded-md" src="/icon.png" alt="" />
+          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} />
           Knowledge IDE
         </Link>
       </div>

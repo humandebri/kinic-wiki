@@ -67,6 +67,7 @@ SELECT child.path,
            SELECT 1
            FROM fs_nodes descendant
            WHERE descendant.parent_id = child.id
+             AND NOT (descendant.kind = 'file' AND descendant.name = 'index.md')
            LIMIT 1
        )
 FROM fs_nodes child
@@ -82,6 +83,7 @@ SELECT child.path,
            SELECT 1
            FROM fs_nodes descendant
            WHERE descendant.parent_id = child.id
+             AND NOT (descendant.kind = 'file' AND descendant.name = 'index.md')
            LIMIT 1
        )
 FROM fs_nodes child

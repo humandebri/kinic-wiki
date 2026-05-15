@@ -264,17 +264,23 @@ async fn execute_delete_plan(
     database_id: &str,
     report: &mut PurgeReport,
 ) -> Result<()> {
+    let planned_paths = report.delete_plan.iter().cloned().collect::<BTreeSet<_>>();
     for path in report.delete_plan.clone() {
+        if folder_index_parent(&path).is_some_and(|parent| planned_paths.contains(&parent)) {
+            continue;
+        }
         let Some(node) = client.read_node(database_id, &path).await? else {
             report.skipped_paths.push(path);
             continue;
         };
+        let expected_folder_index_etag =
+            expected_folder_index_etag(client, database_id, &node).await?;
         match client
             .delete_node(DeleteNodeRequest {
                 database_id: database_id.to_string(),
                 path: path.clone(),
                 expected_etag: Some(node.etag),
-                expected_folder_index_etag: None,
+                expected_folder_index_etag,
             })
             .await
         {
@@ -283,6 +289,31 @@ async fn execute_delete_plan(
         }
     }
     Ok(())
+}
+
+async fn expected_folder_index_etag(
+    client: &impl VfsApi,
+    database_id: &str,
+    node: &Node,
+) -> Result<Option<String>> {
+    if node.kind != NodeKind::Folder {
+        return Ok(None);
+    }
+    let index_path = folder_index_path(&node.path);
+    Ok(client
+        .read_node(database_id, &index_path)
+        .await?
+        .and_then(|index| (index.kind == NodeKind::File).then_some(index.etag)))
+}
+
+fn folder_index_path(folder_path: &str) -> String {
+    format!("{}/index.md", folder_path.trim_end_matches('/'))
+}
+
+fn folder_index_parent(path: &str) -> Option<String> {
+    path.strip_suffix("/index.md")
+        .filter(|parent| !parent.is_empty())
+        .map(ToString::to_string)
 }
 
 fn parse_request_node(node: &Node) -> Result<Option<MatchedRequest>> {
