@@ -120,6 +120,8 @@ pub enum Command {
         #[arg(long)]
         expected_etag: Option<String>,
         #[arg(long)]
+        expected_folder_index_etag: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     DeleteTree {
@@ -587,10 +589,12 @@ impl Command {
             Self::DeleteNode {
                 path,
                 expected_etag,
+                expected_folder_index_etag,
                 json,
             } => Some(VfsCommand::DeleteNode {
                 path: path.clone(),
                 expected_etag: expected_etag.clone(),
+                expected_folder_index_etag: expected_folder_index_etag.clone(),
                 json: *json,
             }),
             Self::DeleteTree { path, json } => Some(VfsCommand::DeleteTree {
@@ -907,6 +911,18 @@ mod tests {
             identity_cli.connection.identity_mode,
             IdentityModeArg::Identity
         );
+    }
+
+    #[test]
+    fn main_cli_rejects_local_and_replica_host_together() {
+        let parsed = Cli::try_parse_from([
+            "kinic-vfs-cli",
+            "--local",
+            "--replica-host",
+            "http://127.0.0.1:8001",
+            "status",
+        ]);
+        assert!(parsed.is_err());
     }
 
     #[test]

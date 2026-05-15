@@ -24,8 +24,9 @@ fn test_cli(command: Command) -> Cli {
         connection: ConnectionArgs {
             database_id: Some("default".to_string()),
             local: false,
-            canister_id: Some("aaaaa-aa".to_string()),
+            replica_host: None,
             identity_mode: IdentityModeArg::Auto,
+            canister_id: Some("aaaaa-aa".to_string()),
         },
         command,
     }

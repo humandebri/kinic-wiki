@@ -190,7 +190,7 @@ sequenceDiagram
 | build | `build-vfs-canister.sh`, `build-vfs-canister-canbench.sh` | canister build |
 | canbench | `run_canbench_guard.sh`, `run_canbench_scale.sh`, `canbench/*.py` | canbench 集計・比較 |
 | bench | `bench/run_beam_bench.sh`, `bench/run_canister_vfs_*.sh` | beam / canister workload |
-| env | `wasi-env.sh`, `setup_canbench_ci.sh` | 実行環境補助 |
+| env | `setup_canbench_ci.sh` | 実行環境補助 |
 
 ### 8.3 `fixtures/`
 

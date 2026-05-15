@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -98,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -115,7 +115,7 @@ jobs:
       - name: Package CLI artifact
         run: bash scripts/package_kinic_vfs_cli.sh "v0.1.0" "${{ matrix.name }}" target/release/kinic-vfs-cli dist
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kinic-vfs-cli-${{ matrix.name }}
           path: dist/*
@@ -136,7 +136,7 @@ jobs:
           node scripts/build-icp-cli-login.mjs
           git diff --exit-code crates/vfs_canister/src/icp_cli_login.html
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -149,11 +149,11 @@ jobs:
       - name: Use stable Rust
         run: rustup default stable
       - name: Add wasm target
-        run: rustup target add wasm32-wasip1
+        run: rustup target add wasm32-unknown-unknown
       - name: Install WASI sysroot
         run: sudo apt-get update && sudo apt-get install -y wasi-libc
       - name: Install wasm tooling
-        run: cargo install wasi2ic ic-wasm --locked
+        run: cargo install ic-wasm --locked
       - name: Build canister artifact
         env:
           ICP_WASM_OUTPUT_PATH: /tmp/vfs_canister.wasm

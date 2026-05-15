@@ -297,6 +297,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
                 },
@@ -339,6 +340,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
                 },
@@ -363,6 +365,64 @@ async fn write_node_rejects_non_canonical_source_paths() {
 }
 
 #[tokio::test]
+async fn delete_node_autofills_folder_index_etag() {
+    let client = MockClient {
+        nodes: vec![
+            Node {
+                path: "/Wiki/topic".to_string(),
+                kind: NodeKind::Folder,
+                content: String::new(),
+                created_at: 1,
+                updated_at: 2,
+                etag: "etag-folder".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+            Node {
+                path: "/Wiki/topic/index.md".to_string(),
+                kind: NodeKind::File,
+                content: "# Topic".to_string(),
+                created_at: 1,
+                updated_at: 3,
+                etag: "etag-index".to_string(),
+                metadata_json: "{}".to_string(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                replica_host: None,
+                canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
+            },
+            command: Command::DeleteNode {
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some("etag-folder".to_string()),
+                expected_folder_index_etag: None,
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("folder delete should succeed");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].path, "/Wiki/topic");
+    assert_eq!(deletes[0].expected_etag.as_deref(), Some("etag-folder"));
+    assert_eq!(
+        deletes[0].expected_folder_index_etag.as_deref(),
+        Some("etag-index")
+    );
+}
+
+#[tokio::test]
 async fn purge_url_ingest_dry_run_does_not_delete() {
     let client = MockClient {
         nodes: url_ingest_nodes(),
@@ -375,6 +435,7 @@ async fn purge_url_ingest_dry_run_does_not_delete() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -408,6 +469,7 @@ async fn purge_url_ingest_requires_force_for_wide_target_delete() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -442,6 +504,7 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -465,8 +528,74 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
         .collect::<Vec<_>>();
     assert!(deleted.contains(&("/Sources/ingest-requests/r1.md", Some("etag-request"))));
     assert!(deleted.contains(&("/Sources/raw/web-1/web-1.md", Some("etag-source"))));
-    assert!(deleted.contains(&("/Wiki/conversations/web-1/index.md", Some("etag-index"))));
     assert!(deleted.contains(&("/Wiki/conversations/web-1/facts.md", Some("etag-facts"))));
+    assert!(deleted.contains(&("/Wiki/conversations/web-1", Some("etag-folder"))));
+    assert!(
+        !deleted
+            .iter()
+            .any(|(path, _)| *path == "/Wiki/conversations/web-1/index.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index")
+    );
+}
+
+#[tokio::test]
+async fn purge_url_ingest_deletes_index_only_folder_with_folder_index_etag() {
+    let mut nodes = url_ingest_nodes();
+    nodes.retain(|node| node.path != "/Wiki/conversations/web-1/facts.md");
+    let index = nodes
+        .iter_mut()
+        .find(|node| node.path == "/Wiki/conversations/web-1/index.md")
+        .expect("index node should exist");
+    index.etag = "etag-index-only".to_string();
+    let client = MockClient {
+        nodes,
+        ..Default::default()
+    };
+
+    run_command(
+        &client,
+        Cli {
+            connection: ConnectionArgs {
+                database_id: Some("default".to_string()),
+                local: false,
+                replica_host: None,
+                canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
+            },
+            command: Command::PurgeUrlIngest {
+                url: None,
+                source_path: Some("/Sources/raw/web-1/web-1.md".to_string()),
+                yes: true,
+                force_target_prefix: Some("/Wiki/conversations/web-1".to_string()),
+                json: true,
+            },
+        },
+        &test_connection(),
+    )
+    .await
+    .expect("purge should delete index-only folder");
+
+    let deletes = client.deletes.lock().expect("deletes should lock");
+    assert!(
+        !deletes
+            .iter()
+            .any(|request| request.path == "/Wiki/conversations/web-1/index.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index-only")
+    );
 }
 
 #[tokio::test]
@@ -491,6 +620,7 @@ async fn purge_url_ingest_rejects_unsafe_target_paths() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
                 },
@@ -540,6 +670,7 @@ async fn purge_url_ingest_rejects_prefix_bleed_from_list_nodes() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -574,6 +705,7 @@ async fn purge_url_ingest_rejects_request_paths_outside_ingest_prefix() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -619,6 +751,7 @@ async fn purge_url_ingest_rejects_noncanonical_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -652,6 +785,7 @@ async fn purge_url_ingest_returns_error_when_delete_fails() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -698,6 +832,7 @@ async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -748,6 +883,7 @@ async fn purge_url_ingest_source_path_requires_matching_request() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -793,6 +929,7 @@ async fn purge_url_ingest_source_path_requires_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -839,6 +976,7 @@ async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -872,6 +1010,7 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -900,7 +1039,7 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
             .any(|request| request.path == "/Sources/raw/web-1/web-1.md")
     );
     assert!(
-        deletes
+        !deletes
             .iter()
             .any(|request| request.path == "/Wiki/conversations/web-1/index.md")
     );
@@ -908,6 +1047,14 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
         deletes
             .iter()
             .any(|request| request.path == "/Wiki/conversations/web-1/facts.md")
+    );
+    let folder_delete = deletes
+        .iter()
+        .find(|request| request.path == "/Wiki/conversations/web-1")
+        .expect("folder delete should dispatch");
+    assert_eq!(
+        folder_delete.expected_folder_index_etag.as_deref(),
+        Some("etag-index")
     );
 }
 
@@ -945,6 +1092,7 @@ async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
             },
@@ -1015,6 +1163,15 @@ fn url_ingest_nodes() -> Vec<Node> {
             created_at: 1,
             updated_at: 3,
             etag: "etag-source".to_string(),
+            metadata_json: "{}".to_string(),
+        },
+        Node {
+            path: "/Wiki/conversations/web-1".to_string(),
+            kind: NodeKind::Folder,
+            content: "".to_string(),
+            created_at: 1,
+            updated_at: 4,
+            etag: "etag-folder".to_string(),
             metadata_json: "{}".to_string(),
         },
         Node {

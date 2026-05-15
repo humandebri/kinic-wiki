@@ -4,7 +4,9 @@
 use anyhow::Result;
 use clap::Parser;
 use vfs_cli::commands::{print_database_current, run_database_unlink};
-use vfs_cli::connection::{resolve_connection, resolve_connection_optional_canister};
+use vfs_cli::connection::{
+    ResolvedConnection, resolve_connection, resolve_connection_optional_canister,
+};
 use vfs_cli_app::cli::{Cli, Command, DatabaseCommand, IdentityModeArg};
 use vfs_cli_app::commands::run_command;
 use vfs_cli_app::identity::load_default_identity;
@@ -22,6 +24,7 @@ async fn main() -> Result<()> {
             DatabaseCommand::Current { json } => {
                 let connection = resolve_connection_optional_canister(
                     cli.connection.local,
+                    cli.connection.replica_host.clone(),
                     cli.connection.canister_id.clone(),
                     cli.connection.database_id.clone(),
                 )?;
@@ -37,6 +40,7 @@ async fn main() -> Result<()> {
     }
     let connection = resolve_connection(
         cli.connection.local,
+        cli.connection.replica_host.clone(),
         cli.connection.canister_id.clone(),
         cli.connection.database_id.clone(),
     )?;
@@ -105,9 +109,7 @@ async fn main() -> Result<()> {
     run_command(&client, cli, &connection).await
 }
 
-async fn new_identity_client(
-    connection: &vfs_cli::connection::ResolvedConnection,
-) -> Result<CanisterVfsClient> {
+async fn new_identity_client(connection: &ResolvedConnection) -> Result<CanisterVfsClient> {
     let identity = load_default_identity(&connection.canister_id).await?;
     CanisterVfsClient::new_with_boxed_identity(
         &connection.replica_host,

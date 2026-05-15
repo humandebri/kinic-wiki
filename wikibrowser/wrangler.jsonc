@@ -17,7 +17,7 @@
   "kv_namespaces": [
     {
       "binding": "QUERY_ANSWER_RATE_LIMIT",
-      "id": "REPLACE_WITH_QUERY_ANSWER_RATE_LIMIT_KV_NAMESPACE_ID"
+      "id": "72995eb374a14e71b1a35a545beca160"
     }
   ],
   "services": [

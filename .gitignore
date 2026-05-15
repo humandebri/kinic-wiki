@@ -21,6 +21,7 @@
 
 # Temp files
 /tmp/
+node_modules/
 *.tmp
 *.tsbuildinfo
 .playwright-cli/
@@ -35,7 +36,6 @@ __pycache__/
 
 # icp-cli local state
 /.icp/cache/
-/.icp/data/
 
 # Local hooks and helper scripts
 /.githooks/
@@ -46,6 +46,7 @@ __pycache__/
 /canbench_results.csv
 /.benchmarks/
 /artifacts/
+extensions/wiki-clipper/release/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

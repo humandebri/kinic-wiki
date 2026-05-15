@@ -215,6 +215,7 @@ fn glob_and_search_scale_cases_respect_scope_and_physical_deletes() {
                         database_id: "default".to_string(),
                         path,
                         expected_etag: Some(etag),
+                        expected_folder_index_etag: None,
                     },
                     500 + index as i64,
                 )
@@ -363,6 +364,7 @@ fn fetch_updates_reports_small_delta_against_large_snapshot() {
                 database_id: "default".to_string(),
                 path: "/Wiki/snapshot/note-0002.md".to_string(),
                 expected_etag: Some(deleted_etag),
+                expected_folder_index_etag: None,
             },
             5_001,
         )

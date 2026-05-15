@@ -29,6 +29,7 @@ export type DeleteNodeRequest = {
   databaseId: string;
   path: string;
   expectedEtag: string;
+  expectedFolderIndexEtag: string | null;
 };
 
 export type DeleteNodeResult = {

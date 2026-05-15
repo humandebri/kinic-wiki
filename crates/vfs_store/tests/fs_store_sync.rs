@@ -324,6 +324,7 @@ fn fetch_updates_returns_only_changed_nodes_since_known_snapshot() {
                 database_id: "default".to_string(),
                 path: "/Wiki/beta.md".to_string(),
                 expected_etag: Some(beta),
+                expected_folder_index_etag: None,
             },
             14,
         )
@@ -955,6 +956,7 @@ fn export_snapshot_rejects_deleted_path_after_snapshot_revision() {
                 database_id: "default".to_string(),
                 path: "/Wiki/100.md".to_string(),
                 expected_etag: Some(etag),
+                expected_folder_index_etag: None,
             },
             500,
         )
@@ -1130,6 +1132,7 @@ fn fetch_updates_pages_changed_and_removed_paths_to_fixed_target() {
                 database_id: "default".to_string(),
                 path: "/Wiki/000.md".to_string(),
                 expected_etag: Some(stale),
+                expected_folder_index_etag: None,
             },
             1,
         )

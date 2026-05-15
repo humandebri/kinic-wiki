@@ -59,8 +59,6 @@ const MAX_CONTEXT_ITEM_CHARS = 4_000;
 const MAX_CONTEXT_TOTAL_CHARS = 18_000;
 const MAX_ANSWER_CHARS = 4_000;
 const ALLOWED_ORIGINS = new Set([
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
   "https://wiki.kinic.xyz",
   "https://kinic.xyz"
 ]);

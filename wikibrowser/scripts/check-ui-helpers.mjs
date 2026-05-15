@@ -57,7 +57,11 @@ assert.match(wikiBrowserSource, /childNodesCache\.current\.clear\(\)/);
 assert.match(wikiBrowserSource, /expectedEtag: null/);
 assert.match(wikiBrowserSource, /folderIndexPath\(selectedPath\)/);
 assert.match(wikiBrowserSource, /Use folder Edit to create index\.md\./);
-assert.match(wikiBrowserSource, /deleteNodeAuthenticated\(canisterId, readIdentity, \{\s+databaseId,\s+path: indexNode\.path,/);
+assert.match(wikiBrowserSource, /const \{ deleteNodeAuthenticated, readNode \} = await import\("@\/lib\/vfs-client"\)/);
+assert.match(wikiBrowserSource, /readNode\(canisterId, databaseId, folderIndexPath\(target\.path\), readIdentity\)/);
+assert.doesNotMatch(wikiBrowserSource, /path: indexNode\.path/);
+assert.match(wikiBrowserSource, /expectedFolderIndexEtag: indexNode\?\.etag \?\? null/);
+assert.doesNotMatch(wikiBrowserSource, /currentFolderIndexNode\.data\?\.path === folderIndexPath\(target\.path\)/);
 assert.match(wikiBrowserSource, /memberDatabases\.find/);
 assert.match(wikiBrowserSource, /SIDEBAR_TABS: ModeTab\[\] = \["explorer", "query", "ingest", "sources"\]/);
 assert.match(wikiBrowserSource, /publicDatabaseIds/);
@@ -87,7 +91,8 @@ assert.match(wikiBrowserSource, /isMutableWikiExplorerNode/);
 assert.match(wikiBrowserSource, /isProtectedRootFolder\(node\.path\)/);
 assert.match(wikiBrowserSource, /path === "\/Wiki" \|\| path === "\/Sources"/);
 assert.match(wikiBrowserSource, /node\.kind === "folder"/);
-assert.match(wikiBrowserSource, /!node\.hasChildren/);
+assert.match(wikiBrowserSource, /visibleChildren\(loadedChildren, node\.path\)\.length === 0/);
+assert.match(wikiBrowserSource, /: !node\.hasChildren/);
 assert.match(wikiBrowserSource, /DocumentBreadcrumbs/);
 assert.match(documentPaneSource, /label="Edit"/);
 assert.match(documentPaneSource, /Copy path/);
@@ -170,6 +175,12 @@ assert.deepEqual(
     child("/Wiki/project/note.md", "note.md", "file")
   ], "/Wiki/project").map((node) => node.path),
   ["/Wiki/project/note.md"]
+);
+assert.deepEqual(
+  visibleChildren([
+    child("/Wiki/project/index.md", "index.md", "file")
+  ], "/Wiki/project").map((node) => node.path),
+  []
 );
 assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
 assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);

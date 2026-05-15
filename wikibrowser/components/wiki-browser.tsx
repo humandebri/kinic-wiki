@@ -5,6 +5,7 @@ import type { Identity } from "@icp-sdk/core/agent";
 import type { ChangeEvent, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, FilePlus, FolderPlus, GitBranch, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
@@ -361,7 +362,11 @@ export function WikiBrowser() {
   );
   const explorerCreateDirectory = createDirectoryForExplorerNode(selectedExplorerNode);
   const explorerMutationTarget = selectedExplorerNode && isMutableWikiExplorerNode(selectedExplorerNode) ? selectedExplorerNode : null;
-  const explorerDeleteTarget = explorerMutationTarget && isDeletableWikiExplorerNode(explorerMutationTarget) ? explorerMutationTarget : null;
+  const selectedExplorerChildren = selectedExplorerNode?.kind === "folder"
+    && currentChildren.path === selectedExplorerNode.path
+    ? currentChildren.data ?? undefined
+    : undefined;
+  const explorerDeleteTarget = explorerMutationTarget && isDeletableWikiExplorerNode(explorerMutationTarget, selectedExplorerChildren) ? explorerMutationTarget : null;
   useEffect(() => {
     setExplorerMoveTargets(loadedWikiFolders(childNodesCache.current, explorerMutationTarget));
   }, [explorerMutationTarget, explorerRevision]);
@@ -468,24 +473,21 @@ export function WikiBrowser() {
     if (readMode === "anonymous") throw new Error("Authenticated mode is required.");
     if (!readIdentity) throw new Error("Login with Internet Identity to delete nodes.");
     if (currentDatabaseRole !== "writer" && currentDatabaseRole !== "owner") throw new Error("Writer or owner access required.");
-    if (!isDeletableWikiExplorerNode(target)) throw new Error("Only /Wiki Markdown files and folders without visible children can be deleted.");
+    const targetChildren = target.kind === "folder"
+      ? childNodesCache.current.get(nodeRequestKey(canisterId, databaseId, target.path, readPrincipal))
+      : undefined;
+    if (!isDeletableWikiExplorerNode(target, targetChildren)) throw new Error("Only /Wiki Markdown files and folders without visible children can be deleted.");
     if (!target.etag) throw new Error("Cannot delete a node without an etag.");
     if (!window.confirm(`Delete ${target.path}?`)) return false;
-    const { deleteNodeAuthenticated } = await import("@/lib/vfs-client");
-    const indexNode = target.kind === "folder" && currentFolderIndexNode.data?.path === folderIndexPath(target.path)
-      ? currentFolderIndexNode.data
+    const { deleteNodeAuthenticated, readNode } = await import("@/lib/vfs-client");
+    const indexNode = target.kind === "folder"
+      ? await readNode(canisterId, databaseId, folderIndexPath(target.path), readIdentity)
       : null;
-    if (indexNode) {
-      await deleteNodeAuthenticated(canisterId, readIdentity, {
-        databaseId,
-        path: indexNode.path,
-        expectedEtag: indexNode.etag
-      });
-    }
     await deleteNodeAuthenticated(canisterId, readIdentity, {
       databaseId,
       path: target.path,
-      expectedEtag: target.etag
+      expectedEtag: target.etag,
+      expectedFolderIndexEtag: indexNode?.etag ?? null
     });
     invalidateBrowserCaches();
     setEditState(EMPTY_EDIT_STATE);
@@ -493,7 +495,7 @@ export function WikiBrowser() {
       router.replace(hrefForPath(canisterId, databaseId, parentPath(target.path) ?? "/Wiki", undefined, tab, undefined, undefined, readMode));
     }
     return true;
-  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, currentFolderIndexNode.data, databaseId, invalidateBrowserCaches, readIdentity, readMode, router, selectedPath, setEditState, tab]);
+  }, [canLeaveDirtyEdit, canisterId, currentDatabaseRole, databaseId, invalidateBrowserCaches, readIdentity, readMode, readPrincipal, router, selectedPath, setEditState, tab]);
 
   async function submitExplorerCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1083,9 +1085,11 @@ function isMutableWikiExplorerNode(node: ChildNode): boolean {
   return (node.kind === "file" && node.path.endsWith(".md")) || node.kind === "folder";
 }
 
-function isDeletableWikiExplorerNode(node: ChildNode): boolean {
+function isDeletableWikiExplorerNode(node: ChildNode, loadedChildren?: ChildNode[]): boolean {
   if (!isMutableWikiExplorerNode(node)) return false;
-  if (node.kind === "folder") return !node.hasChildren;
+  if (node.kind === "folder") {
+    return loadedChildren ? visibleChildren(loadedChildren, node.path).length === 0 : !node.hasChildren;
+  }
   return true;
 }
 
@@ -1232,7 +1236,7 @@ function TopBar({
     <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
       <div className="min-w-0">
         <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
-          <img className="h-5 w-5 rounded-md" src="/icon.png" alt="" />
+          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} unoptimized />
           Knowledge IDE
         </Link>
       </div>

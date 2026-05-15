@@ -1,18 +1,16 @@
 // Where: crates/vfs_store/src/schema.rs
 // What: Versioned SQL-file migrations for the FS-first SQLite schema.
 // Why: The repo now has one node-based schema, so migration history only tracks FS tables.
-use rusqlite::{Connection, OptionalExtension, params};
+use crate::sqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::fs_links::backfill_node_links;
 
 // Keep the persisted version token stable so existing local databases do not
 // require a forced migration just because the crate naming moved from wiki_* to vfs_*.
 const CURRENT_SCHEMA_VERSION: &str = "wiki_store:002_fs_folders";
+const INITIAL_FS_SCHEMA_SQL: &str = include_str!("../migrations/000_fs_schema.sql");
 const MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "wiki_store:000_fs_schema",
-        include_str!("../migrations/000_fs_schema.sql"),
-    ),
+    ("wiki_store:000_fs_schema", INITIAL_FS_SCHEMA_SQL),
     (
         "wiki_store:001_fs_links",
         include_str!("../migrations/001_fs_links.sql"),
@@ -25,27 +23,53 @@ const MIGRATIONS: &[(&str, &str)] = &[
 const SCHEMA_MIGRATIONS_BOOTSTRAP_SQL: &str =
     include_str!("../migrations/000_schema_migrations.sql");
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_fs_migrations(conn: &mut Connection) -> Result<(), String> {
     ensure_schema_migrations_table(conn)?;
 
     let tx = conn.transaction().map_err(|error| error.to_string())?;
-    reject_legacy_schema(&tx)?;
-    for (version, sql) in MIGRATIONS {
-        if migration_already_applied(&tx, version)? {
-            continue;
-        }
-        tx.execute_batch(sql).map_err(|error| error.to_string())?;
-        run_post_migration_hook(&tx, version)?;
-        tx.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-            params![version],
-        )
-        .map_err(|error| error.to_string())?;
-    }
+    run_fs_migrations_in_tx(&tx)?;
     tx.commit().map_err(|error| error.to_string())
 }
 
-fn run_post_migration_hook(conn: &rusqlite::Transaction<'_>, version: &str) -> Result<(), String> {
+pub fn run_fs_migrations_in_tx(tx: &Transaction<'_>) -> Result<(), String> {
+    ensure_schema_migrations_table(tx)?;
+    reject_legacy_schema(tx)?;
+    for (version, sql) in MIGRATIONS {
+        if migration_already_applied(tx, version)? {
+            continue;
+        }
+        tx.execute_batch(sql).map_err(|error| error.to_string())?;
+        run_post_migration_hook(tx, version)?;
+        record_schema_migration(tx, version)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn record_schema_migration(conn: &Transaction<'_>, version: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+        params![version],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn record_schema_migration(conn: &Transaction<'_>, version: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+        params![version],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn run_post_migration_hook(
+    conn: &crate::sqlite::Transaction<'_>,
+    version: &str,
+) -> Result<(), String> {
     if version == "wiki_store:001_fs_links" {
         backfill_node_links(conn)?;
     }
@@ -104,7 +128,7 @@ fn migration_already_applied(conn: &Connection, version: &str) -> Result<bool, S
     conn.query_row(
         "SELECT 1 FROM schema_migrations WHERE version = ?1",
         params![version],
-        |row| row.get::<_, i64>(0),
+        |row| crate::sqlite::row_get::<i64>(row, 0),
     )
     .optional()
     .map(|row| row.is_some())
@@ -115,7 +139,7 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
         params![table],
-        |row| row.get::<_, i64>(0),
+        |row| crate::sqlite::row_get::<i64>(row, 0),
     )
     .optional()
     .map(|row| row.is_some())
@@ -126,7 +150,7 @@ fn index_exists(conn: &Connection, index: &str) -> Result<bool, String> {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
         params![index],
-        |row| row.get::<_, i64>(0),
+        |row| crate::sqlite::row_get::<i64>(row, 0),
     )
     .optional()
     .map(|row| row.is_some())
@@ -146,28 +170,43 @@ fn current_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
         "fs_links_target_path_idx",
         "fs_links_source_path_idx",
         "fs_nodes_parent_name_idx",
+        "fs_nodes_parent_idx",
     ] {
         if !index_exists(conn, index)? {
+            return Ok(false);
+        }
+    }
+    for column in ["parent_id", "name"] {
+        if !table_column_exists(conn, "fs_nodes", column)? {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String> {
-    let nodes = conn
-        .prepare("SELECT path, created_at, updated_at FROM fs_nodes ORDER BY path ASC")
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
+fn table_column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(|error| error.to_string())?;
+    let columns = crate::sqlite::query_map(&mut stmt, params![], |row| {
+        crate::sqlite::row_get::<String>(row, 1)
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(columns.iter().any(|name| name == column))
+}
+
+fn backfill_folder_nodes(conn: &crate::sqlite::Transaction<'_>) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT path, created_at, updated_at FROM fs_nodes ORDER BY path ASC")
+        .map_err(|error| error.to_string())?;
+    let nodes = crate::sqlite::query_map(&mut stmt, params![], |row| {
+        Ok((
+            crate::sqlite::row_get::<String>(row, 0)?,
+            crate::sqlite::row_get::<i64>(row, 1)?,
+            crate::sqlite::row_get::<i64>(row, 2)?,
+        ))
+    })
+    .map_err(|error| error.to_string())?;
 
     let mut folders = std::collections::BTreeMap::<String, (i64, i64)>::new();
     folders.insert("/Wiki".to_string(), (0, 0));
@@ -193,59 +232,61 @@ fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String>
         }
     }
 
+    let mut changed_folder_paths = Vec::new();
     for (folder_path, (created_at, updated_at)) in folders {
-        ensure_folder_backfill_node(conn, &folder_path, created_at, updated_at)?;
+        if ensure_folder_backfill_node(conn, &folder_path, created_at, updated_at)?
+            != FolderBackfillChange::Existing
+        {
+            changed_folder_paths.push(folder_path);
+        }
     }
 
-    let rows = conn
-        .prepare("SELECT id, path, kind, content, metadata_json FROM fs_nodes ORDER BY length(path), path")
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
+    let mut stmt = conn
+        .prepare("SELECT id, path FROM fs_nodes ORDER BY length(path), path")
         .map_err(|error| error.to_string())?;
+    let rows = crate::sqlite::query_map(&mut stmt, params![], |row| {
+        Ok((
+            crate::sqlite::row_get::<i64>(row, 0)?,
+            crate::sqlite::row_get::<String>(row, 1)?,
+        ))
+    })
+    .map_err(|error| error.to_string())?;
+    let id_by_path = rows
+        .iter()
+        .map(|(id, path)| (path.clone(), *id))
+        .collect::<std::collections::BTreeMap<_, _>>();
 
-    for (id, path, kind, content, metadata_json) in rows {
+    for (id, path) in rows {
         let (parent_path, name) = split_parent_and_name(&path)?;
         let parent_id = parent_path
             .as_deref()
-            .map(|parent| node_id_for_path(conn, parent))
+            .map(|parent| {
+                id_by_path
+                    .get(parent)
+                    .copied()
+                    .ok_or_else(|| format!("parent folder does not exist: {parent}"))
+            })
             .transpose()?;
-        let etag = folder_migration_etag(&path, &kind, &content, &metadata_json);
-        conn.execute(
-            "UPDATE fs_nodes SET parent_id = ?1, name = ?2, etag = ?3 WHERE id = ?4",
-            params![parent_id, name, etag, id],
+        let values = vec![
+            crate::sqlite::nullable_integer_value(parent_id),
+            crate::sqlite::text_value(name),
+            crate::sqlite::integer_value(id),
+        ];
+        crate::sqlite::execute_values(
+            conn,
+            "UPDATE fs_nodes SET parent_id = ?1, name = ?2 WHERE id = ?3",
+            &values,
         )
         .map_err(|error| error.to_string())?;
     }
 
-    let folder_paths = conn
-        .prepare(
-            "SELECT path FROM fs_nodes
-             WHERE kind = 'folder'
-               AND NOT EXISTS (SELECT 1 FROM fs_path_state WHERE fs_path_state.path = fs_nodes.path)
-             ORDER BY length(path), path",
-        )
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    for folder_path in folder_paths {
+    for folder_path in changed_folder_paths {
         conn.execute(
             "INSERT INTO fs_change_log (path, change_kind) VALUES (?1, 'upsert')",
             params![folder_path],
         )
         .map_err(|error| error.to_string())?;
-        let revision = conn.last_insert_rowid();
+        let revision = crate::sqlite::last_insert_rowid(conn).map_err(|error| error.to_string())?;
         conn.execute(
             "INSERT INTO fs_path_state (path, last_change_revision)
              VALUES (?1, ?2)
@@ -263,6 +304,13 @@ fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String>
     .map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FolderBackfillChange {
+    Existing,
+    Created,
+    Promoted,
+}
+
 fn split_parent_and_name(path: &str) -> Result<(Option<String>, String), String> {
     let Some((parent, name)) = path.rsplit_once('/') else {
         return Err(format!("invalid node path: {path}"));
@@ -278,58 +326,50 @@ fn split_parent_and_name(path: &str) -> Result<(Option<String>, String), String>
     Ok((parent, name.to_string()))
 }
 
-fn node_id_for_path(conn: &rusqlite::Transaction<'_>, path: &str) -> Result<i64, String> {
-    conn.query_row(
-        "SELECT id FROM fs_nodes WHERE path = ?1",
-        params![path],
-        |row| row.get(0),
-    )
-    .map_err(|error| error.to_string())
-}
-
 fn ensure_folder_backfill_node(
-    conn: &rusqlite::Transaction<'_>,
+    conn: &crate::sqlite::Transaction<'_>,
     path: &str,
     created_at: i64,
     updated_at: i64,
-) -> Result<(), String> {
+) -> Result<FolderBackfillChange, String> {
     let existing = conn
         .query_row(
             "SELECT kind, content, metadata_json FROM fs_nodes WHERE path = ?1",
             params![path],
             |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    crate::sqlite::row_get::<String>(row, 0)?,
+                    crate::sqlite::row_get::<String>(row, 1)?,
+                    crate::sqlite::row_get::<String>(row, 2)?,
                 ))
             },
         )
         .optional()
         .map_err(|error| error.to_string())?;
     match existing {
-        None => conn
-            .execute(
+        None => {
+            let etag = folder_migration_etag(path, "folder", "", "{}");
+            conn.execute(
                 "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
-                 VALUES (?1, 'folder', '', ?2, ?3, '', '{}')",
-                params![path, created_at, updated_at],
+                 VALUES (?1, 'folder', '', ?2, ?3, ?4, '{}')",
+                params![path, created_at, updated_at, etag],
             )
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        Some((kind, _, _)) if kind == "folder" => Ok(()),
+            .map(|_| FolderBackfillChange::Created)
+            .map_err(|error| error.to_string())
+        }
+        Some((kind, _, _)) if kind == "folder" => Ok(FolderBackfillChange::Existing),
         Some((kind, content, metadata_json))
             if kind == "file" && content.is_empty() && metadata_json == "{}" =>
         {
+            let etag = folder_migration_etag(path, "folder", "", "{}");
             conn.execute(
-                "UPDATE fs_nodes SET kind = 'folder', content = '', metadata_json = '{}' WHERE path = ?1",
-                params![path],
+                "UPDATE fs_nodes SET kind = 'folder', content = '', etag = ?2, metadata_json = '{}' WHERE path = ?1",
+                params![path, etag],
             )
-            .map(|_| ())
+            .map(|_| FolderBackfillChange::Promoted)
             .map_err(|error| error.to_string())
         }
-        Some(_) => Err(format!(
-            "folder path conflicts with non-empty node: {path}"
-        )),
+        Some(_) => Err(format!("folder path conflicts with non-empty node: {path}")),
     }
 }
 
@@ -347,7 +387,7 @@ fn folder_migration_etag(path: &str, kind: &str, content: &str, metadata_json: &
 }
 
 fn base_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
-    for table in ["fs_nodes", "fs_nodes_fts", "fs_change_log", "fs_path_state"] {
+    for table in base_schema_tables() {
         if !table_exists(conn, table)? {
             return Ok(false);
         }
@@ -360,12 +400,16 @@ fn base_schema_shape_is_present(conn: &Connection) -> Result<bool, String> {
     fts_shape_is_current(conn)
 }
 
+fn base_schema_tables() -> &'static [&'static str] {
+    &["fs_nodes", "fs_nodes_fts", "fs_change_log", "fs_path_state"]
+}
+
 fn fts_shape_is_current(conn: &Connection) -> Result<bool, String> {
     let sql = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fs_nodes_fts'",
-            [],
-            |row| row.get::<_, String>(0),
+            params![],
+            |row| crate::sqlite::row_get::<String>(row, 0),
         )
         .optional()
         .map_err(|error| error.to_string())?;
@@ -376,25 +420,20 @@ fn fts_shape_is_current(conn: &Connection) -> Result<bool, String> {
 }
 
 fn applied_versions(conn: &Connection) -> Result<Vec<String>, String> {
-    conn.prepare("SELECT version FROM schema_migrations ORDER BY version ASC")
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    let mut stmt = conn
+        .prepare("SELECT version FROM schema_migrations ORDER BY version ASC")
+        .map_err(|error| error.to_string())?;
+    crate::sqlite::query_map(&mut stmt, params![], |row| {
+        crate::sqlite::row_get::<String>(row, 0)
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn managed_table_exists(conn: &Connection) -> Result<bool, String> {
-    for table in [
-        "fs_nodes",
-        "fs_nodes_fts",
-        "fs_change_log",
-        "fs_path_state",
-        "fs_links",
-    ] {
+    for table in base_schema_tables() {
         if table_exists(conn, table)? {
             return Ok(true);
         }
     }
-    Ok(false)
+    table_exists(conn, "fs_links")
 }

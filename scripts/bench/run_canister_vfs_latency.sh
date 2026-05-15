@@ -24,9 +24,9 @@ if [[ -z "${CANISTER_ID}" ]]; then
   echo "usage: CANISTER_ID=... bash scripts/bench/run_canister_vfs_latency.sh" >&2
   exit 1
 fi
-REPLICA_HOST="http://127.0.0.1:8000"
-LOCAL_ARGS=(--local)
-CANISTER_STATUS_ENVIRONMENT="local"
+REPLICA_HOST="${BENCH_REPLICA_HOST:-$(bench_replica_host)}"
+LOCAL_ARGS=(--replica-host "${REPLICA_HOST}")
+CANISTER_STATUS_ENVIRONMENT="$(bench_icp_environment)"
 unset CANISTER_STATUS_NETWORK
 
 RESULT_DIR="$(bench_results_dir "canister_vfs_latency")"
@@ -40,8 +40,13 @@ augment_environment_json "${ENVIRONMENT_FILE}" "${REPLICA_HOST}" "${CANISTER_ID}
 
 bench_log "building vfs_bench binary"
 cd "$(bench_repo_root)"
-cargo build -p kinic-vfs-cli --bin vfs_bench >/dev/null
+cargo build -p kinic-vfs-cli --bin vfs_bench --bin kinic-vfs-cli >/dev/null
 BENCH_BIN="$(bench_vfs_bench_bin)"
+CLI_BIN="$(bench_kinic_vfs_cli_bin)"
+bench_log "creating benchmark database"
+DATABASE_ID="$("${CLI_BIN}" "${LOCAL_ARGS[@]}" --canister-id "${CANISTER_ID}" database create)"
+"${CLI_BIN}" "${LOCAL_ARGS[@]}" --canister-id "${CANISTER_ID}" database grant "${DATABASE_ID}" 2vxsx-fae writer >/dev/null
+printf 'database_id=%s\n' "${DATABASE_ID}" >> "${SUMMARY_FILE}"
 
 node -e '
   const fs = require("fs");
@@ -168,6 +173,7 @@ node -e '
     --benchmark-name "${scenario}" \
     "${LOCAL_ARGS[@]}" \
     --canister-id "${CANISTER_ID}" \
+    --database-id "${DATABASE_ID}" \
     --prefix "${prefix}" \
     --payload-size-bytes "${payload_size}" \
     --operation "${operation}" >/dev/null
@@ -177,6 +183,7 @@ node -e '
     --benchmark-name "${scenario}" \
     "${LOCAL_ARGS[@]}" \
     --canister-id "${CANISTER_ID}" \
+    --database-id "${DATABASE_ID}" \
     --prefix "${prefix}" \
     --payload-size-bytes "${payload_size}" \
     --iterations "${iterations}" \
