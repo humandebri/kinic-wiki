@@ -236,7 +236,8 @@ async fn dispatch_tool_call_impl(
                     .delete_node(DeleteNodeRequest {
                         database_id: database_id(args.database_id)?,
                         path: args.path,
-                        expected_etag: args.expected_etag
+                        expected_etag: args.expected_etag,
+                        expected_folder_index_etag: None
                     })
                     .await?
             ))

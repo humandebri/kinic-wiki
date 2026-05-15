@@ -358,6 +358,7 @@ pub struct DeleteNodeRequest {
     pub database_id: String,
     pub path: String,
     pub expected_etag: Option<String>,
+    pub expected_folder_index_etag: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

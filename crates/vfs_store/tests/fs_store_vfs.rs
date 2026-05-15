@@ -351,6 +351,7 @@ fn link_index_tracks_write_edit_append_delete_and_move() {
                 database_id: "default".to_string(),
                 path: "/Wiki/moved/source.md".to_string(),
                 expected_etag: Some(moved.node.etag),
+                expected_folder_index_etag: None,
             },
             14,
         )
@@ -1178,6 +1179,7 @@ fn move_node_overwrite_reuses_deleted_target_path() {
                 database_id: "default".to_string(),
                 path: "/Wiki/to.md".to_string(),
                 expected_etag: Some(target.node.etag),
+                expected_folder_index_etag: None,
             },
             12,
         )
@@ -1429,6 +1431,7 @@ fn recent_nodes_orders_by_updated_at_after_delete_removes_old_entry() {
                 database_id: "default".to_string(),
                 path: "/Wiki/one.md".to_string(),
                 expected_etag: Some(first.node.etag),
+                expected_folder_index_etag: None,
             },
             30,
         )

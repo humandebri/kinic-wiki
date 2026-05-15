@@ -150,6 +150,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const DeleteNodeRequest = idl.Record({
     path: idl.Text,
     expected_etag: idl.Opt(idl.Text),
+    expected_folder_index_etag: idl.Opt(idl.Text),
     database_id: idl.Text
   });
   const MkdirNodeRequest = idl.Record({ path: idl.Text, database_id: idl.Text });

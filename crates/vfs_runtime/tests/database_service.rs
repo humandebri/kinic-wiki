@@ -1052,6 +1052,7 @@ fn archives_and_restores_database_bytes() {
                     database_id: "alpha".to_string(),
                     path: "/Wiki/a.md".to_string(),
                     expected_etag: None,
+                    expected_folder_index_etag: None,
                 },
                 3,
             )

@@ -456,6 +456,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         database_id: "default".to_string(),
         path: "/Wiki/foo.md".to_string(),
         expected_etag: Some(created.node.etag.clone()),
+        expected_folder_index_etag: None,
     })
     .expect("delete should succeed");
     assert_eq!(deleted.path, "/Wiki/foo.md");
@@ -468,6 +469,7 @@ fn fs_entrypoints_cover_crud_search_and_sync() {
         database_id: "default".to_string(),
         path: "/Wiki/nested/bar.md".to_string(),
         expected_etag: Some("stale".to_string()),
+        expected_folder_index_etag: None,
     });
     assert!(stale_delete.is_err());
 }

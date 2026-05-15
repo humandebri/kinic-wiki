@@ -191,6 +191,7 @@ pub async fn run_vfs_command(
                     database_id: database_id.to_string(),
                     path,
                     expected_etag,
+                    expected_folder_index_etag: None,
                 })
                 .await?;
             if json {
@@ -664,6 +665,7 @@ async fn delete_tree(client: &impl VfsApi, database_id: &str, path: &str) -> Res
                 database_id: database_id.to_string(),
                 path: entry.path,
                 expected_etag: Some(entry.etag),
+                expected_folder_index_etag: None,
             })
             .await?;
         deleted_paths.push(result.path);

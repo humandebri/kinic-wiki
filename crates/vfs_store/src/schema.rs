@@ -193,53 +193,48 @@ fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String>
         }
     }
 
+    let mut changed_folder_paths = Vec::new();
     for (folder_path, (created_at, updated_at)) in folders {
-        ensure_folder_backfill_node(conn, &folder_path, created_at, updated_at)?;
+        if ensure_folder_backfill_node(conn, &folder_path, created_at, updated_at)?
+            != FolderBackfillChange::Existing
+        {
+            changed_folder_paths.push(folder_path);
+        }
     }
 
     let rows = conn
-        .prepare("SELECT id, path, kind, content, metadata_json FROM fs_nodes ORDER BY length(path), path")
+        .prepare("SELECT id, path FROM fs_nodes ORDER BY length(path), path")
         .map_err(|error| error.to_string())?
         .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    let id_by_path = rows
+        .iter()
+        .map(|(id, path)| (path.clone(), *id))
+        .collect::<std::collections::BTreeMap<_, _>>();
 
-    for (id, path, kind, content, metadata_json) in rows {
+    for (id, path) in rows {
         let (parent_path, name) = split_parent_and_name(&path)?;
         let parent_id = parent_path
             .as_deref()
-            .map(|parent| node_id_for_path(conn, parent))
+            .map(|parent| {
+                id_by_path
+                    .get(parent)
+                    .copied()
+                    .ok_or_else(|| format!("parent folder does not exist: {parent}"))
+            })
             .transpose()?;
-        let etag = folder_migration_etag(&path, &kind, &content, &metadata_json);
         conn.execute(
-            "UPDATE fs_nodes SET parent_id = ?1, name = ?2, etag = ?3 WHERE id = ?4",
-            params![parent_id, name, etag, id],
+            "UPDATE fs_nodes SET parent_id = ?1, name = ?2 WHERE id = ?3",
+            params![parent_id, name, id],
         )
         .map_err(|error| error.to_string())?;
     }
 
-    let folder_paths = conn
-        .prepare(
-            "SELECT path FROM fs_nodes
-             WHERE kind = 'folder'
-               AND NOT EXISTS (SELECT 1 FROM fs_path_state WHERE fs_path_state.path = fs_nodes.path)
-             ORDER BY length(path), path",
-        )
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    for folder_path in folder_paths {
+    for folder_path in changed_folder_paths {
         conn.execute(
             "INSERT INTO fs_change_log (path, change_kind) VALUES (?1, 'upsert')",
             params![folder_path],
@@ -263,6 +258,13 @@ fn backfill_folder_nodes(conn: &rusqlite::Transaction<'_>) -> Result<(), String>
     .map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FolderBackfillChange {
+    Existing,
+    Created,
+    Promoted,
+}
+
 fn split_parent_and_name(path: &str) -> Result<(Option<String>, String), String> {
     let Some((parent, name)) = path.rsplit_once('/') else {
         return Err(format!("invalid node path: {path}"));
@@ -278,21 +280,12 @@ fn split_parent_and_name(path: &str) -> Result<(Option<String>, String), String>
     Ok((parent, name.to_string()))
 }
 
-fn node_id_for_path(conn: &rusqlite::Transaction<'_>, path: &str) -> Result<i64, String> {
-    conn.query_row(
-        "SELECT id FROM fs_nodes WHERE path = ?1",
-        params![path],
-        |row| row.get(0),
-    )
-    .map_err(|error| error.to_string())
-}
-
 fn ensure_folder_backfill_node(
     conn: &rusqlite::Transaction<'_>,
     path: &str,
     created_at: i64,
     updated_at: i64,
-) -> Result<(), String> {
+) -> Result<FolderBackfillChange, String> {
     let existing = conn
         .query_row(
             "SELECT kind, content, metadata_json FROM fs_nodes WHERE path = ?1",
@@ -308,28 +301,29 @@ fn ensure_folder_backfill_node(
         .optional()
         .map_err(|error| error.to_string())?;
     match existing {
-        None => conn
-            .execute(
+        None => {
+            let etag = folder_migration_etag(path, "folder", "", "{}");
+            conn.execute(
                 "INSERT INTO fs_nodes (path, kind, content, created_at, updated_at, etag, metadata_json)
-                 VALUES (?1, 'folder', '', ?2, ?3, '', '{}')",
-                params![path, created_at, updated_at],
+                 VALUES (?1, 'folder', '', ?2, ?3, ?4, '{}')",
+                params![path, created_at, updated_at, etag],
             )
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
-        Some((kind, _, _)) if kind == "folder" => Ok(()),
+            .map(|_| FolderBackfillChange::Created)
+            .map_err(|error| error.to_string())
+        }
+        Some((kind, _, _)) if kind == "folder" => Ok(FolderBackfillChange::Existing),
         Some((kind, content, metadata_json))
             if kind == "file" && content.is_empty() && metadata_json == "{}" =>
         {
+            let etag = folder_migration_etag(path, "folder", "", "{}");
             conn.execute(
-                "UPDATE fs_nodes SET kind = 'folder', content = '', metadata_json = '{}' WHERE path = ?1",
-                params![path],
+                "UPDATE fs_nodes SET kind = 'folder', content = '', etag = ?2, metadata_json = '{}' WHERE path = ?1",
+                params![path, etag],
             )
-            .map(|_| ())
+            .map(|_| FolderBackfillChange::Promoted)
             .map_err(|error| error.to_string())
         }
-        Some(_) => Err(format!(
-            "folder path conflicts with non-empty node: {path}"
-        )),
+        Some(_) => Err(format!("folder path conflicts with non-empty node: {path}")),
     }
 }
 

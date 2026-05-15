@@ -586,6 +586,7 @@ where
                 database_id: database_id.clone(),
                 path: path.clone(),
                 expected_etag: Some(state.etag.clone()),
+                expected_folder_index_etag: None,
             };
             let started_at = Instant::now();
             let delete_result = client.delete_node(delete_request.clone()).await?;
@@ -797,6 +798,7 @@ where
                 database_id: database_id.clone(),
                 path,
                 expected_etag: Some(state.etag.clone()),
+                expected_folder_index_etag: None,
             };
             let started_at = Instant::now();
             let result = client.delete_node(request.clone()).await?;

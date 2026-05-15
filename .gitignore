@@ -21,6 +21,7 @@
 
 # Temp files
 /tmp/
+node_modules/
 *.tmp
 *.tsbuildinfo
 .playwright-cli/
@@ -52,6 +53,7 @@ __pycache__/
 !/extensions/wiki-clipper/tests/
 !/extensions/wiki-clipper/tests/settings.test.mjs
 !/extensions/wiki-clipper/tests/url-ingest-request.test.mjs
+extensions/wiki-clipper/release/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

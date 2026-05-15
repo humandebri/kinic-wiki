@@ -55,7 +55,7 @@ const SNAPSHOT_SESSION_INVALID: &str = "snapshot_session_id is invalid";
 const SNAPSHOT_REVISION_CURSOR_REQUIRED: &str = "snapshot_revision is required when cursor is set";
 const TARGET_SNAPSHOT_CURSOR_REQUIRED: &str =
     "target_snapshot_revision is required when cursor is set";
-const LIST_DIRECT_CHILD_ROWS_SQL: &str = "\
+const LIST_ROOT_CHILD_ROWS_SQL: &str = "\
 SELECT child.path,
        child.kind,
        child.updated_at,
@@ -64,15 +64,27 @@ SELECT child.path,
        EXISTS (
            SELECT 1
            FROM fs_nodes descendant
-           WHERE descendant.path >= child.path || '/'
-             AND descendant.path < child.path || '/' || char(1114111)
+           WHERE descendant.parent_id = child.id
            LIMIT 1
        )
 FROM fs_nodes child
-WHERE child.path >= ?1
-  AND child.path < ?2
-  AND instr(substr(child.path, ?3), '/') = 0
-ORDER BY child.path ASC";
+WHERE child.parent_id IS NULL
+ORDER BY child.name ASC";
+const LIST_FOLDER_CHILD_ROWS_SQL: &str = "\
+SELECT child.path,
+       child.kind,
+       child.updated_at,
+       child.etag,
+       length(CAST(child.content AS BLOB)),
+       EXISTS (
+           SELECT 1
+           FROM fs_nodes descendant
+           WHERE descendant.parent_id = child.id
+           LIMIT 1
+       )
+FROM fs_nodes child
+WHERE child.parent_id = ?1
+ORDER BY child.name ASC";
 
 struct ChildRow {
     path: String,
@@ -144,7 +156,7 @@ impl FsStore {
         let path = normalize_list_children_path(&request.path)?;
         let conn = self.open()?;
         let concrete_node = load_stored_node(&conn, &path)?;
-        let rows = load_child_rows(&conn, &path)?;
+        let rows = load_child_rows(&conn, &path, concrete_node.as_ref().map(|node| node.row_id))?;
         if concrete_node
             .as_ref()
             .is_some_and(|stored| stored.node.kind != NodeKind::Folder)
@@ -513,14 +525,37 @@ impl FsStore {
             if is_protected_root_folder(&path) {
                 return Err(format!("cannot delete protected folder: {path}"));
             }
-            if has_children(&tx, &path)? {
+            let index_path = folder_index_path(&path);
+            let index_node = load_folder_index_child(&tx, current.row_id, &index_path)?;
+            if has_visible_folder_children(&tx, current.row_id, &index_path)? {
                 return Err(format!("folder is not empty: {path}"));
             }
+            match index_node {
+                Some(index_node) => {
+                    let expected_index_etag = request
+                        .expected_folder_index_etag
+                        .as_deref()
+                        .ok_or_else(|| {
+                            format!("expected_folder_index_etag is required: {index_path}")
+                        })?;
+                    if index_node.node.etag != expected_index_etag {
+                        return Err(format!(
+                            "expected_folder_index_etag does not match current etag: {index_path}"
+                        ));
+                    }
+                    delete_node_with_history(&tx, &index_node)?;
+                }
+                None if request.expected_folder_index_etag.is_some() => {
+                    return Err(format!("folder index node does not exist: {index_path}"));
+                }
+                None => {}
+            }
+        } else if request.expected_folder_index_etag.is_some() {
+            return Err(format!(
+                "expected_folder_index_etag is only valid for folder deletes: {path}"
+            ));
         }
-        let revision = record_path_removal(&tx, &path)?;
-        update_path_state(&tx, &path, revision)?;
-        delete_source_links(&tx, &path)?;
-        delete_node_row(&tx, &current)?;
+        delete_node_with_history(&tx, &current)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(DeleteNodeResult { path })
     }
@@ -978,6 +1013,13 @@ fn update_path_state(tx: &Transaction<'_>, path: &str, revision: i64) -> Result<
     .map_err(|error| error.to_string())
 }
 
+fn delete_node_with_history(tx: &Transaction<'_>, stored: &StoredNode) -> Result<(), String> {
+    let revision = record_path_removal(tx, &stored.node.path)?;
+    update_path_state(tx, &stored.node.path, revision)?;
+    delete_source_links(tx, &stored.node.path)?;
+    delete_node_row(tx, stored)
+}
+
 fn current_snapshot_revision_number(conn: &Connection) -> Result<i64, String> {
     conn.query_row(
         "SELECT COALESCE(MAX(revision), 0) FROM fs_change_log",
@@ -1238,12 +1280,21 @@ fn normalize_list_children_path(path: &str) -> Result<String, String> {
     normalize_node_path(trimmed, true)
 }
 
-fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, String> {
-    let (prefix, upper, relative_start) = list_child_query_bounds(path);
-    let mut stmt = conn
-        .prepare(LIST_DIRECT_CHILD_ROWS_SQL)
-        .map_err(|error| error.to_string())?;
-    stmt.query_map(params![prefix, upper, relative_start], |row| {
+fn load_child_rows(
+    conn: &Connection,
+    path: &str,
+    parent_id: Option<i64>,
+) -> Result<Vec<ChildRow>, String> {
+    if path != "/" && parent_id.is_none() {
+        return Ok(Vec::new());
+    }
+    let sql = if parent_id.is_some() {
+        LIST_FOLDER_CHILD_ROWS_SQL
+    } else {
+        LIST_ROOT_CHILD_ROWS_SQL
+    };
+    let mut stmt = conn.prepare(sql).map_err(|error| error.to_string())?;
+    let map_row = |row: &rusqlite::Row<'_>| {
         let size_bytes = row.get::<_, i64>(4)?;
         Ok(ChildRow {
             path: row.get(0)?,
@@ -1253,10 +1304,19 @@ fn load_child_rows(conn: &Connection, path: &str) -> Result<Vec<ChildRow>, Strin
             size_bytes: size_bytes.max(0) as u64,
             has_children: row.get::<_, i64>(5)? != 0,
         })
-    })
-    .map_err(|error| error.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|error| error.to_string())
+    };
+    match parent_id {
+        Some(parent_id) => stmt
+            .query_map(params![parent_id], map_row)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string()),
+        None => stmt
+            .query_map([], map_row)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string()),
+    }
 }
 
 fn allows_empty_directory_listing(path: &str) -> bool {
@@ -1298,23 +1358,6 @@ fn build_child_nodes(parent_path: &str, rows: Vec<ChildRow>) -> Result<Vec<Child
         _ => left.name.cmp(&right.name),
     });
     Ok(children)
-}
-
-fn child_prefix(parent_path: &str) -> String {
-    if parent_path == "/" {
-        "/".to_string()
-    } else {
-        format!("{parent_path}/")
-    }
-}
-
-fn list_child_query_bounds(parent_path: &str) -> (String, String, i64) {
-    let prefix = child_prefix(parent_path);
-    let upper = prefix_upper_bound(&prefix);
-    // SQLite `substr` is 1-based. Start after the normalized parent prefix so
-    // `instr(relative, '/')` distinguishes direct rows from descendants.
-    let relative_start = (prefix.len() + 1) as i64;
-    (prefix, upper, relative_start)
 }
 
 fn prefix_upper_bound(prefix: &str) -> String {
@@ -1579,13 +1622,14 @@ fn load_stored_subtree(tx: &Transaction<'_>, path: &str) -> Result<Vec<StoredNod
     let mut stmt = tx
         .prepare(
             "SELECT path FROM fs_nodes
-             WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'
+             WHERE path = ?1 OR (path >= ?2 AND path < ?3)
              ORDER BY length(path), path",
         )
         .map_err(|error| error.to_string())?;
-    let like = format!("{}/%", crate::fs_helpers::escape_like_pattern(path));
+    let prefix = format!("{path}/");
+    let upper = prefix_upper_bound(&prefix);
     let paths = stmt
-        .query_map(params![path, like], |row| row.get::<_, String>(0))
+        .query_map(params![path, prefix, upper], |row| row.get::<_, String>(0))
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -1608,13 +1652,46 @@ fn rebase_path(path: &str, from_path: &str, to_path: &str) -> Result<String, Str
     Ok(format!("{to_path}/{suffix}"))
 }
 
-fn has_children(tx: &Transaction<'_>, path: &str) -> Result<bool, String> {
-    let prefix = format!("{path}/");
-    let upper = prefix_upper_bound(&prefix);
-    tx.prepare("SELECT 1 FROM fs_nodes WHERE path >= ?1 AND path < ?2 LIMIT 1")
-        .map_err(|error| error.to_string())?
-        .exists(params![prefix, upper])
-        .map_err(|error| error.to_string())
+fn folder_index_path(folder_path: &str) -> String {
+    format!("{folder_path}/index.md")
+}
+
+fn load_folder_index_child(
+    tx: &Transaction<'_>,
+    parent_id: i64,
+    index_path: &str,
+) -> Result<Option<StoredNode>, String> {
+    let index = tx
+        .query_row(
+            "SELECT path FROM fs_nodes
+             WHERE parent_id = ?1 AND path = ?2 AND kind = 'file'
+             LIMIT 1",
+            params![parent_id, index_path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    index
+        .map(|path| {
+            load_stored_node(tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))
+        })
+        .transpose()
+}
+
+fn has_visible_folder_children(
+    tx: &Transaction<'_>,
+    parent_id: i64,
+    index_path: &str,
+) -> Result<bool, String> {
+    tx.prepare(
+        "SELECT 1 FROM fs_nodes
+         WHERE parent_id = ?1
+           AND NOT (path = ?2 AND kind = 'file')
+         LIMIT 1",
+    )
+    .map_err(|error| error.to_string())?
+    .exists(params![parent_id, index_path])
+    .map_err(|error| error.to_string())
 }
 
 fn is_protected_root_folder(path: &str) -> bool {

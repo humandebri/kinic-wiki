@@ -74,6 +74,7 @@ export const expectedTypes = {
     fields: {
       path: "text",
       expected_etag: "opt text",
+      expected_folder_index_etag: "opt text",
       database_id: "text"
     }
   },

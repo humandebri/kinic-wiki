@@ -478,6 +478,7 @@ async fn prune_package_files(
                 database_id: database_id.to_string(),
                 path: entry.path.clone(),
                 expected_etag: Some(entry.etag),
+                expected_folder_index_etag: None,
             })
             .await?;
         pruned_paths.push(entry.path);

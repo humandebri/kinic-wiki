@@ -226,6 +226,7 @@ async fn execute_delete_plan(
                 database_id: database_id.to_string(),
                 path: path.clone(),
                 expected_etag: Some(node.etag),
+                expected_folder_index_etag: None,
             })
             .await
         {

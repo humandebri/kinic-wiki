@@ -99,6 +99,7 @@ type RawDeleteNodeRequest = {
   database_id: string;
   path: string;
   expected_etag: [] | [string];
+  expected_folder_index_etag: [] | [string];
 };
 
 type RawDeleteNodeResult = {
@@ -358,7 +359,8 @@ export async function deleteNodeAuthenticated(canisterId: string, identity: Iden
     const result = await actor.delete_node({
       database_id: request.databaseId,
       path: request.path,
-      expected_etag: request.expectedEtag ? [request.expectedEtag] : []
+      expected_etag: request.expectedEtag ? [request.expectedEtag] : [],
+      expected_folder_index_etag: request.expectedFolderIndexEtag ? [request.expectedFolderIndexEtag] : []
     });
     if ("Err" in result) {
       throwCanisterError(result.Err);

@@ -113,6 +113,7 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
         database_id: "default".to_string(),
         path: "/Wiki/project-alpha/one.md".to_string(),
         expected_etag: Some(alpha.node.etag),
+        expected_folder_index_etag: None,
     })
     .expect("delete should succeed");
 
@@ -186,6 +187,7 @@ fn canister_fetch_updates_reports_removed_paths_after_delete() {
         database_id: "default".to_string(),
         path: "/Wiki/scope/item.md".to_string(),
         expected_etag: Some(created.node.etag),
+        expected_folder_index_etag: None,
     })
     .expect("delete should succeed");
 

@@ -50,6 +50,21 @@ fn insert_legacy_node(
     .expect("legacy node should insert");
 }
 
+fn record_legacy_change(conn: &Connection, path: &str) -> i64 {
+    conn.execute(
+        "INSERT INTO fs_change_log (path, change_kind) VALUES (?1, 'upsert')",
+        [path],
+    )
+    .expect("legacy change should insert");
+    let revision = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO fs_path_state (path, last_change_revision) VALUES (?1, ?2)",
+        params![path, revision],
+    )
+    .expect("legacy path state should insert");
+    revision
+}
+
 fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64) -> String {
     ensure_parent_folders(store, path, now - 1);
     store
@@ -217,48 +232,65 @@ fn list_and_recent_queries_use_covering_indexes() {
 }
 
 #[test]
-fn list_children_queries_use_path_index_range_scans() {
+fn list_children_queries_use_parent_indexes() {
     let (_dir, store) = new_store();
     write_file(&store, "/Wiki/indexed.md", None, 10);
     write_file(&store, "/Wiki/nested/child.md", None, 11);
     let conn = Connection::open(store.database_path()).expect("db should open");
+    let wiki_id = conn
+        .query_row("SELECT id FROM fs_nodes WHERE path = '/Wiki'", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("wiki id should exist");
 
-    let direct_plan = explain_query_plan_dynamic(
+    let folder_plan = explain_query_plan_dynamic(
         &conn,
-        "SELECT path, kind, updated_at, etag, length(CAST(content AS BLOB))
-         FROM fs_nodes
-         WHERE path >= ?1
-           AND path < ?2
-           AND instr(substr(path, ?3), '/') = 0
-         ORDER BY path ASC",
-        &[
-            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
-            &"/Wiki/\u{10ffff}".to_string(),
-            &7_i64,
-        ],
+        "SELECT child.path, child.kind, child.updated_at, child.etag, length(CAST(child.content AS BLOB))
+         FROM fs_nodes child
+         WHERE child.parent_id = ?1
+         ORDER BY child.name ASC",
+        &[&wiki_id as &dyn rusqlite::ToSql],
     );
     assert!(
-        direct_plan.contains("USING INDEX") && direct_plan.contains("path>? AND path<?"),
-        "direct child query should use path range scan: {direct_plan}"
+        folder_plan.contains("USING INDEX fs_nodes_parent_name_idx")
+            || folder_plan.contains("USING INDEX fs_nodes_parent_idx"),
+        "folder child query should use parent index: {folder_plan}"
     );
 
-    let virtual_plan = explain_query_plan_dynamic(
+    let root_plan = explain_query_plan_dynamic(
         &conn,
-        "SELECT DISTINCT substr(substr(path, ?3), 1, instr(substr(path, ?3), '/') - 1)
-         FROM fs_nodes
-         WHERE path >= ?1
-           AND path < ?2
-           AND instr(substr(path, ?3), '/') > 0
-         ORDER BY 1 ASC",
-        &[
-            &"/Wiki/".to_string() as &dyn rusqlite::ToSql,
-            &"/Wiki/\u{10ffff}".to_string(),
-            &7_i64,
-        ],
+        "SELECT child.path, child.kind, child.updated_at, child.etag, length(CAST(child.content AS BLOB))
+         FROM fs_nodes child
+         WHERE child.parent_id IS NULL
+         ORDER BY child.name ASC",
+        &[],
     );
     assert!(
-        virtual_plan.contains("USING") && virtual_plan.contains("path>? AND path<?"),
-        "virtual child query should use path range scan: {virtual_plan}"
+        root_plan.contains("USING INDEX fs_nodes_parent_name_idx")
+            || root_plan.contains("USING INDEX fs_nodes_parent_idx"),
+        "root child query should use parent index: {root_plan}"
+    );
+}
+
+#[test]
+fn folder_move_subtree_query_uses_path_range_scan() {
+    let (_dir, store) = new_store();
+    write_file(&store, "/Wiki/move/a.md", None, 10);
+    write_file(&store, "/Wiki/move/deep/b.md", None, 11);
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    let prefix = "/Wiki/move/".to_string();
+    let upper = "/Wiki/move/\u{10ffff}".to_string();
+
+    let plan = explain_query_plan_dynamic(
+        &conn,
+        "SELECT path FROM fs_nodes
+         WHERE path = ?1 OR (path >= ?2 AND path < ?3)
+         ORDER BY length(path), path",
+        &[&"/Wiki/move" as &dyn rusqlite::ToSql, &prefix, &upper],
+    );
+    assert!(
+        plan.contains("path>? AND path<?") || plan.contains("MULTI-INDEX OR"),
+        "folder move subtree query should use path range scan: {plan}"
     );
 }
 
@@ -470,6 +502,7 @@ fn status_counts_live_files_and_sources() {
                 database_id: "default".to_string(),
                 path: "/Wiki/file.md".to_string(),
                 expected_etag: Some(file.node.etag),
+                expected_folder_index_etag: None,
             },
             12,
         )
@@ -522,6 +555,7 @@ fn fs_path_state_tracks_latest_change_revision() {
                 database_id: "default".to_string(),
                 path: "/Wiki/file.md".to_string(),
                 expected_etag: Some(second),
+                expected_folder_index_etag: None,
             },
             12,
         )
@@ -536,6 +570,205 @@ fn fs_path_state_tracks_latest_change_revision() {
         )
         .expect("path state should exist");
     assert_eq!(revision, 5);
+}
+
+#[test]
+fn delete_folder_with_index_deletes_both_nodes() {
+    let (_dir, store) = new_store();
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+            },
+            10,
+        )
+        .expect("folder should create");
+    let folder = store
+        .read_node("/Wiki/topic")
+        .expect("folder should read")
+        .expect("folder should exist");
+    let index_etag = write_file(&store, "/Wiki/topic/index.md", None, 11);
+
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some(folder.etag),
+                expected_folder_index_etag: Some(index_etag),
+            },
+            12,
+        )
+        .expect("folder delete should succeed");
+
+    assert!(
+        store
+            .read_node("/Wiki/topic")
+            .expect("folder read should succeed")
+            .is_none()
+    );
+    assert!(
+        store
+            .read_node("/Wiki/topic/index.md")
+            .expect("index read should succeed")
+            .is_none()
+    );
+}
+
+#[test]
+fn delete_folder_with_index_and_visible_child_keeps_all_nodes() {
+    let (_dir, store) = new_store();
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+            },
+            10,
+        )
+        .expect("folder should create");
+    let folder = store
+        .read_node("/Wiki/topic")
+        .expect("folder should read")
+        .expect("folder should exist");
+    let index_etag = write_file(&store, "/Wiki/topic/index.md", None, 11);
+    write_file(&store, "/Wiki/topic/child.md", None, 12);
+
+    let error = store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some(folder.etag),
+                expected_folder_index_etag: Some(index_etag),
+            },
+            13,
+        )
+        .expect_err("visible child should block folder delete");
+
+    assert!(error.contains("folder is not empty"));
+    for path in [
+        "/Wiki/topic",
+        "/Wiki/topic/index.md",
+        "/Wiki/topic/child.md",
+    ] {
+        assert!(
+            store
+                .read_node(path)
+                .expect("node read should succeed")
+                .is_some(),
+            "{path} should remain"
+        );
+    }
+}
+
+#[test]
+fn delete_folder_with_stale_index_etag_keeps_folder_and_index() {
+    let (_dir, store) = new_store();
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+            },
+            10,
+        )
+        .expect("folder should create");
+    let folder = store
+        .read_node("/Wiki/topic")
+        .expect("folder should read")
+        .expect("folder should exist");
+    write_file(&store, "/Wiki/topic/index.md", None, 11);
+
+    let error = store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some(folder.etag),
+                expected_folder_index_etag: Some("stale".to_string()),
+            },
+            12,
+        )
+        .expect_err("stale index etag should fail");
+
+    assert!(error.contains("expected_folder_index_etag"));
+    assert!(
+        store
+            .read_node("/Wiki/topic")
+            .expect("folder read should succeed")
+            .is_some()
+    );
+    assert!(
+        store
+            .read_node("/Wiki/topic/index.md")
+            .expect("index read should succeed")
+            .is_some()
+    );
+}
+
+#[test]
+fn delete_empty_folder_without_index_still_succeeds() {
+    let (_dir, store) = new_store();
+    store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+            },
+            10,
+        )
+        .expect("folder should create");
+    let folder = store
+        .read_node("/Wiki/topic")
+        .expect("folder should read")
+        .expect("folder should exist");
+
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some(folder.etag),
+                expected_folder_index_etag: None,
+            },
+            11,
+        )
+        .expect("empty folder delete should succeed");
+
+    assert!(
+        store
+            .read_node("/Wiki/topic")
+            .expect("folder read should succeed")
+            .is_none()
+    );
+}
+
+#[test]
+fn delete_file_rejects_folder_index_etag() {
+    let (_dir, store) = new_store();
+    let etag = write_file(&store, "/Wiki/file.md", None, 10);
+
+    let error = store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/file.md".to_string(),
+                expected_etag: Some(etag),
+                expected_folder_index_etag: Some("index".to_string()),
+            },
+            11,
+        )
+        .expect_err("file delete should reject folder index etag");
+
+    assert!(error.contains("expected_folder_index_etag"));
+    assert!(
+        store
+            .read_node("/Wiki/file.md")
+            .expect("file read should succeed")
+            .is_some()
+    );
 }
 
 #[test]
@@ -725,6 +958,93 @@ fn fs_folder_migration_promotes_empty_file_parent_to_folder() {
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].path, "/Wiki/foo/bar.md");
     assert_eq!(children[0].kind, NodeEntryKind::File);
+}
+
+#[test]
+fn fs_folder_migration_keeps_existing_file_source_etags_out_of_sync_delta() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/existing.md", "file", "existing", "{}");
+    insert_legacy_node(&conn, "/Sources/raw/source.md", "source", "raw", "{}");
+    let wiki_revision = record_legacy_change(&conn, "/Wiki/existing.md");
+    record_legacy_change(&conn, "/Sources/raw/source.md");
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should succeed");
+
+    let file = store
+        .read_node("/Wiki/existing.md")
+        .expect("file should read")
+        .expect("file should exist");
+    let source = store
+        .read_node("/Sources/raw/source.md")
+        .expect("source should read")
+        .expect("source should exist");
+    assert_eq!(file.etag, "etag-/Wiki/existing.md");
+    assert_eq!(source.etag, "etag-/Sources/raw/source.md");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            database_id: "default".to_string(),
+            known_snapshot_revision: format!("v5:{wiki_revision}:2f57696b69"),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            target_snapshot_revision: None,
+        })
+        .expect("updates should succeed");
+    assert!(
+        updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki" && node.kind == NodeKind::Folder)
+    );
+    assert!(
+        !updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/existing.md")
+    );
+}
+
+#[test]
+fn fs_folder_migration_reports_promoted_folder_in_sync_delta() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", "", "{}");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    record_legacy_change(&conn, "/Wiki/foo");
+    let child_revision = record_legacy_change(&conn, "/Wiki/foo/bar.md");
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should promote empty parent");
+
+    let updates = store
+        .fetch_updates(FetchUpdatesRequest {
+            database_id: "default".to_string(),
+            known_snapshot_revision: format!("v5:{child_revision}:2f57696b69"),
+            prefix: Some("/Wiki".to_string()),
+            limit: 100,
+            cursor: None,
+            target_snapshot_revision: None,
+        })
+        .expect("updates should succeed");
+    assert!(
+        updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/foo" && node.kind == NodeKind::Folder)
+    );
+    assert!(
+        !updates
+            .changed_nodes
+            .iter()
+            .any(|node| node.path == "/Wiki/foo/bar.md")
+    );
 }
 
 #[test]
@@ -1008,6 +1328,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
                 database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 expected_etag: Some(second.node.etag.clone()),
+                expected_folder_index_etag: None,
             },
             13,
         )
@@ -1018,6 +1339,7 @@ fn write_update_delete_and_recreate_follow_etag_rules() {
                 database_id: "default".to_string(),
                 path: "/Wiki/foo.md".to_string(),
                 expected_etag: Some(second.node.etag),
+                expected_folder_index_etag: None,
             },
             14,
         )
@@ -1114,6 +1436,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
                 database_id: "default".to_string(),
                 path: "/Wiki/alpha.md".to_string(),
                 expected_etag: Some(alpha),
+                expected_folder_index_etag: None,
             },
             12,
         )
@@ -1130,6 +1453,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
                         .expect("deleted leaf should exist")
                         .etag,
                 ),
+                expected_folder_index_etag: None,
             },
             14,
         )
@@ -2399,6 +2723,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
                 database_id: "default".to_string(),
                 path: "/Wiki/zzz/nested-note.md".to_string(),
                 expected_etag: Some(first),
+                expected_folder_index_etag: None,
             },
             13,
         )
@@ -2414,6 +2739,7 @@ fn search_node_paths_filters_deleted_terms_and_orders_deterministically() {
                 database_id: "default".to_string(),
                 path: "/Wiki/zzz/nested-note.md".to_string(),
                 expected_etag: Some(latest.etag),
+                expected_folder_index_etag: None,
             },
             14,
         )
