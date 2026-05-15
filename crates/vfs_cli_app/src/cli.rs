@@ -139,6 +139,8 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
         #[arg(long)]
+        force_target_prefix: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     MkdirNode {
