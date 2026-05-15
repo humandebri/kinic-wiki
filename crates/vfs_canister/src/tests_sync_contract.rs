@@ -94,11 +94,17 @@ fn http_request_serves_icp_cli_login_page() {
 
     assert_eq!(response.status_code, 200);
     let body = String::from_utf8(response.body).expect("body should be utf8");
-    assert!(body.contains("derivationOrigin: location.origin"));
-    assert!(body.contains("DelegationChain.create"));
-    assert!(body.contains("chain.toJSON()"));
-    assert!(body.contains(r#"method: "POST""#));
-    assert!(body.contains("isLoopbackHttpCallback"));
+    let compact_body = body
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(body.contains("<h1>CLI login</h1>"));
+    assert!(body.contains("http://id.ai.localhost:"));
+    assert!(compact_body.contains("derivationOrigin:location.origin"));
+    assert!(compact_body.contains(r#"method:"POST""#));
+    assert!(compact_body.contains(r#""content-type":"application/json""#));
+    assert!(compact_body.contains("redirect:\"error\""));
+    assert!(body.contains("CLI login complete."));
     assert!(!body.contains("https://esm.sh/"));
     assert!(!body.contains(r#"<script type="module">"#));
     let headers = response.headers;

@@ -4,9 +4,9 @@
 export const MAINNET_II_PROVIDER_URL = "https://id.ai";
 export const WIKI_CANISTER_DERIVATION_ORIGIN = "https://xis3j-paaaa-aaaai-axumq-cai.icp0.io";
 
-export const AUTH_SESSION_DAYS = 29;
-export const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
-export const NANOSECONDS_PER_DAY = BigInt(24 * 60 * 60) * BigInt(1_000_000_000);
+const AUTH_SESSION_DAYS = 29;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const NANOSECONDS_PER_DAY = BigInt(24 * 60 * 60) * BigInt(1_000_000_000);
 export const AUTH_SESSION_TTL_MS = AUTH_SESSION_DAYS * MILLISECONDS_PER_DAY;
 export const AUTH_SESSION_TTL_NS = BigInt(AUTH_SESSION_DAYS) * NANOSECONDS_PER_DAY;
 

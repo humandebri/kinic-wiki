@@ -72,10 +72,12 @@ pub async fn identity_is_database_member(client: &impl VfsApi, database_id: &str
 }
 
 fn is_database_access_denied(error: &anyhow::Error) -> bool {
-    let message = error.to_string();
-    message.contains("principal has no access to database")
-        || message.contains("no access to database")
-        || message.contains("permission denied")
+    error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("principal has no access to database")
+            || message.contains("no access to database")
+            || message.contains("permission denied")
+    })
 }
 
 #[cfg(test)]
@@ -157,5 +159,13 @@ mod tests {
                 .unwrap(),
             ClientIdentityMode::Anonymous
         );
+    }
+
+    #[test]
+    fn access_denied_detection_checks_error_chain() {
+        let error = anyhow!("principal has no access to database: private")
+            .context("query failed for status");
+
+        assert!(is_database_access_denied(&error));
     }
 }

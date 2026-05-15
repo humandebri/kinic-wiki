@@ -24,6 +24,7 @@ const [templateSource, bundled] = await Promise.all([
     format: "iife",
     platform: "browser",
     target: "chrome120",
+    minify: true,
     legalComments: "none",
     nodePaths: [nodeModulesPath],
     logLevel: "silent"

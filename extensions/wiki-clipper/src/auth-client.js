@@ -3,20 +3,17 @@
 // Why: MV3 service workers lack a stable window context for AuthClient.
 import { AuthClient } from "@icp-sdk/auth/client";
 import {
-  AUTH_SESSION_TTL_MS,
   AUTH_SESSION_TTL_NS,
   MAINNET_II_PROVIDER_URL,
   WIKI_CANISTER_DERIVATION_ORIGIN,
   authClientCreateOptions
 } from "../../../shared/ii-auth/index.js";
 
-export const DERIVATION_ORIGIN = WIKI_CANISTER_DERIVATION_ORIGIN;
-
 export const AUTH_OPTIONS = {
-  createOptions: authClientCreateOptions(AUTH_SESSION_TTL_MS),
+  createOptions: authClientCreateOptions(),
   loginOptions: {
     identityProvider: MAINNET_II_PROVIDER_URL,
-    derivationOrigin: DERIVATION_ORIGIN,
+    derivationOrigin: WIKI_CANISTER_DERIVATION_ORIGIN,
     maxTimeToLive: AUTH_SESSION_TTL_NS,
     windowOpenerFeatures: "toolbar=0,location=0,menubar=0,width=500,height=500,left=100,top=100"
   }
