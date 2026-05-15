@@ -24,6 +24,8 @@
 *.tmp
 *.tsbuildinfo
 .playwright-cli/
+.pnpm-store/
+.worktrees/
 __pycache__/
 *.pyc
 
@@ -33,13 +35,17 @@ __pycache__/
 
 # icp-cli local state
 /.icp/cache/
+/.icp/data/
+
+# Local hooks and helper scripts
+/.githooks/
+/.local/
 /.canbench/
 /.canbench-tools/
 /canbench_results.yml
 /canbench_results.csv
 /.benchmarks/
 /artifacts/
-/extensions/
 
 # Keep ic-hybrid-sqlite as its own repo for now
 /ic-hybrid-sqlite/

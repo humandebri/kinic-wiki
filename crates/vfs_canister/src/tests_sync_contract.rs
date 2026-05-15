@@ -4,14 +4,15 @@
 use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
-    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, NodeKind,
+    DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, MkdirNodeRequest, NodeKind,
     SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
 
 use super::{
-    SERVICE, delete_node, export_snapshot, fetch_updates, search_node_paths, search_nodes,
-    write_node,
+    HttpRequest, II_ALTERNATIVE_ORIGINS_PATH, SERVICE, delete_node, export_snapshot, fetch_updates,
+    http_request, mkdir_node, search_node_paths, search_nodes, write_node,
 };
+use ic_http_certification::CERTIFICATE_EXPRESSION_HEADER_NAME;
 
 fn install_test_service() {
     let dir = tempdir().expect("tempdir should create");
@@ -26,10 +27,69 @@ fn install_test_service() {
     SERVICE.with(|slot| *slot.borrow_mut() = Some(service));
 }
 
+fn ensure_parent_folders(path: &str) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        mkdir_node(MkdirNodeRequest {
+            database_id: "default".to_string(),
+            path: current.clone(),
+        })
+        .expect("parent folder should exist or be created");
+    }
+}
+
+#[test]
+fn http_request_serves_certified_ii_alternative_origins() {
+    let response = http_request(test_http_get(II_ALTERNATIVE_ORIGINS_PATH));
+
+    assert_eq!(response.status_code, 200);
+    let body = String::from_utf8(response.body).expect("body should be utf8");
+    assert!(body.contains(r#""alternativeOrigins""#));
+    assert!(body.contains("https://wiki.kinic.xyz"));
+    assert!(body.contains("https://kinic.xyz"));
+    assert!(body.contains("chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj"));
+    assert!(body.contains("chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"));
+
+    let headers = response.headers;
+    assert!(headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("Content-Type") && value == "application/json; charset=utf-8"
+    }));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, _)| { name.eq_ignore_ascii_case(CERTIFICATE_EXPRESSION_HEADER_NAME) })
+    );
+}
+
+#[test]
+fn http_request_rejects_unknown_paths() {
+    let response = http_request(test_http_get("/not-found"));
+
+    assert_eq!(response.status_code, 404);
+}
+
+fn test_http_get(url: &str) -> HttpRequest {
+    HttpRequest {
+        method: "GET".to_string(),
+        url: url.to_string(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        certificate_version: Some(2),
+    }
+}
+
 #[test]
 fn canister_search_respects_prefix_and_hides_deleted_nodes() {
     install_test_service();
 
+    ensure_parent_folders("/Wiki/project-alpha/one.md");
+    ensure_parent_folders("/Wiki/project-beta/two.md");
     let alpha = write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Wiki/project-alpha/one.md".to_string(),
@@ -90,14 +150,18 @@ fn canister_search_respects_prefix_and_hides_deleted_nodes() {
         preview_mode: None,
     })
     .expect("path search should succeed");
-    assert_eq!(path_hits.len(), 1);
-    assert_eq!(path_hits[0].path, "/Wiki/project-beta/two.md");
+    assert!(
+        path_hits
+            .iter()
+            .any(|hit| hit.path == "/Wiki/project-beta/two.md")
+    );
 }
 
 #[test]
 fn canister_fetch_updates_reports_removed_paths_after_delete() {
     install_test_service();
 
+    ensure_parent_folders("/Wiki/scope/item.md");
     let created = write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Wiki/scope/item.md".to_string(),
@@ -145,6 +209,8 @@ fn canister_fetch_updates_reports_removed_paths_after_delete() {
 fn canister_fetch_updates_rejects_prefix_scope_changes() {
     install_test_service();
 
+    ensure_parent_folders("/Wiki/a/one.md");
+    ensure_parent_folders("/Wiki/b/two.md");
     write_node(WriteNodeRequest {
         database_id: "default".to_string(),
         path: "/Wiki/a/one.md".to_string(),

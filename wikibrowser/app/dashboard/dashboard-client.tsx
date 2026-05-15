@@ -4,7 +4,7 @@ import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthControls, OwnerPanel, StatusPanel, SummaryPanel } from "./dashboard-ui";
-import { DELEGATION_TTL_NS, identityProviderUrl } from "@/lib/auth";
+import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types";
 import {
   grantDatabaseAccessAuthenticated,
@@ -47,8 +47,13 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
         return;
       }
       if (!nextDatabaseId) {
-        setError("Database id is missing.");
-        setLoadState("error");
+        setPrincipal(client?.getIdentity().getPrincipal().toText() ?? null);
+        setDatabases([]);
+        setMembers([]);
+        setError(null);
+        setWarning(null);
+        setMemberError(null);
+        setLoadState("ready");
         return;
       }
       setLoadState("loading");
@@ -104,7 +109,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
 
   useEffect(() => {
     let cancelled = false;
-    AuthClient.create()
+    AuthClient.create(AUTH_CLIENT_CREATE_OPTIONS)
       .then(async (client) => {
         if (cancelled) return;
         setAuthClient(client);
@@ -128,8 +133,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
     if (!authClient) return;
     setError(null);
     await authClient.login({
-      identityProvider: identityProviderUrl(),
-      maxTimeToLive: DELEGATION_TTL_NS,
+      ...authLoginOptions(),
       onSuccess: () => {
         void refresh(authClient, databaseId);
       },
@@ -228,6 +232,14 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
           )
         ) : database ? (
           <StatusPanel tone="info" message="Login with Internet Identity to manage database access." />
+        ) : !databaseId ? (
+          <section className="rounded-lg border border-line bg-paper p-8 shadow-sm">
+            <h2 className="text-lg font-semibold text-ink">Select a database to manage</h2>
+            <p className="mt-2 text-sm leading-6 text-muted">Open the Database dashboard, then choose Manage on a database row.</p>
+            <Link className="mt-5 inline-flex rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-white no-underline" href="/">
+              Open Database dashboard
+            </Link>
+          </section>
         ) : (
           <section className="rounded-lg border border-line bg-paper p-8 shadow-sm">
             <p className="text-sm leading-6 text-muted">Public anonymous read is not available for this database. Login with Internet Identity to manage database access.</p>

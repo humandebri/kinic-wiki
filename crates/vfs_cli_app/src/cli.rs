@@ -1,6 +1,6 @@
 // Where: crates/vfs_cli_app/src/cli.rs
-// What: clap definitions for the FS-first CLI surface.
-// Why: Agents need direct node operations against the canister-backed wiki.
+// What: clap definitions for the single published kinic-vfs-cli surface.
+// Why: Wiki/operator commands and Skill Registry commands share one canister connection.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
@@ -10,7 +10,7 @@ pub use vfs_cli::cli::{
 use wiki_domain::WIKI_ROOT_PATH;
 
 #[derive(Parser, Debug)]
-#[command(name = "vfs-cli")]
+#[command(name = "kinic-vfs-cli")]
 #[command(about = "Agent-facing CLI for the Kinic FS-first wiki")]
 pub struct Cli {
     #[command(flatten)]
@@ -48,6 +48,10 @@ pub enum Command {
     ReadNode {
         #[arg(long)]
         path: String,
+        #[arg(long)]
+        metadata_only: bool,
+        #[arg(long)]
+        fields: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -123,6 +127,22 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    PurgeUrlIngest {
+        #[arg(
+            long,
+            conflicts_with = "source_path",
+            required_unless_present = "source_path"
+        )]
+        url: Option<String>,
+        #[arg(long, conflicts_with = "url", required_unless_present = "url")]
+        source_path: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        force_target_prefix: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     MkdirNode {
         #[arg(long)]
         path: String,
@@ -153,7 +173,7 @@ pub enum Command {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = WIKI_ROOT_PATH)]
+        #[arg(long, alias = "prefix", default_value = WIKI_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -210,6 +230,7 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(alias = "search-nodes")]
     SearchRemote {
         query_text: String,
         #[arg(long, default_value = WIKI_ROOT_PATH)]
@@ -325,6 +346,15 @@ pub enum SkillCommand {
         #[arg(long)]
         json: bool,
     },
+    Install {
+        id: String,
+        #[arg(long)]
+        lockfile: PathBuf,
+        #[arg(long)]
+        public: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -390,10 +420,16 @@ impl Command {
                     | DatabaseCommand::Grant { .. }
                     | DatabaseCommand::Revoke { .. }
                     | DatabaseCommand::Members { .. }
+                    | DatabaseCommand::ArchiveExport { .. }
+                    | DatabaseCommand::ArchiveRestore { .. }
+                    | DatabaseCommand::ArchiveCancel { .. }
+                    | DatabaseCommand::RestoreCancel { .. }
             ),
             Self::Skill { command } => !matches!(
                 command,
-                SkillCommand::Find { .. } | SkillCommand::Inspect { .. }
+                SkillCommand::Find { .. }
+                    | SkillCommand::Inspect { .. }
+                    | SkillCommand::Install { public: true, .. }
             ),
             Self::Github { .. }
             | Self::RebuildIndex
@@ -404,6 +440,7 @@ impl Command {
             | Self::EditNode { .. }
             | Self::DeleteNode { .. }
             | Self::DeleteTree { .. }
+            | Self::PurgeUrlIngest { .. }
             | Self::MkdirNode { .. }
             | Self::MoveNode { .. }
             | Self::MultiEditNode { .. } => true,
@@ -428,8 +465,15 @@ impl Command {
             Self::Database { command } => Some(VfsCommand::Database {
                 command: command.clone(),
             }),
-            Self::ReadNode { path, json } => Some(VfsCommand::ReadNode {
+            Self::ReadNode {
+                path,
+                metadata_only,
+                fields,
+                json,
+            } => Some(VfsCommand::ReadNode {
                 path: path.clone(),
+                metadata_only: *metadata_only,
+                fields: fields.clone(),
                 json: *json,
             }),
             Self::ListNodes {
@@ -505,6 +549,7 @@ impl Command {
                 path: path.clone(),
                 json: *json,
             }),
+            Self::PurgeUrlIngest { .. } => None,
             Self::MkdirNode { path, json } => Some(VfsCommand::MkdirNode {
                 path: path.clone(),
                 json: *json,
@@ -621,7 +666,10 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, DatabaseCommand, SkillCommand, SkillImportCommand, SkillStatusArg};
+    use super::{
+        Cli, Command, DatabaseCommand, NodeKindArg, SkillCommand, SkillImportCommand,
+        SkillStatusArg,
+    };
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -635,7 +683,7 @@ mod tests {
     #[test]
     fn main_cli_parses_link_commands() {
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "read-node-context",
             "--path",
             "/Wiki/a.md",
@@ -656,7 +704,7 @@ mod tests {
         assert!(json);
 
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "graph-neighborhood",
             "--center-path",
             "/Wiki/a.md",
@@ -682,7 +730,7 @@ mod tests {
 
     #[test]
     fn main_cli_parses_database_link_commands() {
-        let cli = Cli::parse_from(["vfs-cli", "database", "link", "team-db"]);
+        let cli = Cli::parse_from(["kinic-vfs-cli", "database", "link", "team-db"]);
         let Command::Database {
             command: DatabaseCommand::Link { database_id },
         } = cli.command
@@ -691,7 +739,7 @@ mod tests {
         };
         assert_eq!(database_id, "team-db");
 
-        let cli = Cli::parse_from(["vfs-cli", "database", "current", "--json"]);
+        let cli = Cli::parse_from(["kinic-vfs-cli", "database", "current", "--json"]);
         let Command::Database {
             command: DatabaseCommand::Current { json },
         } = cli.command
@@ -699,18 +747,67 @@ mod tests {
             panic!("expected database current command");
         };
         assert!(json);
+
+        let cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "database",
+            "archive-export",
+            "team-db",
+            "--output",
+            "team-db.sqlite",
+            "--chunk-size",
+            "512",
+            "--json",
+        ]);
+        let Command::Database {
+            command:
+                DatabaseCommand::ArchiveExport {
+                    database_id,
+                    output,
+                    chunk_size,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected archive-export command");
+        };
+        assert_eq!(database_id, "team-db");
+        assert_eq!(output.to_string_lossy(), "team-db.sqlite");
+        assert_eq!(chunk_size, 512);
+        assert!(json);
     }
 
     #[test]
     fn command_identity_requirement_keeps_reads_anonymous() {
-        let read = Cli::parse_from(["vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
+        let read = Cli::parse_from(["kinic-vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
         assert!(!read.command.requires_identity());
 
-        let status = Cli::parse_from(["vfs-cli", "status"]);
+        let status = Cli::parse_from(["kinic-vfs-cli", "status"]);
         assert!(!status.command.requires_identity());
 
+        let private_install = Cli::parse_from([
+            "kinic-vfs-cli",
+            "skill",
+            "install",
+            "legal-review",
+            "--lockfile",
+            "skill.lock.json",
+        ]);
+        assert!(private_install.command.requires_identity());
+
+        let public_install = Cli::parse_from([
+            "kinic-vfs-cli",
+            "skill",
+            "install",
+            "legal-review",
+            "--lockfile",
+            "skill.lock.json",
+            "--public",
+        ]);
+        assert!(!public_install.command.requires_identity());
+
         let write = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "write-node",
             "--path",
             "/Wiki/index.md",
@@ -721,9 +818,109 @@ mod tests {
     }
 
     #[test]
+    fn main_cli_rejects_folder_kind_for_write_and_append() {
+        let write = Cli::try_parse_from([
+            "kinic-vfs-cli",
+            "write-node",
+            "--path",
+            "/Wiki/folder",
+            "--kind",
+            "folder",
+            "--input",
+            "folder.md",
+        ]);
+        assert!(write.is_err());
+
+        let append = Cli::try_parse_from([
+            "kinic-vfs-cli",
+            "append-node",
+            "--path",
+            "/Wiki/folder",
+            "--kind",
+            "folder",
+            "--input",
+            "folder.md",
+        ]);
+        assert!(append.is_err());
+
+        let source = Cli::parse_from([
+            "kinic-vfs-cli",
+            "write-node",
+            "--path",
+            "/Sources/raw/source/source.md",
+            "--kind",
+            "source",
+            "--input",
+            "source.md",
+        ]);
+        let Command::WriteNode { kind, .. } = source.command else {
+            panic!("expected write-node command");
+        };
+        assert_eq!(kind, NodeKindArg::Source);
+    }
+
+    #[test]
+    fn main_cli_parses_accident_response_aliases() {
+        let search = Cli::parse_from([
+            "kinic-vfs-cli",
+            "search-nodes",
+            "incident",
+            "--prefix",
+            "/Wiki/run",
+            "--json",
+        ]);
+        let Command::SearchRemote {
+            query_text,
+            prefix,
+            json,
+            ..
+        } = search.command
+        else {
+            panic!("expected search-remote command");
+        };
+        assert_eq!(query_text, "incident");
+        assert_eq!(prefix, "/Wiki/run");
+        assert!(json);
+
+        let recent = Cli::parse_from([
+            "kinic-vfs-cli",
+            "recent-nodes",
+            "--limit",
+            "7",
+            "--prefix",
+            "/Sources",
+        ]);
+        let Command::RecentNodes { limit, path, .. } = recent.command else {
+            panic!("expected recent-nodes command");
+        };
+        assert_eq!(limit, 7);
+        assert_eq!(path, "/Sources");
+
+        let read = Cli::parse_from([
+            "kinic-vfs-cli",
+            "read-node",
+            "--path",
+            "/Wiki/index.md",
+            "--metadata-only",
+            "--fields",
+            "path,kind,etag",
+        ]);
+        let Command::ReadNode {
+            metadata_only,
+            fields,
+            ..
+        } = read.command
+        else {
+            panic!("expected read-node command");
+        };
+        assert!(metadata_only);
+        assert_eq!(fields.as_deref(), Some("path,kind,etag"));
+    }
+
+    #[test]
     fn main_cli_parses_skill_commands() {
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "skill",
             "find",
             "contract review",
@@ -747,7 +944,7 @@ mod tests {
         assert!(json);
 
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "skill",
             "upsert",
             "--source-dir",
@@ -767,7 +964,7 @@ mod tests {
         assert!(json);
 
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "skill",
             "set-status",
             "legal-review",
@@ -783,7 +980,7 @@ mod tests {
         assert_eq!(status, SkillStatusArg::Deprecated);
 
         let cli = Cli::parse_from([
-            "vfs-cli",
+            "kinic-vfs-cli",
             "skill",
             "import",
             "github",
@@ -814,5 +1011,26 @@ mod tests {
         assert_eq!(id, "foo");
         assert_eq!(reference, "main");
         assert!(prune);
+
+        let cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "skill",
+            "install",
+            "legal-review",
+            "--lockfile",
+            "skill.lock.json",
+            "--json",
+        ]);
+        let Command::Skill {
+            command: SkillCommand::Install {
+                id, lockfile, json, ..
+            },
+        } = cli.command
+        else {
+            panic!("expected skill install command");
+        };
+        assert_eq!(id, "legal-review");
+        assert_eq!(lockfile.to_string_lossy(), "skill.lock.json");
+        assert!(json);
     }
 }

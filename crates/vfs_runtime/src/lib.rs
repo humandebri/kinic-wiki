@@ -1,6 +1,7 @@
 // Where: crates/vfs_runtime/src/lib.rs
 // What: Service orchestration for multiple SQLite-backed VFS databases.
 // Why: One canister can host isolated databases while sharing one VFS store implementation.
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions, create_dir_all, metadata, remove_file};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -16,9 +17,11 @@ use vfs_types::{
     GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
     ListNodesRequest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
-    NodeKind, OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit,
-    RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    NodeKind, OpsAnswerSessionCheckRequest, OpsAnswerSessionCheckResult, OpsAnswerSessionRequest,
+    OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
+    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
+    SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -28,6 +31,10 @@ const INDEX_SCHEMA_VERSION_RESTORE_SIZE: &str = "database_index:002_restore_size
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNKS: &str = "database_index:003_restore_chunks";
 const INDEX_SCHEMA_VERSION_USAGE_EVENTS: &str = "database_index:004_usage_events";
 const INDEX_SCHEMA_VERSION_MOUNT_HISTORY: &str = "database_index:005_mount_history";
+const INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS: &str =
+    "database_index:006_url_ingest_trigger_sessions";
+const INDEX_SCHEMA_VERSION_OPS_ANSWER_SESSIONS: &str = "database_index:007_ops_answer_sessions";
+const INDEX_SCHEMA_VERSION_RESTORE_SESSIONS: &str = "database_index:008_restore_sessions";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -36,6 +43,8 @@ pub const MAX_RESTORE_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_DATABASE_SIZE_BYTES: u64 = i64::MAX as u64;
 pub const USAGE_EVENTS_RETENTION_LIMIT: u64 = 100_000;
 const USAGE_EVENTS_PURGE_INTERVAL: i64 = 100;
+const URL_INGEST_TRIGGER_SESSION_TTL_MS: i64 = 30 * 60 * 1000;
+const OPS_ANSWER_SESSION_TTL_MS: i64 = 30 * 60 * 1000;
 const SHA256_DIGEST_BYTES: usize = 32;
 const GENERATED_DATABASE_ID_PREFIX: &str = "db_";
 const GENERATED_DATABASE_ID_HASH_CHARS: usize = 12;
@@ -496,6 +505,7 @@ impl VfsService {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let mount_id = allocate_mount_id(&tx)?;
         record_mount_history(&tx, database_id, mount_id, "restore", now)?;
+        record_database_restore_session(&tx, &rollback, now)?;
         tx.execute(
             "DELETE FROM database_restore_chunks WHERE database_id = ?1",
             params![database_id],
@@ -545,33 +555,34 @@ impl VfsService {
             params![&rollback.database_id],
         )
         .map_err(|error| error.to_string())?;
+        restore_database_state(&tx, &rollback, now)?;
+        tx.commit().map_err(|error| error.to_string())
+    }
+
+    pub fn cancel_database_restore(
+        &self,
+        database_id: &str,
+        caller: &str,
+        now: i64,
+    ) -> Result<DatabaseMeta, String> {
+        self.require_role(database_id, caller, RequiredRole::Owner)?;
+        let meta = self.database_meta_with_statuses(database_id, &[DatabaseStatus::Restoring])?;
+        let rollback = self.database_restore_session(database_id)?;
+        if let Err(error) = remove_file(&meta.db_file_name)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
+        let mut conn = self.open_index()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
         tx.execute(
-            "UPDATE databases
-             SET status = ?2,
-                 active_mount_id = ?3,
-                 snapshot_hash = ?4,
-                 archived_at_ms = ?5,
-                 deleted_at_ms = ?6,
-                 restore_size_bytes = ?7,
-                 updated_at_ms = ?8
-            WHERE database_id = ?1",
-            params![
-                &rollback.database_id,
-                status_to_db(rollback.status),
-                rollback.active_mount_id.map(i64::from),
-                rollback.snapshot_hash,
-                rollback.archived_at_ms,
-                rollback.deleted_at_ms,
-                rollback
-                    .restore_size_bytes
-                    .map(i64::try_from)
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
-                now
-            ],
+            "DELETE FROM database_restore_chunks WHERE database_id = ?1",
+            params![database_id],
         )
         .map_err(|error| error.to_string())?;
-        tx.commit().map_err(|error| error.to_string())
+        restore_database_state(&tx, &rollback, now)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(meta)
     }
 
     pub fn write_database_restore_chunk(
@@ -659,6 +670,11 @@ impl VfsService {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         tx.execute(
             "DELETE FROM database_restore_chunks WHERE database_id = ?1",
+            params![database_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM database_restore_sessions WHERE database_id = ?1",
             params![database_id],
         )
         .map_err(|error| error.to_string())?;
@@ -769,6 +785,122 @@ impl VfsService {
         })
     }
 
+    pub fn authorize_url_ingest_trigger_session(
+        &self,
+        caller: &str,
+        request: UrlIngestTriggerSessionRequest,
+        now: i64,
+    ) -> Result<(), String> {
+        validate_url_ingest_trigger_session_request(&request)?;
+        if caller == "2vxsx-fae" {
+            return Err("anonymous caller not allowed".to_string());
+        }
+        self.require_role(&request.database_id, caller, RequiredRole::Writer)?;
+        let conn = self.open_index()?;
+        purge_expired_url_ingest_trigger_sessions(&conn, now)?;
+        conn.execute(
+            "INSERT INTO url_ingest_trigger_sessions
+             (database_id, session_nonce, principal, expires_at_ms, created_at_ms,
+              refreshed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(database_id, session_nonce) DO UPDATE SET
+               principal = excluded.principal,
+               expires_at_ms = excluded.expires_at_ms,
+               refreshed_at_ms = excluded.refreshed_at_ms",
+            params![
+                request.database_id,
+                request.session_nonce,
+                caller,
+                now + URL_INGEST_TRIGGER_SESSION_TTL_MS,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn check_url_ingest_trigger_session(
+        &self,
+        request: UrlIngestTriggerSessionCheckRequest,
+        now: i64,
+    ) -> Result<(), String> {
+        validate_url_ingest_trigger_session_check_request(&request)?;
+        let conn = self.open_index()?;
+        let principal: String = conn
+            .query_row(
+                "SELECT principal FROM url_ingest_trigger_sessions
+                 WHERE database_id = ?1
+                   AND session_nonce = ?2
+                   AND expires_at_ms >= ?3",
+                params![request.database_id, request.session_nonce, now],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "url ingest trigger session is missing or expired".to_string())?;
+        let node = self
+            .read_node(&request.database_id, &principal, &request.request_path)?
+            .ok_or_else(|| format!("url ingest request not found: {}", request.request_path))?;
+        validate_url_ingest_request_node(&node, &principal)
+    }
+
+    pub fn authorize_ops_answer_session(
+        &self,
+        caller: &str,
+        request: OpsAnswerSessionRequest,
+        now: i64,
+    ) -> Result<(), String> {
+        validate_ops_answer_session_request(&request)?;
+        if caller == "2vxsx-fae" {
+            return Err("anonymous caller not allowed".to_string());
+        }
+        self.require_role(&request.database_id, caller, RequiredRole::Reader)?;
+        let conn = self.open_index()?;
+        purge_expired_ops_answer_sessions(&conn, now)?;
+        conn.execute(
+            "INSERT INTO ops_answer_sessions
+             (database_id, session_nonce, principal, expires_at_ms, created_at_ms,
+              refreshed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(database_id, session_nonce) DO UPDATE SET
+               principal = excluded.principal,
+               expires_at_ms = excluded.expires_at_ms,
+               refreshed_at_ms = excluded.refreshed_at_ms",
+            params![
+                request.database_id,
+                request.session_nonce,
+                caller,
+                now + OPS_ANSWER_SESSION_TTL_MS,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn check_ops_answer_session(
+        &self,
+        request: OpsAnswerSessionCheckRequest,
+        now: i64,
+    ) -> Result<OpsAnswerSessionCheckResult, String> {
+        validate_ops_answer_session_check_request(&request)?;
+        let conn = self.open_index()?;
+        let principal: String = conn
+            .query_row(
+                "SELECT principal FROM ops_answer_sessions
+                 WHERE database_id = ?1
+                   AND session_nonce = ?2
+                   AND expires_at_ms >= ?3",
+                params![request.database_id, request.session_nonce, now],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "ops answer session is missing or expired".to_string())?;
+        self.require_role(&request.database_id, &principal, RequiredRole::Reader)?;
+        Ok(OpsAnswerSessionCheckResult { principal })
+    }
+
     pub fn list_nodes(
         &self,
         caller: &str,
@@ -870,11 +1002,12 @@ impl VfsService {
         &self,
         caller: &str,
         request: MkdirNodeRequest,
+        now: i64,
     ) -> Result<MkdirNodeResult, String> {
         let database_id = request.database_id.clone();
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
-                store.mkdir_node(request)
+                store.mkdir_node(request, now)
             });
         if result.is_ok() {
             self.refresh_logical_size(&database_id)?;
@@ -1145,6 +1278,36 @@ impl VfsService {
         .ok_or_else(|| format!("database not found: {database_id}"))
     }
 
+    fn database_restore_session(
+        &self,
+        database_id: &str,
+    ) -> Result<DatabaseRestoreRollback, String> {
+        let conn = self.open_index()?;
+        conn.query_row(
+            "SELECT database_id, status, active_mount_id, snapshot_hash, archived_at_ms,
+                    deleted_at_ms, restore_size_bytes
+             FROM database_restore_sessions
+             WHERE database_id = ?1",
+            params![database_id],
+            |row| {
+                let active_mount_id: Option<i64> = row.get(2)?;
+                let restore_size_bytes: Option<i64> = row.get(6)?;
+                Ok(DatabaseRestoreRollback {
+                    database_id: row.get(0)?,
+                    status: status_from_db(&row.get::<_, String>(1)?)?,
+                    active_mount_id: active_mount_id.map(mount_id_from_db).transpose()?,
+                    snapshot_hash: row.get(3)?,
+                    archived_at_ms: row.get(4)?,
+                    deleted_at_ms: row.get(5)?,
+                    restore_size_bytes: restore_size_bytes.map(|size| size.max(0) as u64),
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("database restore session not found: {database_id}"))
+    }
+
     fn restore_size_bytes(&self, database_id: &str) -> Result<u64, String> {
         let conn = self.open_index()?;
         let size: Option<i64> = conn
@@ -1311,29 +1474,100 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }
-    if migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
-        return Ok(());
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_MOUNT_HISTORY)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE database_mount_history (
+               database_id TEXT NOT NULL,
+               mount_id INTEGER NOT NULL,
+               reason TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (mount_id)
+             );
+             INSERT OR IGNORE INTO database_mount_history
+               (database_id, mount_id, reason, created_at_ms)
+               SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
     }
-    let tx = conn.transaction().map_err(|error| error.to_string())?;
-    tx.execute_batch(
-        "CREATE TABLE database_mount_history (
-           database_id TEXT NOT NULL,
-           mount_id INTEGER NOT NULL,
-           reason TEXT NOT NULL,
-           created_at_ms INTEGER NOT NULL,
-           PRIMARY KEY (mount_id)
-         );
-         INSERT OR IGNORE INTO database_mount_history
-           (database_id, mount_id, reason, created_at_ms)
-           SELECT database_id, mount_id, 'create', created_at_ms FROM databases;",
-    )
-    .map_err(|error| error.to_string())?;
-    tx.execute(
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-        params![INDEX_SCHEMA_VERSION_MOUNT_HISTORY],
-    )
-    .map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE url_ingest_trigger_sessions (
+               database_id TEXT NOT NULL,
+               session_nonce TEXT NOT NULL,
+               principal TEXT NOT NULL,
+               expires_at_ms INTEGER NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               refreshed_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (database_id, session_nonce),
+               FOREIGN KEY (database_id) REFERENCES databases(database_id)
+             );
+             CREATE INDEX url_ingest_trigger_sessions_expiry_idx
+               ON url_ingest_trigger_sessions(expires_at_ms);",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_URL_INGEST_TRIGGER_SESSIONS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_OPS_ANSWER_SESSIONS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE ops_answer_sessions (
+               database_id TEXT NOT NULL,
+               session_nonce TEXT NOT NULL,
+               principal TEXT NOT NULL,
+               expires_at_ms INTEGER NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               refreshed_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (database_id, session_nonce),
+               FOREIGN KEY (database_id) REFERENCES databases(database_id)
+             );
+             CREATE INDEX ops_answer_sessions_expiry_idx
+               ON ops_answer_sessions(expires_at_ms);",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_OPS_ANSWER_SESSIONS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    if !migration_applied(conn, INDEX_SCHEMA_VERSION_RESTORE_SESSIONS)? {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute_batch(
+            "CREATE TABLE database_restore_sessions (
+               database_id TEXT PRIMARY KEY,
+               status TEXT NOT NULL,
+               active_mount_id INTEGER,
+               snapshot_hash BLOB,
+               archived_at_ms INTEGER,
+               deleted_at_ms INTEGER,
+               restore_size_bytes INTEGER,
+               created_at_ms INTEGER NOT NULL,
+               FOREIGN KEY (database_id) REFERENCES databases(database_id)
+             );",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+            params![INDEX_SCHEMA_VERSION_RESTORE_SESSIONS],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn migration_applied(conn: &Connection, version: &str) -> Result<bool, String> {
@@ -1344,6 +1578,154 @@ fn migration_applied(conn: &Connection, version: &str) -> Result<bool, String> {
     )
     .optional()
     .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
+}
+
+fn validate_url_ingest_trigger_session_request(
+    request: &UrlIngestTriggerSessionRequest,
+) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
+    }
+    validate_url_ingest_trigger_session_nonce(&request.session_nonce)
+}
+
+fn validate_url_ingest_trigger_session_check_request(
+    request: &UrlIngestTriggerSessionCheckRequest,
+) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
+    }
+    validate_url_ingest_trigger_session_nonce(&request.session_nonce)?;
+    validate_url_ingest_request_path(&request.request_path)
+}
+
+fn validate_ops_answer_session_request(request: &OpsAnswerSessionRequest) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
+    }
+    validate_session_nonce(&request.session_nonce)
+}
+
+fn validate_ops_answer_session_check_request(
+    request: &OpsAnswerSessionCheckRequest,
+) -> Result<(), String> {
+    if request.database_id.trim().is_empty() {
+        return Err("database_id is required".to_string());
+    }
+    validate_session_nonce(&request.session_nonce)
+}
+
+fn validate_url_ingest_trigger_session_nonce(session_nonce: &str) -> Result<(), String> {
+    validate_session_nonce(session_nonce)
+}
+
+fn validate_session_nonce(session_nonce: &str) -> Result<(), String> {
+    if session_nonce.trim().is_empty() {
+        return Err("session_nonce is required".to_string());
+    }
+    if session_nonce.len() > 128 {
+        return Err("session_nonce is too long".to_string());
+    }
+    Ok(())
+}
+
+fn validate_url_ingest_request_path(request_path: &str) -> Result<(), String> {
+    if !request_path.starts_with("/Sources/ingest-requests/") || !request_path.ends_with(".md") {
+        return Err("request_path must be a URL ingest request path".to_string());
+    }
+    Ok(())
+}
+
+fn validate_url_ingest_request_node(node: &Node, caller: &str) -> Result<(), String> {
+    if node.kind != NodeKind::File {
+        return Err("url ingest request must be a file node".to_string());
+    }
+    let frontmatter = parse_frontmatter_fields(&node.content)?;
+    expect_frontmatter(&frontmatter, "kind", "kinic.url_ingest_request")?;
+    expect_frontmatter(&frontmatter, "schema_version", "1")?;
+    let status = frontmatter
+        .get("status")
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| "url ingest request status is required".to_string())?;
+    if status != "queued" && status != "fetching" && status != "source_written" {
+        return Err("url ingest request is not triggerable".to_string());
+    }
+    let requested_by = frontmatter
+        .get("requested_by")
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| "url ingest request requested_by is required".to_string())?;
+    if requested_by != caller {
+        return Err("url ingest request caller mismatch".to_string());
+    }
+    Ok(())
+}
+
+fn parse_frontmatter_fields(content: &str) -> Result<BTreeMap<String, Option<String>>, String> {
+    let rest = content
+        .strip_prefix("---\n")
+        .ok_or_else(|| "url ingest request frontmatter is required".to_string())?;
+    let (frontmatter, _body) = rest
+        .split_once("\n---")
+        .ok_or_else(|| "url ingest request frontmatter is not closed".to_string())?;
+    let mut fields = BTreeMap::new();
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            return Err("url ingest request frontmatter is invalid".to_string());
+        };
+        fields.insert(key.trim().to_string(), frontmatter_scalar(value.trim()));
+    }
+    Ok(fields)
+}
+
+fn frontmatter_scalar(value: &str) -> Option<String> {
+    if value == "null" || value == "~" {
+        return None;
+    }
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        return Some(value[1..value.len() - 1].to_string());
+    }
+    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+        return Some(value[1..value.len() - 1].to_string());
+    }
+    Some(value.to_string())
+}
+
+fn expect_frontmatter(
+    frontmatter: &BTreeMap<String, Option<String>>,
+    key: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let value = frontmatter
+        .get(key)
+        .and_then(|value| value.as_deref())
+        .ok_or_else(|| format!("url ingest request {key} is required"))?;
+    if value == expected {
+        Ok(())
+    } else {
+        Err(format!("url ingest request {key} is invalid"))
+    }
+}
+
+fn purge_expired_url_ingest_trigger_sessions(conn: &Connection, now: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM url_ingest_trigger_sessions WHERE expires_at_ms < ?1",
+        params![now],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn purge_expired_ops_answer_sessions(conn: &Connection, now: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM ops_answer_sessions WHERE expires_at_ms < ?1",
+        params![now],
+    )
+    .map(|_| ())
     .map_err(|error| error.to_string())
 }
 
@@ -1386,6 +1768,74 @@ fn restore_chunks_cover_expected_size(
         }
     }
     Ok(false)
+}
+
+fn record_database_restore_session(
+    conn: &Connection,
+    rollback: &DatabaseRestoreRollback,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO database_restore_sessions
+         (database_id, status, active_mount_id, snapshot_hash, archived_at_ms,
+          deleted_at_ms, restore_size_bytes, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            &rollback.database_id,
+            status_to_db(rollback.status),
+            rollback.active_mount_id.map(i64::from),
+            &rollback.snapshot_hash,
+            rollback.archived_at_ms,
+            rollback.deleted_at_ms,
+            rollback
+                .restore_size_bytes
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|error| error.to_string())?,
+            now
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn restore_database_state(
+    conn: &Connection,
+    rollback: &DatabaseRestoreRollback,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM database_restore_sessions WHERE database_id = ?1",
+        params![&rollback.database_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "UPDATE databases
+         SET status = ?2,
+             active_mount_id = ?3,
+             snapshot_hash = ?4,
+             archived_at_ms = ?5,
+             deleted_at_ms = ?6,
+             restore_size_bytes = ?7,
+             updated_at_ms = ?8
+        WHERE database_id = ?1",
+        params![
+            &rollback.database_id,
+            status_to_db(rollback.status),
+            rollback.active_mount_id.map(i64::from),
+            &rollback.snapshot_hash,
+            rollback.archived_at_ms,
+            rollback.deleted_at_ms,
+            rollback
+                .restore_size_bytes
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|error| error.to_string())?,
+            now
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn validate_database_id(database_id: &str) -> Result<(), String> {

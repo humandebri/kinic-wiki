@@ -20,6 +20,7 @@ Do not use this skill for:
 - ad hoc question answering without source intake
 - health-only review of an existing wiki
 - hidden publish or push workflows
+- Skill Registry package lifecycle work; use `kinic-skill-registry`
 
 Core rules:
 
@@ -43,5 +44,4 @@ Read these references when needed:
 
 - shared repo rules: [../references/shared-rules.md](../references/shared-rules.md)
 - vendor markdown rules: [../vendor/obsidian-skills/obsidian-markdown/SKILL.md](../vendor/obsidian-skills/obsidian-markdown/SKILL.md)
-- vendor vault guidance: [../vendor/obsidian-skills/obsidian-cli/SKILL.md](../vendor/obsidian-skills/obsidian-cli/SKILL.md)
 - vendor source cleanup: [../vendor/obsidian-skills/defuddle/SKILL.md](../vendor/obsidian-skills/defuddle/SKILL.md)

@@ -8,8 +8,13 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
-use candid::{Principal, export_service};
+use candid::{CandidType, Deserialize, Principal, export_service};
 use ic_cdk::{init, post_upgrade, query, update};
+use ic_http_certification::{
+    CERTIFICATE_EXPRESSION_HEADER_NAME, DefaultCelBuilder, DefaultResponseCertification,
+    HttpCertification, HttpCertificationPath, HttpCertificationTree, HttpCertificationTreeEntry,
+    HttpResponse as CertifiedHttpResponse, utils::add_v2_certificate_header,
+};
 use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
@@ -22,17 +27,38 @@ use vfs_types::{
     IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MemoryCapability,
     MemoryManifest, MemoryRoot, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OpsAnswerSessionCheckRequest, OpsAnswerSessionCheckResult, OpsAnswerSessionRequest,
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
 };
 
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
 const DATABASES_DIR: &str = "./DB/databases";
+const II_ALTERNATIVE_ORIGINS_PATH: &str = "/.well-known/ii-alternative-origins";
+const II_ALTERNATIVE_ORIGINS_BODY: &str = r#"{"alternativeOrigins":["https://wiki.kinic.xyz","https://kinic.xyz","chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj","chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"]}"#;
 // WASI filesystem memory is for tmp files and directory metadata, not DB slots.
 // SQLite DB files are mounted separately with dedicated MemoryId values.
 const WASI_FS_MEMORY_RANGE: Range<u16> = 0..10;
 const INDEX_DB_MEMORY_ID: u16 = 10;
+
+#[derive(Clone, Debug, CandidType, Deserialize)]
+struct HttpRequest {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    certificate_version: Option<u16>,
+}
+
+#[derive(Clone, Debug, CandidType, Deserialize)]
+struct HttpResponse {
+    status_code: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    upgrade: Option<bool>,
+}
 
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
@@ -43,11 +69,39 @@ thread_local! {
 #[init]
 fn init_hook() {
     initialize_or_trap();
+    certify_http_responses();
 }
 
 #[post_upgrade]
 fn post_upgrade_hook() {
     initialize_or_trap();
+    certify_http_responses();
+}
+
+#[query]
+fn http_request(request: HttpRequest) -> HttpResponse {
+    if request.method != "GET" || request_path(&request.url) != II_ALTERNATIVE_ORIGINS_PATH {
+        return HttpResponse {
+            status_code: 404,
+            headers: vec![(
+                "Content-Type".to_string(),
+                "text/plain; charset=utf-8".to_string(),
+            )],
+            body: b"Not found".to_vec(),
+            upgrade: Some(false),
+        };
+    }
+
+    let (path, entry, tree, mut response) = certified_alternative_origins_response();
+    if let Some(certificate) = data_certificate() {
+        let witness = tree
+            .witness(&entry, II_ALTERNATIVE_ORIGINS_PATH)
+            .unwrap_or_else(|error| {
+                ic_cdk::trap(format!("HTTP certification witness failed: {error}"))
+            });
+        add_v2_certificate_header(&certificate, &mut response, &witness, &path.to_expr_path());
+    }
+    http_response_from_certified(response)
 }
 
 #[query]
@@ -293,11 +347,60 @@ fn finalize_database_restore(database_id: String) -> Result<(), String> {
 }
 
 #[update]
+fn cancel_database_restore(database_id: String) -> Result<(), String> {
+    with_usage(
+        "cancel_database_restore",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.cancel_database_restore(&database_id, caller, now)?;
+            unmount_database_file(&meta.db_file_name);
+            Ok(())
+        },
+    )
+}
+
+#[update]
 fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
     let database_id = request.database_id.clone();
     with_usage("write_node", Some(database_id), |service, caller, now| {
         service.write_node(caller, request, now)
     })
+}
+
+#[update]
+fn authorize_url_ingest_trigger_session(
+    request: UrlIngestTriggerSessionRequest,
+) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "authorize_url_ingest_trigger_session",
+        Some(database_id),
+        |service, caller, now| service.authorize_url_ingest_trigger_session(caller, request, now),
+    )
+}
+
+#[query]
+fn check_url_ingest_trigger_session(
+    request: UrlIngestTriggerSessionCheckRequest,
+) -> Result<(), String> {
+    with_service(|service| service.check_url_ingest_trigger_session(request, now_millis()))
+}
+
+#[update]
+fn authorize_ops_answer_session(request: OpsAnswerSessionRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "authorize_ops_answer_session",
+        Some(database_id),
+        |service, caller, now| service.authorize_ops_answer_session(caller, request, now),
+    )
+}
+
+#[query]
+fn check_ops_answer_session(
+    request: OpsAnswerSessionCheckRequest,
+) -> Result<OpsAnswerSessionCheckResult, String> {
+    with_service(|service| service.check_ops_answer_session(request, now_millis()))
 }
 
 #[update]
@@ -335,8 +438,8 @@ fn move_node(request: MoveNodeRequest) -> Result<MoveNodeResult, String> {
 #[update]
 fn mkdir_node(request: MkdirNodeRequest) -> Result<MkdirNodeResult, String> {
     let database_id = request.database_id.clone();
-    with_usage("mkdir_node", Some(database_id), |service, caller, _now| {
-        service.mkdir_node(caller, request)
+    with_usage("mkdir_node", Some(database_id), |service, caller, now| {
+        service.mkdir_node(caller, request, now)
     })
 }
 
@@ -653,6 +756,90 @@ fn canonical_roles() -> Vec<CanonicalRole> {
         purpose: purpose.to_string(),
     })
     .collect()
+}
+
+fn certify_http_responses() {
+    let (_, _, tree, _) = certified_alternative_origins_response();
+    set_certified_data(tree.root_hash());
+}
+
+fn certified_alternative_origins_response() -> (
+    HttpCertificationPath<'static>,
+    HttpCertificationTreeEntry<'static>,
+    HttpCertificationTree,
+    CertifiedHttpResponse<'static>,
+) {
+    let cel_expr = DefaultCelBuilder::response_only_certification()
+        .with_response_certification(DefaultResponseCertification::certified_response_headers(
+            vec![
+                "Content-Type",
+                "Cache-Control",
+                "Access-Control-Allow-Origin",
+            ],
+        ))
+        .build();
+    let response = alternative_origins_response(cel_expr.to_string());
+    let certification = HttpCertification::response_only(&cel_expr, &response, None)
+        .unwrap_or_else(|error| ic_cdk::trap(format!("HTTP certification failed: {error}")));
+    let path = HttpCertificationPath::exact(II_ALTERNATIVE_ORIGINS_PATH);
+    let entry = HttpCertificationTreeEntry::new(path.clone(), certification);
+    let mut tree = HttpCertificationTree::default();
+    tree.insert(&entry);
+    (path, entry, tree, response)
+}
+
+fn alternative_origins_response(certificate_expression: String) -> CertifiedHttpResponse<'static> {
+    CertifiedHttpResponse::ok(
+        II_ALTERNATIVE_ORIGINS_BODY.as_bytes().to_vec(),
+        vec![
+            (
+                "Content-Type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            ),
+            (
+                "Cache-Control".to_string(),
+                "public, max-age=300".to_string(),
+            ),
+            ("Access-Control-Allow-Origin".to_string(), "*".to_string()),
+            (
+                CERTIFICATE_EXPRESSION_HEADER_NAME.to_string(),
+                certificate_expression,
+            ),
+        ],
+    )
+    .with_upgrade(false)
+    .build()
+}
+
+fn http_response_from_certified(response: CertifiedHttpResponse<'static>) -> HttpResponse {
+    HttpResponse {
+        status_code: response.status_code().as_u16(),
+        headers: response.headers().to_vec(),
+        body: response.body().to_vec(),
+        upgrade: response.upgrade(),
+    }
+}
+
+fn request_path(url: &str) -> &str {
+    url.split_once('?').map_or(url, |(path, _)| path)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_certified_data(data: impl AsRef<[u8]>) {
+    ic_cdk::api::certified_data_set(data);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn set_certified_data(_data: impl AsRef<[u8]>) {}
+
+#[cfg(target_arch = "wasm32")]
+fn data_certificate() -> Option<Vec<u8>> {
+    ic_cdk::api::data_certificate()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn data_certificate() -> Option<Vec<u8>> {
+    None
 }
 
 export_service!();

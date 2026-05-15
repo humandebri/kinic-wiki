@@ -27,11 +27,12 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     created_at_ms: idl.Int64,
     database_id: idl.Text
   });
-  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null });
+  const NodeKind = idl.Variant({ File: idl.Null, Source: idl.Null, Folder: idl.Null });
   const NodeEntryKind = idl.Variant({
     File: idl.Null,
     Source: idl.Null,
-    Directory: idl.Null
+    Directory: idl.Null,
+    Folder: idl.Null
   });
   const Node = idl.Record({
     path: idl.Text,
@@ -53,6 +54,12 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     is_virtual: idl.Bool
   });
   const RecentNodeHit = idl.Record({
+    path: idl.Text,
+    kind: NodeKind,
+    updated_at: idl.Int64,
+    etag: idl.Text
+  });
+  const NodeMutationAck = idl.Record({
     path: idl.Text,
     kind: NodeKind,
     updated_at: idl.Int64,
@@ -140,6 +147,37 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     metadata_json: idl.Text,
     database_id: idl.Text
   });
+  const DeleteNodeRequest = idl.Record({
+    path: idl.Text,
+    expected_etag: idl.Opt(idl.Text),
+    database_id: idl.Text
+  });
+  const MkdirNodeRequest = idl.Record({ path: idl.Text, database_id: idl.Text });
+  const MoveNodeRequest = idl.Record({
+    from_path: idl.Text,
+    to_path: idl.Text,
+    expected_etag: idl.Opt(idl.Text),
+    overwrite: idl.Bool,
+    database_id: idl.Text
+  });
+  const UrlIngestTriggerSessionRequest = idl.Record({
+    database_id: idl.Text,
+    session_nonce: idl.Text
+  });
+  const UrlIngestTriggerSessionCheckRequest = idl.Record({
+    database_id: idl.Text,
+    request_path: idl.Text,
+    session_nonce: idl.Text
+  });
+  const OpsAnswerSessionRequest = idl.Record({
+    database_id: idl.Text,
+    session_nonce: idl.Text
+  });
+  const OpsAnswerSessionCheckRequest = idl.Record({
+    database_id: idl.Text,
+    session_nonce: idl.Text
+  });
+  const OpsAnswerSessionCheckResult = idl.Record({ principal: idl.Text });
   const SearchNodePathsRequest = idl.Record({
     database_id: idl.Text,
     query_text: idl.Text,
@@ -177,11 +215,23 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultMembers = idl.Variant({ Ok: idl.Vec(DatabaseMember), Err: idl.Text });
   const WriteNodeResult = idl.Record({ created: idl.Bool, node: RecentNodeHit });
   const ResultWriteNode = idl.Variant({ Ok: WriteNodeResult, Err: idl.Text });
+  const DeleteNodeResult = idl.Record({ path: idl.Text });
+  const ResultDeleteNode = idl.Variant({ Ok: DeleteNodeResult, Err: idl.Text });
+  const MkdirNodeResult = idl.Record({ path: idl.Text, created: idl.Bool });
+  const ResultMkdirNode = idl.Variant({ Ok: MkdirNodeResult, Err: idl.Text });
+  const MoveNodeResult = idl.Record({ from_path: idl.Text, node: NodeMutationAck, overwrote: idl.Bool });
+  const ResultMoveNode = idl.Variant({ Ok: MoveNodeResult, Err: idl.Text });
   const ResultUnit = idl.Variant({ Ok: idl.Null, Err: idl.Text });
+  const ResultOpsAnswerSessionCheck = idl.Variant({ Ok: OpsAnswerSessionCheckResult, Err: idl.Text });
 
   return idl.Service({
+    authorize_ops_answer_session: idl.Func([OpsAnswerSessionRequest], [ResultUnit], []),
+    authorize_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionRequest], [ResultUnit], []),
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
+    check_ops_answer_session: idl.Func([OpsAnswerSessionCheckRequest], [ResultOpsAnswerSessionCheck], ["query"]),
+    check_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionCheckRequest], [ResultUnit], ["query"]),
     create_database: idl.Func([], [ResultCreateDatabase], []),
+    delete_node: idl.Func([DeleteNodeRequest], [ResultDeleteNode], []),
     grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
     graph_neighborhood: idl.Func([GraphNeighborhoodRequest], [ResultLinks], ["query"]),
@@ -189,6 +239,8 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     list_databases: idl.Func([], [ResultDatabases], ["query"]),
     list_database_members: idl.Func([idl.Text], [ResultMembers], ["query"]),
     memory_manifest: idl.Func([], [MemoryManifest], ["query"]),
+    mkdir_node: idl.Func([MkdirNodeRequest], [ResultMkdirNode], []),
+    move_node: idl.Func([MoveNodeRequest], [ResultMoveNode], []),
     query_context: idl.Func([QueryContextRequest], [ResultQueryContext], ["query"]),
     read_node: idl.Func([idl.Text, idl.Text], [ResultNode], ["query"]),
     read_node_context: idl.Func([NodeContextRequest], [ResultNodeContext], ["query"]),

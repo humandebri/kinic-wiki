@@ -85,6 +85,8 @@ pub enum NodeKind {
     File,
     #[serde(alias = "Source")]
     Source,
+    #[serde(alias = "Folder")]
+    Folder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -96,6 +98,8 @@ pub enum NodeEntryKind {
     File,
     #[serde(alias = "Source")]
     Source,
+    #[serde(alias = "Folder")]
+    Folder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
@@ -151,6 +155,36 @@ pub struct WriteNodeRequest {
     pub content: String,
     pub metadata_json: String,
     pub expected_etag: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct UrlIngestTriggerSessionRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct UrlIngestTriggerSessionCheckRequest {
+    pub database_id: String,
+    pub request_path: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionCheckRequest {
+    pub database_id: String,
+    pub session_nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]
+pub struct OpsAnswerSessionCheckResult {
+    pub principal: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, CandidType)]

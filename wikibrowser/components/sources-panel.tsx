@@ -22,7 +22,7 @@ import {
 } from "@/lib/source-clips";
 import type { WikiNode } from "@/lib/types";
 import { errorHint, errorMessage, type LoadState } from "@/lib/wiki-helpers";
-import { readNode, recentNodes, writeNodeAuthenticated } from "@/lib/vfs-client";
+import { mkdirNodeAuthenticated, readNode, recentNodes, writeNodeAuthenticated } from "@/lib/vfs-client";
 
 type SaveStatus = "idle" | "extracting" | "saving" | "saved" | "error";
 
@@ -80,6 +80,7 @@ export function SourcesPanel({
         extractedText: content.text
       });
       const current = await readNode(canisterId, databaseId, document.path, writeIdentity);
+      await ensureParentFolders(canisterId, databaseId, writeIdentity, document.path);
       await writeNodeAuthenticated(canisterId, writeIdentity, {
         databaseId,
         path: document.path,
@@ -177,6 +178,15 @@ export function SourcesPanel({
       </div>
     </div>
   );
+}
+
+async function ensureParentFolders(canisterId: string, databaseId: string, identity: Identity, path: string): Promise<void> {
+  const segments = path.split("/").filter(Boolean);
+  let current = "";
+  for (const segment of segments.slice(0, -1)) {
+    current = `${current}/${segment}`;
+    await mkdirNodeAuthenticated(canisterId, identity, { databaseId, path: current });
+  }
 }
 
 function StatusText({ status, error }: { status: SaveStatus; error: string | null }) {

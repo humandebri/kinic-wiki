@@ -1,12 +1,8 @@
 # Skill Knowledge Base Quickstart
 
-This walkthrough turns a repo into a DB-linked skill catalog.
-GitHub remains provenance and source history.
-The Kinic DB copy is the searchable team record used by agents and CLI workflows.
-
-This is different from a Vercel-style skill store.
-A store helps distribute and install skills.
-Skill KB helps a team find skills by task context, inspect provenance and evals, record run evidence, and promote or deprecate skills based on real usage.
+This walkthrough creates a DB-linked skill catalog and runs the sample Skill KB loop.
+For layout, manifest fields, status values, access rules, and Browser support, see
+[`SKILL_REGISTRY.md`](SKILL_REGISTRY.md).
 
 ## Prerequisites
 
@@ -29,35 +25,34 @@ Create and link a database.
 If `team-skills` already exists and you have access, start from `database link`.
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- --canister-id "$CANISTER_ID" database create team-skills
-cargo run -p vfs-cli --bin vfs-cli -- --canister-id "$CANISTER_ID" database link team-skills
-cargo run -p vfs-cli --bin vfs-cli -- database current
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database create team-skills
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database link team-skills
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database current
 ```
 
 Upload the sample skill:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill upsert \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill upsert \
   --source-dir examples/skill-kb/skills/legal-review \
   --id legal-review \
   --prune
 ```
 
 `skill upsert` uploads the package.
-It stores `SKILL.md`, `manifest.md`, optional `provenance.md` and `evals.md`, plus direct package-local `.md` links from `SKILL.md`.
 `--prune` removes stale package files already in the DB but no longer present in the source package.
 
 Find and inspect it:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill find "contract review"
-cargo run -p vfs-cli --bin vfs-cli -- skill inspect legal-review
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill find "contract review"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill inspect legal-review
 ```
 
 Record evidence from a real or demo run:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill record-run legal-review \
   --task "review vendor MSA redlines before counsel handoff" \
   --outcome success \
   --notes-file examples/skill-kb/runs/legal-review-success.md
@@ -66,28 +61,16 @@ cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review \
 Promote the skill after review:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill set-status legal-review --status promoted
-cargo run -p vfs-cli --bin vfs-cli -- skill inspect legal-review
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill set-status legal-review --status promoted
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill inspect legal-review
 ```
-
-## Team Operation
-
-- `draft`: imported or experimental skill.
-- `reviewed`: checked by the owning team.
-- `promoted`: recommended for common use.
-- `deprecated`: hidden from default `skill find`; use `--include-deprecated` to audit old skills.
-
-Store private team skills under `/Wiki/skills`.
-Store curated public catalog skills under `/Wiki/public-skills`.
-Store usage evidence under `/Sources/skill-runs`.
-Access follows database roles: `Owner`, `Writer`, and `Reader`.
 
 ## Troubleshooting
 
 - Missing database link: run `database current`; if `database_id` is empty, run `database link <database-id>`.
 - Permission denied: ask a database owner to grant `reader` for find/inspect or `writer` for upsert/record-run/set-status.
-- Invalid manifest: check `kind`, `schema_version`, `id`, and `entry: SKILL.md`.
-- Deprecated skill missing from search: rerun `skill find <query> --include-deprecated`.
+- Invalid manifest: check the required fields in [`SKILL_REGISTRY.md`](SKILL_REGISTRY.md).
+- Missing skill in search: rerun `skill find <query> --include-deprecated` if auditing old skills.
 
 ## Demo Script
 

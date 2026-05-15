@@ -595,6 +595,7 @@ fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error> {
     match value {
         "file" => Ok(NodeKind::File),
         "source" => Ok(NodeKind::Source),
+        "folder" => Ok(NodeKind::Folder),
         _ => Err(rusqlite::Error::InvalidColumnType(
             1,
             "kind".to_string(),

@@ -3,9 +3,9 @@ use tempfile::tempdir;
 use vfs_store::FsStore;
 use vfs_types::{
     DeleteNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, ListChildrenRequest,
-    ListNodesRequest, MoveNodeRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest,
-    RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest, SearchPreviewField,
-    SearchPreviewMode, WriteNodeRequest,
+    ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, NodeEntryKind, NodeKind,
+    OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
+    SearchPreviewField, SearchPreviewMode, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -17,7 +17,41 @@ fn new_store() -> (tempfile::TempDir, FsStore) {
     (dir, store)
 }
 
+fn old_fs_schema_store() -> (tempfile::TempDir, FsStore) {
+    let dir = tempdir().expect("temp dir should exist");
+    let database_path = dir.path().join("wiki.sqlite3");
+    let conn = Connection::open(&database_path).expect("db should open");
+    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
+        .expect("schema migrations table should create");
+    conn.execute_batch(include_str!("../migrations/000_fs_schema.sql"))
+        .expect("base schema should create");
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)",
+        ["wiki_store:000_fs_schema"],
+    )
+    .expect("base migration version should insert");
+    drop(conn);
+    (dir, FsStore::new(database_path))
+}
+
+fn insert_legacy_node(
+    conn: &Connection,
+    path: &str,
+    kind: &str,
+    content: &str,
+    metadata_json: &str,
+) {
+    conn.execute(
+        "INSERT INTO fs_nodes
+         (path, kind, content, created_at, updated_at, etag, metadata_json)
+         VALUES (?1, ?2, ?3, 10, 20, ?4, ?5)",
+        params![path, kind, content, format!("etag-{path}"), metadata_json],
+    )
+    .expect("legacy node should insert");
+}
+
 fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64) -> String {
+    ensure_parent_folders(store, path, now - 1);
     store
         .write_node(
             WriteNodeRequest {
@@ -33,6 +67,27 @@ fn write_file(store: &FsStore, path: &str, expected_etag: Option<&str>, now: i64
         .expect("write should succeed")
         .node
         .etag
+}
+
+fn ensure_parent_folders(store: &FsStore, path: &str, now: i64) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        store
+            .mkdir_node(
+                MkdirNodeRequest {
+                    database_id: "default".to_string(),
+                    path: current.clone(),
+                },
+                now,
+            )
+            .expect("parent folder should exist or be created");
+    }
 }
 
 #[test]
@@ -93,7 +148,8 @@ fn fs_migrations_create_tables() {
         versions,
         vec![
             "wiki_store:000_fs_schema".to_string(),
-            "wiki_store:001_fs_links".to_string()
+            "wiki_store:001_fs_links".to_string(),
+            "wiki_store:002_fs_folders".to_string()
         ]
     );
 
@@ -325,6 +381,7 @@ fn assert_prefix_scope_with_wildcards(
 }
 
 fn write_searchable_file(store: &FsStore, path: &str, now: i64) -> String {
+    ensure_parent_folders(store, path, now - 1);
     store
         .write_node(
             WriteNodeRequest {
@@ -343,6 +400,7 @@ fn write_searchable_file(store: &FsStore, path: &str, now: i64) -> String {
 }
 
 fn update_searchable_file(store: &FsStore, path: &str, etag: &str, now: i64) {
+    ensure_parent_folders(store, path, now - 1);
     store
         .write_node(
             WriteNodeRequest {
@@ -392,6 +450,7 @@ fn status_counts_live_files_and_sources() {
             10,
         )
         .expect("file write should succeed");
+    ensure_parent_folders(&store, "/Sources/raw/source/source.md", 10);
     let source = store
         .write_node(
             WriteNodeRequest {
@@ -447,9 +506,9 @@ fn change_log_retains_all_recorded_revisions() {
         })
         .expect("max revision should succeed");
 
-    assert_eq!(revision_count, 261);
+    assert_eq!(revision_count, 263);
     assert_eq!(oldest_revision, 1);
-    assert_eq!(newest_revision, 261);
+    assert_eq!(newest_revision, 263);
 }
 
 #[test]
@@ -476,7 +535,7 @@ fn fs_path_state_tracks_latest_change_revision() {
             |row| row.get::<_, i64>(0),
         )
         .expect("path state should exist");
-    assert_eq!(revision, 3);
+    assert_eq!(revision, 5);
 }
 
 #[test]
@@ -501,7 +560,8 @@ fn fs_migrations_are_idempotent() {
         versions,
         vec![
             "wiki_store:000_fs_schema".to_string(),
-            "wiki_store:001_fs_links".to_string()
+            "wiki_store:001_fs_links".to_string(),
+            "wiki_store:002_fs_folders".to_string()
         ]
     );
 
@@ -510,7 +570,7 @@ fn fs_migrations_are_idempotent() {
             row.get::<_, i64>(0)
         })
         .expect("path state count should succeed");
-    assert_eq!(tracked_paths, 2);
+    assert_eq!(tracked_paths, 4);
 }
 
 #[test]
@@ -637,6 +697,142 @@ fn fs_links_migration_backfills_existing_nodes() {
 }
 
 #[test]
+fn fs_folder_migration_promotes_empty_file_parent_to_folder() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", "", "{}");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should promote empty parent");
+
+    let folder = store
+        .read_node("/Wiki/foo")
+        .expect("folder should read")
+        .expect("folder should exist");
+    assert_eq!(folder.kind, NodeKind::Folder);
+    assert_eq!(folder.content, "");
+    assert_eq!(folder.metadata_json, "{}");
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/foo".to_string(),
+        })
+        .expect("promoted folder should list children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].path, "/Wiki/foo/bar.md");
+    assert_eq!(children[0].kind, NodeEntryKind::File);
+}
+
+#[test]
+fn fs_folder_migration_keeps_legacy_nodes_usable_with_current_etags() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    insert_legacy_node(
+        &conn,
+        "/Sources/raw/web/web.md",
+        "source",
+        "raw",
+        r#"{"source_type":"url"}"#,
+    );
+    drop(conn);
+
+    store
+        .run_fs_migrations()
+        .expect("folder migration should succeed");
+
+    let file = store
+        .read_node("/Wiki/foo/bar.md")
+        .expect("legacy file should read")
+        .expect("legacy file should exist");
+    assert_eq!(file.kind, NodeKind::File);
+    assert_eq!(file.content, "bar");
+    let source = store
+        .read_node("/Sources/raw/web/web.md")
+        .expect("legacy source should read")
+        .expect("legacy source should exist");
+    assert_eq!(source.kind, NodeKind::Source);
+    assert_eq!(source.metadata_json, r#"{"source_type":"url"}"#);
+
+    let children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/Wiki/foo".to_string(),
+        })
+        .expect("backfilled folder should list children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].path, "/Wiki/foo/bar.md");
+
+    let updated = store
+        .write_node(
+            WriteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/foo/bar.md".to_string(),
+                kind: NodeKind::File,
+                content: "bar updated".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: Some(file.etag),
+            },
+            30,
+        )
+        .expect("legacy file update with migrated etag should succeed");
+    store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/foo/bar.md".to_string(),
+                to_path: "/Wiki/foo/baz.md".to_string(),
+                expected_etag: Some(updated.node.etag),
+                overwrite: false,
+            },
+            31,
+        )
+        .expect("legacy file move with updated etag should succeed");
+    store
+        .delete_node(
+            DeleteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Sources/raw/web/web.md".to_string(),
+                expected_etag: Some(source.etag),
+            },
+            32,
+        )
+        .expect("legacy source delete with migrated etag should succeed");
+}
+
+#[test]
+fn fs_folder_migration_rejects_content_file_parent_conflict() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", " ", "{}");
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("non-empty parent conflict should fail migration");
+    assert!(error.contains("folder path conflicts with non-empty node: /Wiki/foo"));
+}
+
+#[test]
+fn fs_folder_migration_rejects_metadata_file_parent_conflict() {
+    let (_dir, store) = old_fs_schema_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    insert_legacy_node(&conn, "/Wiki/foo", "file", "", r#"{"note":true}"#);
+    insert_legacy_node(&conn, "/Wiki/foo/bar.md", "file", "bar", "{}");
+    drop(conn);
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("metadata parent conflict should fail migration");
+    assert!(error.contains("folder path conflicts with non-empty node: /Wiki/foo"));
+}
+
+#[test]
 fn fs_migrations_reject_legacy_schema_history() {
     let (_dir, store) = new_store();
     let conn = Connection::open(store.database_path()).expect("db should open");
@@ -711,7 +907,7 @@ fn search_nodes_returns_error_for_invalid_stored_kind() {
         "INSERT INTO fs_nodes (id, path, kind, content, created_at, updated_at, etag, metadata_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
-            1_i64,
+            100_i64,
             "/Wiki/broken.md",
             "broken",
             "searchable broken content",
@@ -725,7 +921,7 @@ fn search_nodes_returns_error_for_invalid_stored_kind() {
     conn.execute(
         "INSERT INTO fs_nodes_fts (rowid, path, title, content) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![
-            1_i64,
+            100_i64,
             "/Wiki/broken.md",
             "broken",
             "searchable broken content"
@@ -748,6 +944,7 @@ fn search_nodes_returns_error_for_invalid_stored_kind() {
 #[test]
 fn fs_nodes_fts_stores_title_using_current_basename_rule() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/nested/archive.tar.gz", 19);
     store
         .write_node(
             WriteNodeRequest {
@@ -936,7 +1133,6 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     let (_dir, store) = new_store();
     let alpha = write_file(&store, "/Wiki/alpha.md", None, 10);
     let beta = write_file(&store, "/Wiki/nested/beta.md", None, 11);
-    write_file(&store, "/Wiki/tree", None, 9);
     write_file(&store, "/Wiki/tree/leaf.md", None, 12);
     write_file(&store, "/Wiki/deleted/leaf.md", None, 13);
     let root_entries = store
@@ -954,17 +1150,15 @@ fn list_search_and_export_respect_deleted_and_prefix() {
     );
     assert!(root_entries.iter().any(|entry| {
         entry.path == "/Wiki/nested"
-            && entry.kind == NodeEntryKind::Directory
-            && entry.etag.is_empty()
+            && entry.kind == NodeEntryKind::Folder
+            && !entry.etag.is_empty()
             && entry.has_children
-            && entry.updated_at == 11
     }));
     assert!(root_entries.iter().any(|entry| {
         entry.path == "/Wiki/deleted"
-            && entry.kind == NodeEntryKind::Directory
-            && entry.etag.is_empty()
+            && entry.kind == NodeEntryKind::Folder
+            && !entry.etag.is_empty()
             && entry.has_children
-            && entry.updated_at == 13
     }));
     assert!(
         root_entries
@@ -979,9 +1173,17 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             recursive: true,
         })
         .expect("nested list should succeed");
-    assert_eq!(nested_entries.len(), 1);
-    assert_eq!(nested_entries[0].path, "/Wiki/nested/beta.md");
-    assert_eq!(nested_entries[0].kind, NodeEntryKind::File);
+    assert_eq!(nested_entries.len(), 2);
+    assert!(
+        nested_entries
+            .iter()
+            .any(|entry| entry.path == "/Wiki/nested" && entry.kind == NodeEntryKind::Folder)
+    );
+    assert!(
+        nested_entries
+            .iter()
+            .any(|entry| entry.path == "/Wiki/nested/beta.md" && entry.kind == NodeEntryKind::File)
+    );
 
     store
         .delete_node(
@@ -1016,7 +1218,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             recursive: true,
         })
         .expect("visible list should succeed");
-    assert_eq!(visible_after_delete.len(), 3);
+    assert_eq!(visible_after_delete.len(), 6);
     assert!(
         visible_after_delete
             .iter()
@@ -1040,11 +1242,9 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             recursive: false,
         })
         .expect("root list after delete should succeed");
-    assert!(
-        !root_after_delete
-            .iter()
-            .any(|entry| entry.path == "/Wiki/deleted")
-    );
+    assert!(root_after_delete.iter().any(|entry| {
+        entry.path == "/Wiki/deleted" && entry.kind == NodeEntryKind::Folder && !entry.has_children
+    }));
 
     let deleted_entries = store
         .list_nodes(ListNodesRequest {
@@ -1053,7 +1253,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             recursive: true,
         })
         .expect("deleted list should succeed");
-    assert_eq!(deleted_entries.len(), 3);
+    assert_eq!(deleted_entries.len(), 6);
 
     let deleted_root_entries = store
         .list_nodes(ListNodesRequest {
@@ -1062,11 +1262,9 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             recursive: false,
         })
         .expect("deleted root list should succeed");
-    assert!(
-        !deleted_root_entries
-            .iter()
-            .any(|entry| entry.path == "/Wiki/deleted")
-    );
+    assert!(deleted_root_entries.iter().any(|entry| {
+        entry.path == "/Wiki/deleted" && entry.kind == NodeEntryKind::Folder && !entry.has_children
+    }));
 
     let search_hits = store
         .search_nodes(SearchNodesRequest {
@@ -1077,14 +1275,16 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             preview_mode: Some(SearchPreviewMode::None),
         })
         .expect("search should succeed");
-    assert_eq!(search_hits.len(), 1);
-    assert_eq!(search_hits[0].path, "/Wiki/nested/beta.md");
+    let beta_search_hit = search_hits
+        .iter()
+        .find(|hit| hit.path == "/Wiki/nested/beta.md")
+        .expect("nested file search hit should exist");
     assert_eq!(
-        search_hits[0].snippet.as_deref(),
+        beta_search_hit.snippet.as_deref(),
         Some("/Wiki/nested/beta.md")
     );
     assert!(
-        search_hits[0]
+        beta_search_hit
             .match_reasons
             .contains(&"path_substring".to_string())
     );
@@ -1098,14 +1298,16 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             preview_mode: None,
         })
         .expect("path search should succeed");
-    assert_eq!(path_hits.len(), 1);
-    assert_eq!(path_hits[0].path, "/Wiki/nested/beta.md");
+    let beta_path_hit = path_hits
+        .iter()
+        .find(|hit| hit.path == "/Wiki/nested/beta.md")
+        .expect("nested file path hit should exist");
     assert_eq!(
-        path_hits[0].snippet.as_deref(),
+        beta_path_hit.snippet.as_deref(),
         Some("/Wiki/nested/beta.md")
     );
     assert_eq!(
-        path_hits[0].match_reasons,
+        beta_path_hit.match_reasons,
         vec!["path_substring".to_string()]
     );
 
@@ -1130,7 +1332,7 @@ fn list_search_and_export_respect_deleted_and_prefix() {
             snapshot_session_id: None,
         })
         .expect("snapshot should succeed");
-    assert_eq!(snapshot.nodes.len(), 3);
+    assert_eq!(snapshot.nodes.len(), 6);
     assert!(
         snapshot
             .nodes
@@ -1142,11 +1344,10 @@ fn list_search_and_export_respect_deleted_and_prefix() {
 }
 
 #[test]
-fn list_children_returns_direct_children_with_virtual_directories() {
+fn list_children_returns_direct_children_with_folders() {
     let (_dir, store) = new_store();
     let alpha_etag = write_file(&store, "/Wiki/alpha.md", None, 10);
     write_file(&store, "/Wiki/zeta.md", None, 11);
-    let tree_etag = write_file(&store, "/Wiki/tree", None, 12);
     write_file(&store, "/Wiki/nested/beta.md", None, 12);
     write_file(&store, "/Wiki/aaa/gamma.md", None, 13);
     write_file(&store, "/Wiki/tree/leaf.md", None, 14);
@@ -1166,8 +1367,8 @@ fn list_children_returns_direct_children_with_virtual_directories() {
         vec![
             "/Wiki/aaa",
             "/Wiki/nested",
-            "/Wiki/alpha.md",
             "/Wiki/tree",
+            "/Wiki/alpha.md",
             "/Wiki/zeta.md"
         ]
     );
@@ -1175,13 +1376,13 @@ fn list_children_returns_direct_children_with_virtual_directories() {
     let directory = children
         .iter()
         .find(|child| child.path == "/Wiki/aaa")
-        .expect("virtual directory should exist");
-    assert_eq!(directory.kind, NodeEntryKind::Directory);
+        .expect("folder should exist");
+    assert_eq!(directory.kind, NodeEntryKind::Folder);
     assert_eq!(directory.name, "aaa");
-    assert_eq!(directory.updated_at, None);
-    assert_eq!(directory.etag, None);
-    assert_eq!(directory.size_bytes, None);
-    assert!(directory.is_virtual);
+    assert!(directory.updated_at.is_some());
+    assert!(directory.etag.is_some());
+    assert_eq!(directory.size_bytes, Some(0));
+    assert!(!directory.is_virtual);
 
     let alpha = children
         .iter()
@@ -1197,19 +1398,19 @@ fn list_children_returns_direct_children_with_virtual_directories() {
     let tree = children
         .iter()
         .find(|child| child.path == "/Wiki/tree")
-        .expect("concrete child with descendants should exist");
-    assert_eq!(tree.kind, NodeEntryKind::File);
+        .expect("folder child with descendants should exist");
+    assert_eq!(tree.kind, NodeEntryKind::Folder);
     assert_eq!(tree.name, "tree");
-    assert_eq!(tree.updated_at, Some(12));
-    assert_eq!(tree.etag.as_deref(), Some(tree_etag.as_str()));
-    assert_eq!(tree.size_bytes, Some("content revision 12".len() as u64));
+    assert!(tree.updated_at.is_some());
+    assert!(tree.etag.is_some());
+    assert_eq!(tree.size_bytes, Some(0));
     assert!(!tree.is_virtual);
     assert!(tree.has_children);
 
     let nested = children
         .iter()
         .find(|child| child.path == "/Wiki/nested")
-        .expect("virtual child with descendants should exist");
+        .expect("folder child with descendants should exist");
     assert!(nested.has_children);
 
     assert!(
@@ -1248,7 +1449,20 @@ fn list_children_reports_missing_directory_paths() {
         .expect_err("missing directory should be rejected");
     assert_eq!(missing_error, "path not found: /Wiki/no-such-dir");
 
-    for path in ["/", "/Wiki", "/Sources"] {
+    let root_children = store
+        .list_children(ListChildrenRequest {
+            database_id: "default".to_string(),
+            path: "/".to_string(),
+        })
+        .expect("root directory should list root folders");
+    assert_eq!(
+        root_children
+            .iter()
+            .map(|child| child.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/Sources", "/Wiki"]
+    );
+    for path in ["/Wiki", "/Sources"] {
         let children = store
             .list_children(ListChildrenRequest {
                 database_id: "default".to_string(),
@@ -1346,7 +1560,7 @@ fn list_children_collapses_many_descendants_to_direct_entries() {
     assert_eq!(
         children
             .iter()
-            .filter(|child| child.kind == NodeEntryKind::Directory)
+            .filter(|child| child.kind == NodeEntryKind::Folder)
             .count(),
         3
     );
@@ -1530,6 +1744,7 @@ fn search_nodes_defaults_to_light_preview_when_mode_is_omitted() {
 #[test]
 fn search_node_paths_content_start_preview_returns_body_prefix() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/path-preview/topic-note.md", 201);
     let content = format!("{}\n\nignored tail", "x".repeat(240));
     store
         .write_node(
@@ -1569,6 +1784,7 @@ fn search_node_paths_content_start_preview_returns_body_prefix() {
 #[test]
 fn search_nodes_content_start_preview_covers_content_and_path_hits() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/content-start/path-hit.md", 202);
     store
         .write_node(
             WriteNodeRequest {
@@ -1671,6 +1887,7 @@ fn search_content_start_preview_keeps_empty_body_excerpt_empty() {
 #[test]
 fn search_nodes_handles_ten_large_hits_without_loading_full_content() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/large/node-000.md", 499);
     let payload = format!("shared-bench-search {}", "x".repeat(1024 * 1024 - 20));
     for index in 0..100 {
         store
@@ -1714,6 +1931,7 @@ fn search_nodes_handles_ten_large_hits_without_loading_full_content() {
 #[test]
 fn search_nodes_mixed_large_and_small_hits_can_omit_content_snippets() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/mixed/large.md", 1_399);
     let large_payload = format!("shared-bench-search {}", "x".repeat(1024 * 1024 - 20));
     let small_payload = "shared-bench-search compact preview".to_string();
 
@@ -1770,6 +1988,7 @@ fn search_nodes_mixed_large_and_small_hits_can_omit_content_snippets() {
 #[test]
 fn search_nodes_prefers_basename_matches_over_content_only_hits() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/ranking/alpha-beta.md", 1_499);
     store
         .write_node(
             WriteNodeRequest {
@@ -1819,6 +2038,7 @@ fn search_nodes_prefers_basename_matches_over_content_only_hits() {
 #[test]
 fn search_nodes_recovers_partial_multi_term_matches() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/recall/node-0.md", 1_599);
     for (index, content) in ["alpha beta gamma", "alpha beta", "alpha only", "gamma only"]
         .into_iter()
         .enumerate()
@@ -1861,6 +2081,7 @@ fn search_nodes_recovers_partial_multi_term_matches() {
 #[test]
 fn search_nodes_supports_japanese_queries_without_spaces() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/日本語/検索改善メモ.md", 1_699);
     store
         .write_node(
             WriteNodeRequest {
@@ -1898,6 +2119,7 @@ fn search_nodes_supports_japanese_queries_without_spaces() {
 #[test]
 fn search_nodes_path_only_hits_keep_path_snippets() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/path-only/unique-title.md", 1_799);
     store
         .write_node(
             WriteNodeRequest {
@@ -1936,6 +2158,7 @@ fn search_nodes_path_only_hits_keep_path_snippets() {
 #[test]
 fn search_nodes_keeps_basename_exact_hits_above_fts_only_hits() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/fts-heavy/doc-00.md", 1_849);
     for index in 0..12 {
         store
             .write_node(
@@ -1987,6 +2210,7 @@ fn search_nodes_keeps_basename_exact_hits_above_fts_only_hits() {
 #[test]
 fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/move/source-name.md", 1_899);
     let created = store
         .write_node(
             WriteNodeRequest {
@@ -2062,6 +2286,8 @@ fn move_node_refreshes_search_indexes_for_path_and_basename_queries() {
 #[test]
 fn move_node_allows_noncanonical_target_for_source_nodes() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Sources/raw/source/source.md", 1_909);
+    ensure_parent_folders(&store, "/Sources/raw/renamed/wrong.md", 1_909);
     let created = store
         .write_node(
             WriteNodeRequest {
@@ -2095,6 +2321,8 @@ fn move_node_allows_noncanonical_target_for_source_nodes() {
 #[test]
 fn move_node_accepts_canonical_target_for_source_nodes() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Sources/raw/source/source.md", 1_919);
+    ensure_parent_folders(&store, "/Sources/sessions/renamed/renamed.md", 1_919);
     let created = store
         .write_node(
             WriteNodeRequest {
@@ -2134,6 +2362,7 @@ fn move_node_accepts_canonical_target_for_source_nodes() {
 fn source_nodes_allow_domain_specific_prefix_lookalike_paths() {
     let (_dir, store) = new_store();
     for path in ["/Sources/rawfoo/foo.md", "/Sources/sessions-foo/x.md"] {
+        ensure_parent_folders(&store, path, 1_929);
         let result = store
             .write_node(
                 WriteNodeRequest {
@@ -2162,6 +2391,7 @@ fn source_nodes_accept_canonical_paths_under_both_roots() {
     .into_iter()
     .enumerate()
     {
+        ensure_parent_folders(&store, path, 1_939 + index as i64);
         let result = store.write_node(
             WriteNodeRequest {
                 database_id: "default".to_string(),
@@ -2184,6 +2414,7 @@ fn source_nodes_accept_canonical_paths_under_both_roots() {
 #[test]
 fn query_limits_are_capped_at_one_hundred() {
     let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/capped/node-000.md", 999);
     for index in 0..150 {
         store
             .write_node(

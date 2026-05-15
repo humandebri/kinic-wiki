@@ -1,5 +1,7 @@
 # Skill Registry
 
+This document is the canonical Skill Registry reference.
+
 Skill Registry stores Agent Skills-compatible `SKILL.md` packages as ordinary wiki nodes.
 It is a DB-backed skill knowledge base, not a GitHub or Vercel marketplace replacement.
 GitHub is provenance/source context; the DB copy is the runtime source of truth.
@@ -130,25 +132,41 @@ Existing manifest values win.
 
 ## CLI Usage
 
+`kinic-vfs-cli skill ...` is the supported CLI surface for Skill Registry.
+There is no separate `skill-cli` binary in v1.
+`kinic-vfs-cli` owns the shared connection, database selection, and identity plumbing; skill commands operate on normal VFS nodes under `/Wiki/skills` or `/Wiki/public-skills`.
+
 Use `database link` once, then run `skill` commands without repeating `--database-id`.
 They are thin wrappers over normal VFS nodes and do not add canister schema or path-level ACL.
-For the full first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
+For the manual first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- database create team-skills
-cargo run -p vfs-cli --bin vfs-cli -- database link team-skills
-cargo run -p vfs-cli --bin vfs-cli -- skill upsert --source-dir ./skills/legal-review --id legal-review
-cargo run -p vfs-cli --bin vfs-cli -- skill find "review contract redlines"
-cargo run -p vfs-cli --bin vfs-cli -- skill inspect legal-review --json
-cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
-cargo run -p vfs-cli --bin vfs-cli -- skill set-status legal-review --status promoted
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database create team-skills
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database link team-skills
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill upsert --source-dir ./skills/legal-review --id legal-review
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill find "review contract redlines"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill inspect legal-review --json
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill record-run legal-review --task "review vendor contract" --outcome success --notes-file ./notes.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill set-status legal-review --status promoted
 ```
+
+Command responsibilities:
+
+- `skill upsert`: store or update a package from a local directory.
+- `skill find`: search packages by task context.
+- `skill inspect`: read manifest, entry file, package files, and recent run evidence.
+- `skill record-run`: append usage evidence under `/Sources/skill-runs/...`.
+- `skill set-status`: move a package through `draft`, `reviewed`, `promoted`, or `deprecated`.
+- `skill import github`: import package files from a GitHub source.
+- `skill propose-improvement`: write evidence-backed proposal records.
+- `skill approve-proposal`: mark a proposal approved; it does not apply the diff.
+- `skill install`: write a downstream lockfile only; it does not place files into an agent runtime.
 
 Share access with database member commands:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> reader
-cargo run -p vfs-cli --bin vfs-cli -- database grant team-skills <principal> writer
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database grant team-skills <principal> reader
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database grant team-skills <principal> writer
 ```
 
 Status values are intentionally simple:
@@ -176,7 +194,7 @@ Use `--prune` when the source package is the desired exact file set and stale pa
 Import uses existing package storage after fetching upstream files:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill import github owner/repo:skills/legal-review --id legal-review --ref main --prune
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill import github owner/repo:skills/legal-review --id legal-review --ref main --prune
 ```
 
 GitHub import records `source`, `source_url`, and `revision` in manifest provenance.
@@ -185,11 +203,11 @@ Vercel and SkillHub are next-phase supply sources; this PR only exposes import c
 Improvement proposals are evidence-backed records, not automatic rewrites:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill propose-improvement legal-review \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill propose-improvement legal-review \
   --runs /Sources/skill-runs/legal-review/123.md \
   --summary "Tighten missing-approval checks" \
   --diff-file ./proposal.diff
-cargo run -p vfs-cli --bin vfs-cli -- skill approve-proposal legal-review /Wiki/skills/legal-review/improvement-proposals/123.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill approve-proposal legal-review /Wiki/skills/legal-review/improvement-proposals/123.md
 ```
 
 `approve-proposal` marks the proposal approved. It does not apply the diff to `SKILL.md`; update the source package and run `skill upsert`.
@@ -200,12 +218,12 @@ Approval only accepts proposal nodes under the target skill's `improvement-propo
 The golden sample lives under [`../examples/skill-kb`](../examples/skill-kb):
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- skill upsert \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill upsert \
   --source-dir examples/skill-kb/skills/legal-review \
   --id legal-review \
   --prune
-cargo run -p vfs-cli --bin vfs-cli -- skill find "contract review"
-cargo run -p vfs-cli --bin vfs-cli -- skill record-run legal-review \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill find "contract review"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill record-run legal-review \
   --task "review vendor MSA redlines before counsel handoff" \
   --outcome success \
   --notes-file examples/skill-kb/runs/legal-review-success.md
@@ -245,11 +263,16 @@ Discovery and read tools are read-only.
 All tools require `database_id` and use existing VFS reads, searches, and writes.
 Agents should ignore `deprecated` skills by default, prefer `promoted` or `reviewed` candidates, and treat the read `SKILL.md` as task-local instruction.
 Use the CLI for package operations such as `skill upsert`, import, proposal approval, and database linking.
+`skill install` is lockfile-only in v1. It records the selected package identity, etags, hashes, and paths for a downstream agent environment; it does not copy files into a local skills directory.
+
+```bash
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill install legal-review --lockfile ./legal-review.lock.json
+```
 
 ## v1 Limits
 
 - No path-level ACL.
-- No signed release verification.
+- CLI release artifacts have SHA-256 checksums but no signed release verification.
 - No marketplace-wide hash pinning beyond per-run `skill_hash` and `manifest_hash`.
 - No dependency resolution.
 - No install-time execution permission enforcement.
@@ -257,7 +280,7 @@ Use the CLI for package operations such as `skill upsert`, import, proposal appr
 - No automatic GitHub update monitoring.
 - No automatic skill rewriting from evidence.
 - No GitHub org/team policy sync.
-- No skill install command.
+- `skill install` only writes a lockfile; it does not place files into an agent runtime.
 - No implicit protected knowledge from skill manifests; use separate databases for different access boundaries.
 
 ## Validation

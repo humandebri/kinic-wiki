@@ -52,8 +52,8 @@ export const expectedTypes = {
       metadata_json: "text"
     }
   },
-  NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null" } },
-  NodeKind: { kind: "variant", cases: { File: "null", Source: "null" } },
+  NodeEntryKind: { kind: "variant", cases: { File: "null", Source: "null", Directory: "null", Folder: "null" } },
+  NodeKind: { kind: "variant", cases: { File: "null", Source: "null", Folder: "null" } },
   WriteNodeRequest: {
     kind: "record",
     fields: {
@@ -68,6 +68,58 @@ export const expectedTypes = {
   WriteNodeResult: {
     kind: "record",
     fields: { created: "bool", node: "RecentNodeHit" }
+  },
+  DeleteNodeRequest: {
+    kind: "record",
+    fields: {
+      path: "text",
+      expected_etag: "opt text",
+      database_id: "text"
+    }
+  },
+  DeleteNodeResult: {
+    kind: "record",
+    fields: { path: "text" }
+  },
+  MkdirNodeRequest: { kind: "record", fields: { path: "text", database_id: "text" } },
+  MkdirNodeResult: { kind: "record", fields: { path: "text", created: "bool" } },
+  MoveNodeRequest: {
+    kind: "record",
+    fields: {
+      from_path: "text",
+      to_path: "text",
+      expected_etag: "opt text",
+      overwrite: "bool",
+      database_id: "text"
+    }
+  },
+  MoveNodeResult: {
+    kind: "record",
+    fields: { from_path: "text", node: "NodeMutationAck", overwrote: "bool" }
+  },
+  NodeMutationAck: {
+    kind: "record",
+    fields: { updated_at: "int64", etag: "text", kind: "NodeKind", path: "text" }
+  },
+  UrlIngestTriggerSessionRequest: {
+    kind: "record",
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  UrlIngestTriggerSessionCheckRequest: {
+    kind: "record",
+    fields: { database_id: "text", request_path: "text", session_nonce: "text" }
+  },
+  OpsAnswerSessionRequest: {
+    kind: "record",
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  OpsAnswerSessionCheckRequest: {
+    kind: "record",
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  OpsAnswerSessionCheckResult: {
+    kind: "record",
+    fields: { principal: "text" }
   },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
@@ -141,6 +193,9 @@ export const expectedTypes = {
   ResultMembers: { kind: "variant", cases: { Ok: "vec DatabaseMember", Err: "text" } },
   ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
   ResultWriteNode: { kind: "variant", cases: { Ok: "WriteNodeResult", Err: "text" } },
+  ResultDeleteNode: { kind: "variant", cases: { Ok: "DeleteNodeResult", Err: "text" } },
+  ResultMkdirNode: { kind: "variant", cases: { Ok: "MkdirNodeResult", Err: "text" } },
+  ResultMoveNode: { kind: "variant", cases: { Ok: "MoveNodeResult", Err: "text" } },
   ResultLinks: { kind: "variant", cases: { Ok: "vec LinkEdge", Err: "text" } },
   ResultNode: { kind: "variant", cases: { Ok: "opt Node", Err: "text" } },
   ResultNodeContext: { kind: "variant", cases: { Ok: "opt NodeContext", Err: "text" } },
@@ -207,24 +262,35 @@ export const expectedTypes = {
 };
 
 export const didTypeAliases = {
-  ResultChildren: "Result_10",
-  ResultCreateDatabase: "Result_3",
-  ResultDatabases: "Result_12",
-  ResultMembers: "Result_11",
-  ResultUnit: "Result_2",
+  OpsAnswerSessionCheckRequest: "OpsAnswerSessionRequest",
+  UrlIngestTriggerSessionRequest: "OpsAnswerSessionRequest",
+  ResultChildren: "Result_11",
+  ResultCreateDatabase: "Result_4",
+  ResultDatabases: "Result_13",
+  ResultDeleteNode: "Result_5",
+  ResultMkdirNode: "Result_15",
+  ResultMoveNode: "Result_16",
+  ResultMembers: "Result_12",
+  ResultUnit: "Result_1",
   ResultWriteNode: "Result",
-  ResultLinks: "Result_9",
-  ResultNode: "Result_18",
-  ResultNodeContext: "Result_19",
-  ResultQueryContext: "Result_16",
-  ResultRecent: "Result_20",
-  ResultSearch: "Result_21",
-  ResultSourceEvidence: "Result_22"
+  ResultLinks: "Result_10",
+  ResultNode: "Result_19",
+  ResultNodeContext: "Result_20",
+  ResultQueryContext: "Result_17",
+  ResultRecent: "Result_21",
+  ResultSearch: "Result_22",
+  ResultSourceEvidence: "Result_23",
+  ResultOpsAnswerSessionCheck: "Result_3"
 };
 
 export const expectedMethods = {
+  authorize_ops_answer_session: { input: ["OpsAnswerSessionRequest"], output: "ResultUnit", mode: "update" },
+  authorize_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionRequest"], output: "ResultUnit", mode: "update" },
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
+  check_ops_answer_session: { input: ["OpsAnswerSessionCheckRequest"], output: "ResultOpsAnswerSessionCheck", mode: "query" },
+  check_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionCheckRequest"], output: "ResultUnit", mode: "query" },
   create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
+  delete_node: { input: ["DeleteNodeRequest"], output: "ResultDeleteNode", mode: "update" },
   grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
@@ -233,6 +299,8 @@ export const expectedMethods = {
   list_databases: { input: [], output: "ResultDatabases", mode: "query" },
   list_database_members: { input: ["text"], output: "ResultMembers", mode: "query" },
   memory_manifest: { input: [], output: "MemoryManifest", mode: "query" },
+  mkdir_node: { input: ["MkdirNodeRequest"], output: "ResultMkdirNode", mode: "update" },
+  move_node: { input: ["MoveNodeRequest"], output: "ResultMoveNode", mode: "update" },
   outgoing_links: { input: ["OutgoingLinksRequest"], output: "ResultLinks", mode: "query" },
   query_context: { input: ["QueryContextRequest"], output: "ResultQueryContext", mode: "query" },
   read_node: { input: ["text", "text"], output: "ResultNode", mode: "query" },

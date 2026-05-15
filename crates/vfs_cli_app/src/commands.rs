@@ -5,6 +5,7 @@ use crate::cli::{Cli, Command};
 use crate::conversation_wiki::generate_conversation_wiki;
 use crate::github_ingest::run_github_command;
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
+use crate::purge_url_ingest::purge_url_ingest;
 use crate::skill_registry::run_skill_command;
 use anyhow::{Result, anyhow};
 use vfs_cli::commands::{database_id_or_env, run_vfs_command};
@@ -52,6 +53,24 @@ pub async fn run_command(
                     result.written_paths.len()
                 );
             }
+        }
+        Command::PurgeUrlIngest {
+            url,
+            source_path,
+            yes,
+            force_target_prefix,
+            json,
+        } => {
+            purge_url_ingest(
+                client,
+                require_database_id(database_id)?,
+                url.as_deref(),
+                source_path.as_deref(),
+                yes,
+                force_target_prefix.as_deref(),
+                json,
+            )
+            .await?;
         }
         Command::Status { json } => {
             let database_id = database_id_or_env(database_id)?;

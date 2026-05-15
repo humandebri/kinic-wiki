@@ -1,5 +1,5 @@
-export type NodeKind = "file" | "source";
-export type NodeEntryKind = "file" | "source" | "directory";
+export type NodeKind = "file" | "source" | "folder";
+export type NodeEntryKind = "file" | "source" | "directory" | "folder";
 
 export type WikiNode = {
   path: string;
@@ -23,6 +23,65 @@ export type WriteNodeRequest = {
 export type WriteNodeResult = {
   created: boolean;
   node: RecentNode;
+};
+
+export type DeleteNodeRequest = {
+  databaseId: string;
+  path: string;
+  expectedEtag: string;
+};
+
+export type DeleteNodeResult = {
+  path: string;
+};
+
+export type MkdirNodeRequest = {
+  databaseId: string;
+  path: string;
+};
+
+export type MkdirNodeResult = {
+  path: string;
+  created: boolean;
+};
+
+export type MoveNodeRequest = {
+  databaseId: string;
+  fromPath: string;
+  toPath: string;
+  expectedEtag: string | null;
+  overwrite: boolean;
+};
+
+export type MoveNodeResult = {
+  fromPath: string;
+  node: RecentNode;
+  overwrote: boolean;
+};
+
+export type UrlIngestTriggerSessionRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type UrlIngestTriggerSessionCheckRequest = {
+  databaseId: string;
+  requestPath: string;
+  sessionNonce: string;
+};
+
+export type OpsAnswerSessionRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type OpsAnswerSessionCheckRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type OpsAnswerSessionCheckResult = {
+  principal: string;
 };
 
 export type CanisterHealth = {

@@ -11,8 +11,9 @@ use vfs_runtime::{
     USAGE_EVENTS_RETENTION_LIMIT, UsageEvent, VfsService,
 };
 use vfs_types::{
-    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, NodeKind,
-    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
+    AppendNodeRequest, DatabaseRole, DatabaseStatus, DeleteNodeRequest, MkdirNodeRequest, NodeKind,
+    OpsAnswerSessionCheckRequest, OpsAnswerSessionRequest, SearchNodesRequest, SearchPreviewMode,
+    UrlIngestTriggerSessionCheckRequest, UrlIngestTriggerSessionRequest, WriteNodeRequest,
 };
 
 fn service() -> VfsService {
@@ -117,6 +118,120 @@ fn mount_history_row(root: &std::path::Path, mount_id: u16) -> (String, String) 
     .expect("mount history row should exist")
 }
 
+fn url_ingest_session_request(
+    database_id: &str,
+    session_nonce: &str,
+) -> UrlIngestTriggerSessionRequest {
+    UrlIngestTriggerSessionRequest {
+        database_id: database_id.to_string(),
+        session_nonce: session_nonce.to_string(),
+    }
+}
+
+fn url_ingest_session_check_request(
+    database_id: &str,
+    request_path: &str,
+    session_nonce: &str,
+) -> UrlIngestTriggerSessionCheckRequest {
+    UrlIngestTriggerSessionCheckRequest {
+        database_id: database_id.to_string(),
+        request_path: request_path.to_string(),
+        session_nonce: session_nonce.to_string(),
+    }
+}
+
+fn ops_answer_session_request(database_id: &str, session_nonce: &str) -> OpsAnswerSessionRequest {
+    OpsAnswerSessionRequest {
+        database_id: database_id.to_string(),
+        session_nonce: session_nonce.to_string(),
+    }
+}
+
+fn ops_answer_session_check_request(
+    database_id: &str,
+    session_nonce: &str,
+) -> OpsAnswerSessionCheckRequest {
+    OpsAnswerSessionCheckRequest {
+        database_id: database_id.to_string(),
+        session_nonce: session_nonce.to_string(),
+    }
+}
+
+fn url_ingest_content(status: &str, requested_by: &str) -> String {
+    [
+        "---",
+        "kind: kinic.url_ingest_request",
+        "schema_version: 1",
+        &format!("status: {status}"),
+        "url: \"https://example.com/\"",
+        &format!("requested_by: \"{requested_by}\""),
+        "requested_at: \"2026-05-14T00:00:00Z\"",
+        "claimed_at: null",
+        "source_path: null",
+        "target_path: null",
+        "finished_at: null",
+        "error: null",
+        "---",
+        "",
+        "# URL Ingest Request",
+        "",
+    ]
+    .join("\n")
+}
+
+fn write_url_ingest_request(
+    service: &VfsService,
+    caller: &str,
+    database_id: &str,
+    path: &str,
+    status: &str,
+    requested_by: &str,
+) {
+    ensure_parent_folders(service, caller, database_id, path, 1);
+    service
+        .write_node(
+            caller,
+            WriteNodeRequest {
+                database_id: database_id.to_string(),
+                path: path.to_string(),
+                kind: NodeKind::File,
+                content: url_ingest_content(status, requested_by),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("url ingest request should write");
+}
+
+fn ensure_parent_folders(
+    service: &VfsService,
+    caller: &str,
+    database_id: &str,
+    path: &str,
+    now_ms: i64,
+) {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        service
+            .mkdir_node(
+                caller,
+                MkdirNodeRequest {
+                    database_id: database_id.to_string(),
+                    path: current.clone(),
+                },
+                now_ms,
+            )
+            .expect("parent folder should exist or be created");
+    }
+}
+
 fn database_restore_chunk_count(root: &std::path::Path, database_id: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -125,6 +240,28 @@ fn database_restore_chunk_count(root: &std::path::Path, database_id: &str) -> i6
         |row| row.get(0),
     )
     .expect("restore chunk count should load")
+}
+
+fn database_restore_session_count(root: &std::path::Path, database_id: &str) -> i64 {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.query_row(
+        "SELECT COUNT(*) FROM database_restore_sessions WHERE database_id = ?1",
+        params![database_id],
+        |row| row.get(0),
+    )
+    .expect("restore session count should load")
+}
+
+fn database_file_path(root: &std::path::Path, database_id: &str) -> PathBuf {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    let db_file_name: String = conn
+        .query_row(
+            "SELECT db_file_name FROM databases WHERE database_id = ?1",
+            params![database_id],
+            |row| row.get(0),
+        )
+        .expect("database file path should load");
+    PathBuf::from(db_file_name)
 }
 
 type UsageEventTuple = (
@@ -200,7 +337,13 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
     let (service, root) = service_with_root();
 
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
-    for table_name in ["usage_events", "database_mount_history"] {
+    for table_name in [
+        "usage_events",
+        "database_mount_history",
+        "url_ingest_trigger_sessions",
+        "ops_answer_sessions",
+        "database_restore_sessions",
+    ] {
         let table_exists: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -218,6 +361,18 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_sessions"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:007_ops_answer_sessions"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:008_restore_sessions"),
+        1
+    );
 
     service
         .run_index_migrations()
@@ -230,6 +385,324 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         schema_migration_count(&root, "database_index:005_mount_history"),
         1
     );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:006_url_ingest_trigger_sessions"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:007_ops_answer_sessions"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:008_restore_sessions"),
+        1
+    );
+}
+
+#[test]
+fn url_ingest_trigger_session_requires_writer_and_allows_replay() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    service
+        .authorize_url_ingest_trigger_session(
+            "owner",
+            url_ingest_session_request("alpha", "session-1"),
+            100,
+        )
+        .expect("owner should authorize session");
+    service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            101,
+        )
+        .expect("session should check");
+    service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            102,
+        )
+        .expect("session check should allow replay");
+}
+
+#[test]
+fn url_ingest_trigger_session_rejects_invalid_request_nodes() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "other", DatabaseRole::Reader, 2)
+        .expect("reader grant should succeed");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    let reader = service
+        .authorize_url_ingest_trigger_session(
+            "other",
+            url_ingest_session_request("alpha", "session-reader"),
+            100,
+        )
+        .expect_err("reader principal should fail");
+    assert!(reader.contains("lacks required database role"));
+
+    let anonymous = service
+        .authorize_url_ingest_trigger_session(
+            "2vxsx-fae",
+            url_ingest_session_request("alpha", "session-anonymous"),
+            100,
+        )
+        .expect_err("anonymous principal should fail");
+    assert!(anonymous.contains("anonymous caller not allowed"));
+
+    service
+        .authorize_url_ingest_trigger_session(
+            "owner",
+            url_ingest_session_request("alpha", "session-owner"),
+            100,
+        )
+        .expect("owner should authorize session");
+
+    let invalid_path = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", "/Wiki/not-request.md", "session-owner"),
+            101,
+        )
+        .expect_err("non request path should fail");
+    assert!(invalid_path.contains("request_path must be a URL ingest request path"));
+
+    let missing = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request(
+                "alpha",
+                "/Sources/ingest-requests/missing.md",
+                "session-owner",
+            ),
+            101,
+        )
+        .expect_err("missing node should fail");
+    assert!(missing.contains("not found"));
+
+    let completed_path = "/Sources/ingest-requests/completed.md";
+    write_url_ingest_request(
+        &service,
+        "owner",
+        "alpha",
+        completed_path,
+        "completed",
+        "owner",
+    );
+    let completed = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", completed_path, "session-owner"),
+            101,
+        )
+        .expect_err("completed request should fail");
+    assert!(completed.contains("not triggerable"));
+
+    let invalid_frontmatter_path = "/Sources/ingest-requests/invalid.md";
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: invalid_frontmatter_path.to_string(),
+                kind: NodeKind::File,
+                content: "not frontmatter".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            3,
+        )
+        .expect("invalid request node should write");
+    let invalid_frontmatter = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", invalid_frontmatter_path, "session-owner"),
+            101,
+        )
+        .expect_err("invalid frontmatter should fail");
+    assert!(invalid_frontmatter.contains("frontmatter"));
+
+    let mismatch_path = "/Sources/ingest-requests/mismatch.md";
+    write_url_ingest_request(&service, "owner", "alpha", mismatch_path, "queued", "other");
+    let caller_mismatch = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", mismatch_path, "session-owner"),
+            101,
+        )
+        .expect_err("requested_by mismatch should fail");
+    assert!(caller_mismatch.contains("caller mismatch"));
+}
+
+#[test]
+fn url_ingest_trigger_session_rejects_expired_and_unknown_nonce() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    let request_path = "/Sources/ingest-requests/1.md";
+    write_url_ingest_request(&service, "owner", "alpha", request_path, "queued", "owner");
+
+    service
+        .authorize_url_ingest_trigger_session(
+            "owner",
+            url_ingest_session_request("alpha", "session-1"),
+            0,
+        )
+        .expect("session should authorize");
+    let unknown = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "unknown"),
+            1,
+        )
+        .expect_err("unknown nonce should fail");
+    assert!(unknown.contains("missing or expired"));
+
+    service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            1_800_000,
+        )
+        .expect("session should remain valid at ttl boundary");
+
+    let expired = service
+        .check_url_ingest_trigger_session(
+            url_ingest_session_check_request("alpha", request_path, "session-1"),
+            1_800_001,
+        )
+        .expect_err("expired session should fail");
+    assert!(expired.contains("missing or expired"));
+}
+
+#[test]
+fn ops_answer_session_allows_database_members_and_replay() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "writer", DatabaseRole::Writer, 2)
+        .expect("writer grant should succeed");
+    service
+        .grant_database_access("alpha", "owner", "reader", DatabaseRole::Reader, 3)
+        .expect("reader grant should succeed");
+
+    for principal in ["owner", "writer", "reader"] {
+        let nonce = format!("session-{principal}");
+        service
+            .authorize_ops_answer_session(
+                principal,
+                ops_answer_session_request("alpha", &nonce),
+                100,
+            )
+            .expect("member should authorize ops answer session");
+        let checked = service
+            .check_ops_answer_session(ops_answer_session_check_request("alpha", &nonce), 101)
+            .expect("ops answer session should check");
+        assert_eq!(checked.principal, principal);
+        service
+            .check_ops_answer_session(ops_answer_session_check_request("alpha", &nonce), 102)
+            .expect("ops answer session check should allow replay");
+    }
+}
+
+#[test]
+fn ops_answer_session_rejects_anonymous_and_non_members() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "2vxsx-fae", DatabaseRole::Reader, 2)
+        .expect("anonymous public grant should succeed");
+
+    let anonymous = service
+        .authorize_ops_answer_session(
+            "2vxsx-fae",
+            ops_answer_session_request("alpha", "session-anonymous"),
+            100,
+        )
+        .expect_err("anonymous principal should fail");
+    assert!(anonymous.contains("anonymous caller not allowed"));
+
+    let missing = service
+        .authorize_ops_answer_session(
+            "other",
+            ops_answer_session_request("alpha", "session-other"),
+            100,
+        )
+        .expect_err("non member should fail");
+    assert!(missing.contains("principal has no access"));
+}
+
+#[test]
+fn ops_answer_session_rechecks_current_role_after_revoke() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "reader", DatabaseRole::Reader, 2)
+        .expect("reader grant should succeed");
+    service
+        .authorize_ops_answer_session(
+            "reader",
+            ops_answer_session_request("alpha", "session-reader"),
+            100,
+        )
+        .expect("reader should authorize session");
+    service
+        .check_ops_answer_session(
+            ops_answer_session_check_request("alpha", "session-reader"),
+            101,
+        )
+        .expect("session should check before revoke");
+
+    service
+        .revoke_database_access("alpha", "owner", "reader")
+        .expect("reader revoke should succeed");
+    let revoked = service
+        .check_ops_answer_session(
+            ops_answer_session_check_request("alpha", "session-reader"),
+            102,
+        )
+        .expect_err("revoked reader should fail even before ttl");
+    assert!(revoked.contains("principal has no access"));
+}
+
+#[test]
+fn ops_answer_session_rejects_invalid_and_expired_nonce() {
+    let service = service();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+
+    service
+        .authorize_ops_answer_session("owner", ops_answer_session_request("alpha", "session-1"), 0)
+        .expect("session should authorize");
+    let unknown = service
+        .check_ops_answer_session(ops_answer_session_check_request("alpha", "unknown"), 1)
+        .expect_err("unknown nonce should fail");
+    assert!(unknown.contains("missing or expired"));
+
+    service
+        .check_ops_answer_session(
+            ops_answer_session_check_request("alpha", "session-1"),
+            1_800_000,
+        )
+        .expect("session should remain valid at ttl boundary");
+
+    let expired = service
+        .check_ops_answer_session(
+            ops_answer_session_check_request("alpha", "session-1"),
+            1_800_001,
+        )
+        .expect_err("expired session should fail");
+    assert!(expired.contains("missing or expired"));
 }
 
 #[test]
@@ -1187,6 +1660,7 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
         .begin_database_restore("alpha", "owner", snapshot_hash, archive.size_bytes, 4)
         .expect("restore should begin");
     assert_restore_size(&root, "alpha", Some(archive.size_bytes));
+    assert_eq!(database_restore_session_count(&root, "alpha"), 1);
     let overflow_error = service
         .write_database_restore_chunk("alpha", "owner", archive.size_bytes, &[0])
         .expect_err("restore chunk past declared size should fail");
@@ -1218,6 +1692,7 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
         .finalize_database_restore("alpha", "owner", 6)
         .expect("complete restore should finalize");
     assert_restore_size(&root, "alpha", None);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 0);
     let node = service
         .read_node("alpha", "owner", "/Wiki/a.md")
         .expect("restored read should succeed")
@@ -1407,6 +1882,162 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
 }
 
 #[test]
+fn cancel_database_restore_returns_archived_database_and_removes_partial_state() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".repeat(20),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+    let archive = service
+        .begin_database_archive("alpha", "owner", 3)
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("alpha", "owner", snapshot_hash.clone(), 4)
+        .expect("archive should finalize");
+
+    let restore = service
+        .begin_database_restore_session("alpha", "owner", snapshot_hash, archive.size_bytes, 5)
+        .expect("restore should begin");
+    service
+        .write_database_restore_chunk("alpha", "owner", 0, &bytes[..bytes.len() / 2])
+        .expect("partial restore should write");
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 1);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 1);
+    let restoring_file = database_file_path(&root, "alpha");
+    assert!(restoring_file.exists());
+
+    service
+        .cancel_database_restore("alpha", "owner", 6)
+        .expect("restore cancel should succeed");
+
+    assert_eq!(
+        database_index_row(&root, "alpha"),
+        ("archived".to_string(), None, archive.size_bytes, None)
+    );
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 0);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 0);
+    assert!(!restoring_file.exists());
+    assert_eq!(
+        mount_history_row(&root, restore.meta.mount_id),
+        ("alpha".to_string(), "restore".to_string())
+    );
+}
+
+#[test]
+fn cancel_database_restore_returns_deleted_database_and_removes_partial_state() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+    let archive = service
+        .begin_database_archive("alpha", "owner", 3)
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("alpha", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .cancel_database_archive("alpha", "owner", 4)
+        .expect("archive should cancel");
+    service
+        .delete_database("alpha", "owner", 5)
+        .expect("delete should succeed");
+
+    service
+        .begin_database_restore("alpha", "owner", snapshot_hash, archive.size_bytes, 6)
+        .expect("restore should begin");
+    service
+        .write_database_restore_chunk("alpha", "owner", 0, &bytes)
+        .expect("restore chunk should write");
+    let restoring_file = database_file_path(&root, "alpha");
+    assert!(restoring_file.exists());
+
+    service
+        .cancel_database_restore("alpha", "owner", 7)
+        .expect("restore cancel should succeed");
+
+    assert_eq!(
+        database_index_row(&root, "alpha"),
+        ("deleted".to_string(), None, 0, None)
+    );
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 0);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 0);
+    assert!(!restoring_file.exists());
+}
+
+#[test]
+fn cancel_database_restore_rejects_invalid_statuses_and_non_owner() {
+    let service = service();
+    service
+        .create_database("hot_db", "owner", 1)
+        .expect("hot database should create");
+    let hot = service
+        .cancel_database_restore("hot_db", "owner", 2)
+        .expect_err("hot database should reject restore cancel");
+    assert!(hot.contains("database is hot"));
+
+    service
+        .create_database("archived_db", "owner", 3)
+        .expect("archived database should create");
+    let archive = service
+        .begin_database_archive("archived_db", "owner", 4)
+        .expect("archive should begin");
+    let bytes = service
+        .read_database_archive_chunk("archived_db", "owner", 0, archive.size_bytes as u32)
+        .expect("archive chunk should read");
+    let snapshot_hash = sha256_bytes(&bytes);
+    service
+        .finalize_database_archive("archived_db", "owner", snapshot_hash.clone(), 5)
+        .expect("archive should finalize");
+    let archived = service
+        .cancel_database_restore("archived_db", "owner", 6)
+        .expect_err("archived database should reject restore cancel");
+    assert!(archived.contains("database is archived"));
+
+    service
+        .begin_database_restore("archived_db", "owner", snapshot_hash, archive.size_bytes, 7)
+        .expect("restore should begin");
+    service
+        .grant_database_access("archived_db", "owner", "writer", DatabaseRole::Writer, 8)
+        .expect("writer grant should succeed");
+    let writer = service
+        .cancel_database_restore("archived_db", "writer", 9)
+        .expect_err("writer should not cancel restore");
+    assert!(writer.contains("principal lacks required database role"));
+}
+
+#[test]
 fn rollback_database_restore_begin_restores_archived_state() {
     let (service, root) = service_with_root();
     service
@@ -1460,6 +2091,7 @@ fn rollback_database_restore_begin_restores_archived_state() {
         ("archived".to_string(), None, archive.size_bytes, None)
     );
     assert_eq!(database_restore_chunk_count(&root, "alpha"), 0);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 0);
     assert_eq!(
         mount_history_row(&root, failed_mount_id),
         ("alpha".to_string(), "restore".to_string())
@@ -1604,6 +2236,7 @@ fn append_node_validates_effective_kind_paths() {
         .expect_err("kind=None under sources should be treated as file");
     assert!(error.contains("source path must use source kind"));
 
+    ensure_parent_folders(&service, "owner", "alpha", "/Sources/raw/good/good.md", 3);
     let source = service
         .write_node(
             "owner",

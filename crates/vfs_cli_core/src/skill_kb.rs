@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use vfs_client::VfsApi;
 use vfs_types::{
-    ListNodesRequest, NodeEntryKind, NodeKind, RecentNodesRequest, SearchNodesRequest,
-    SearchPreviewMode, WriteNodeRequest,
+    ListNodesRequest, MkdirNodeRequest, NodeEntryKind, NodeKind, RecentNodesRequest,
+    SearchNodesRequest, SearchPreviewMode, WriteNodeRequest,
 };
 
 const PRIVATE_SKILL_ROOT: &str = "/Wiki/skills";
@@ -226,6 +226,7 @@ pub async fn record_skill_run(client: &impl VfsApi, record: SkillRunRecord<'_>) 
         sha256_hex(task),
         yaml_quote(agent),
     );
+    ensure_parent_folders(client, database_id, &run_path).await?;
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.to_string(),
@@ -237,6 +238,25 @@ pub async fn record_skill_run(client: &impl VfsApi, record: SkillRunRecord<'_>) 
         })
         .await?;
     Ok(json!({ "id": id, "run_path": run_path, "outcome": outcome }))
+}
+
+async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &str) -> Result<()> {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        client
+            .mkdir_node(MkdirNodeRequest {
+                database_id: database_id.to_string(),
+                path: current.clone(),
+            })
+            .await?;
+    }
+    Ok(())
 }
 
 pub async fn read_skill_file(

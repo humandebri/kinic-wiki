@@ -16,6 +16,7 @@ pub mod github_ingest;
 pub mod github_source;
 pub mod identity;
 pub mod maintenance;
+mod purge_url_ingest;
 pub mod skill_registry;
 #[cfg(test)]
 mod skill_registry_tests;

@@ -8,7 +8,7 @@ use vfs_types::{DatabaseRole, GlobNodeType, NodeKind, SearchPreviewMode};
 pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
 
 #[derive(Parser, Debug)]
-#[command(name = "vfs-cli")]
+#[command(name = "kinic-vfs-cli")]
 #[command(about = "Generic CLI for the Kinic VFS canister surface")]
 pub struct VfsCli {
     #[command(flatten)]
@@ -39,6 +39,10 @@ pub enum VfsCommand {
     ReadNode {
         #[arg(long)]
         path: String,
+        #[arg(long)]
+        metadata_only: bool,
+        #[arg(long)]
+        fields: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -144,7 +148,7 @@ pub enum VfsCommand {
     RecentNodes {
         #[arg(long, help = "Maximum 100; 0 is treated as 1 by the canister")]
         limit: u32,
-        #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
+        #[arg(long, alias = "prefix", default_value = DEFAULT_VFS_ROOT_PATH)]
         path: String,
         #[arg(long)]
         json: bool,
@@ -201,6 +205,7 @@ pub enum VfsCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(alias = "search-nodes")]
     SearchRemote {
         query_text: String,
         #[arg(long, default_value = DEFAULT_VFS_ROOT_PATH)]
@@ -254,6 +259,30 @@ pub enum DatabaseCommand {
         database_id: String,
         #[arg(long)]
         json: bool,
+    },
+    ArchiveExport {
+        database_id: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 1_048_576)]
+        chunk_size: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    ArchiveRestore {
+        database_id: String,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value_t = 1_048_576)]
+        chunk_size: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    ArchiveCancel {
+        database_id: String,
+    },
+    RestoreCancel {
+        database_id: String,
     },
 }
 

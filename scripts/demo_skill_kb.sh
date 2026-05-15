@@ -16,7 +16,7 @@ if [[ "$LOCAL" == "1" || "$LOCAL" == "true" ]]; then
   LOCAL_FLAG=(--local)
 fi
 
-VFS=(cargo run -p vfs-cli --bin vfs-cli --)
+VFS=(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli --)
 SETUP=("${VFS[@]}")
 if ((${#LOCAL_FLAG[@]})); then
   SETUP+=("${LOCAL_FLAG[@]}")

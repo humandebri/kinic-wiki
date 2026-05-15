@@ -185,6 +185,9 @@ export function OwnerPanel(props: {
         <h2 className="text-lg font-semibold text-ink">Members</h2>
         <AclQuickAction label="Public" enabled={publicEnabled} busy={props.busy} actionBusy={publicBusy} enabledLabel="Disable public" disabledLabel="Enable public" onDisable={() => publicMember && requestRevoke(publicMember)} onEnable={() => requestGrant(ANONYMOUS_PRINCIPAL, "reader")} />
         <AclQuickAction label={LLM_WRITER_LABEL} enabled={llmWriterEnabled} busy={props.busy} actionBusy={llmWriterBusy} enabledLabel="Disable LLM writer" disabledLabel={llmWriterButtonLabel} onDisable={() => llmWriterMember && requestRevoke(llmWriterMember)} onEnable={() => requestGrant(LLM_WRITER_PRINCIPAL, "writer")} />
+        <p className="rounded-lg border border-line bg-white px-3 py-2 text-xs leading-5 text-muted">
+          URL ingest trigger sessions are valid for 30 minutes. Revoking writer access does not immediately invalidate an already issued session ticket before it expires.
+        </p>
       </div>
       <GrantForm busy={props.busy} busyAction={props.busyAction} onGrant={requestGrant} />
       <MemberTable busy={props.busy} busyAction={props.busyAction} members={props.members} principal={props.principal} onRevoke={requestRevoke} onRoleChange={requestRoleChange} />

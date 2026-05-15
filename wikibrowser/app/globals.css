@@ -56,6 +56,7 @@ code {
 
 .markdown-body {
   line-height: 1.68;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body h1,
@@ -95,11 +96,18 @@ code {
 }
 
 .markdown-body pre {
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid #ded7cb;
   border-radius: 0.75rem;
   background: #f7f3ea;
   padding: 1rem;
+}
+
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .markdown-body code {
@@ -112,4 +120,14 @@ code {
 .markdown-body pre code {
   background: transparent;
   padding: 0;
+}
+
+.cm-editor {
+  height: 100%;
+  font-family: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+
+.cm-scroller {
+  line-height: 1.6;
 }

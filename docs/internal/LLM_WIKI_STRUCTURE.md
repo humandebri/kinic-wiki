@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart LR
-    A["Agent / Human / Script"] --> B["vfs-cli"]
+    A["Agent / Human / Script"] --> B["kinic-vfs-cli"]
     A --> C["Rust library tool calling"]
     B --> D["vfs_client"]
     C --> D
@@ -144,7 +144,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant U as User/Agent
-    participant CLI as vfs-cli
+    participant CLI as kinic-vfs-cli
     participant C as vfs_client
     participant CAN as vfs_canister
     participant SVC as VfsService

@@ -36,6 +36,28 @@ jobs:
       - name: Build Cloudflare Worker
         run: pnpm build:worker
 
+  wiki-generator-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/wiki-generator
+    steps:
+      - uses: actions/checkout@v5
+      - name: Enable corepack
+        run: corepack enable
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: workers/wiki-generator/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run typecheck
+        run: pnpm typecheck
+      - name: Run tests
+        run: pnpm test
+
   rust-check:
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +84,41 @@ jobs:
           ! rg -n '\b(WikiApi|CanisterWikiClient)\b' crates
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  cli-artifacts:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: macos-14
+            name: macos-arm64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Build CLI
+        run: cargo build -p kinic-vfs-cli --bin kinic-vfs-cli --release --locked
+      - name: Package CLI artifact
+        run: bash scripts/package_kinic_vfs_cli.sh "v0.1.0" "${{ matrix.name }}" target/release/kinic-vfs-cli dist
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kinic-vfs-cli-${{ matrix.name }}
+          path: dist/*
 
   canister-build:
     runs-on: ubuntu-latest
@@ -95,14 +152,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: extensions/conversation-capture
+        working-directory: extensions/wiki-clipper
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/conversation-capture/package-lock.json
+          cache-dependency-path: extensions/wiki-clipper/package-lock.json
       - run: npm ci
       - run: npm run build
       - run: npm test

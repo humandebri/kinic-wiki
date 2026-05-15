@@ -11,7 +11,9 @@ const dashboardMemberTable = readFileSync(new URL("../app/dashboard/member-table
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const wikiLayout = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
+const canisterEntrypoint = readFileSync(new URL("../../crates/vfs_canister/src/lib.rs", import.meta.url), "utf8");
 const ingestPanel = readFileSync(new URL("../components/ingest-panel.tsx", import.meta.url), "utf8");
+const ingestTriggerRoute = readFileSync(new URL("../app/api/url-ingest/trigger/route.ts", import.meta.url), "utf8");
 const nextConfig = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const urlIngest = readFileSync(new URL("../lib/url-ingest.ts", import.meta.url), "utf8");
@@ -28,6 +30,15 @@ assert.doesNotMatch(dashboardClient, /useSearchParams/);
 assert.doesNotMatch(dashboardClient, /usePathname/);
 
 assert.match(wikiLayout, /<WikiBrowser \/>/);
+for (const origin of [
+  "chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj",
+  "chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"
+]) {
+  assert.match(canisterEntrypoint, new RegExp(origin.replaceAll("/", "\\/")));
+}
+assert.match(canisterEntrypoint, /https:\/\/wiki\.kinic\.xyz/);
+assert.match(canisterEntrypoint, /https:\/\/kinic\.xyz/);
+assert.equal(existsSync(new URL("../app/.well-known/ii-alternative-origins/route.ts", import.meta.url)), false);
 assert.match(wikiRoute, /return null;/);
 assert.equal(existsSync(new URL("../app/w/page.tsx", import.meta.url)), false);
 assert.equal(existsSync(new URL("../vercel.json", import.meta.url)), false);
@@ -38,6 +49,11 @@ assert.match(wranglerConfig, /"main": ".open-next\/worker.js"/);
 assert.match(wranglerConfig, /"nodejs_compat"/);
 assert.match(wranglerConfig, /"global_fetch_strictly_public"/);
 assert.match(wranglerConfig, /"WORKER_SELF_REFERENCE"/);
+assert.match(wranglerConfig, /"binding": "OPS_ANSWER_RATE_LIMIT"/);
+assert.match(wranglerConfig, /"REPLACE_WITH_OPS_ANSWER_RATE_LIMIT_KV_NAMESPACE_ID"/);
+assert.match(wranglerConfig, /"KINIC_WIKI_GENERATOR_URL": "https:\/\/wiki-generator\.kinic\.xyz"/);
+assert.match(readFileSync(new URL("../README.md", import.meta.url), "utf8"), /wrangler kv namespace create OPS_ANSWER_RATE_LIMIT/);
+assert.match(readFileSync(new URL("../README.md", import.meta.url), "utf8"), /not an atomic counter/);
 
 assert.equal(packageJson.scripts.preview, "opennextjs-cloudflare build && opennextjs-cloudflare preview");
 assert.equal(packageJson.scripts["build:worker"], "opennextjs-cloudflare build");
@@ -48,6 +64,7 @@ assert.equal(packageJson.scripts["e2e:ii:headed"], "scripts/run-ii-e2e.sh --head
 assert.equal(packageJson.scripts["e2e:ii:setup"], "../scripts/setup-wikibrowser-ii-e2e.sh");
 assert.match(nextConfig, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.match(nextConfig, /NEXT_PUBLIC_II_PROVIDER_URL/);
+assert.doesNotMatch(nextConfig, /NEXT_PUBLIC_KINIC_WIKI_GENERATOR_URL/);
 assert.match(homePage, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.doesNotMatch(homePage, /createUrlIngestRequest/);
 assert.doesNotMatch(homeUi, /Queue URL/);
@@ -81,15 +98,26 @@ assert.match(wikiBrowser, /effectiveReadIdentity/);
 assert.match(wikiBrowser, /hrefForCurrentReadRoute/);
 assert.match(wikiBrowser, /router\.replace\(anonymousHref\)/);
 assert.match(ingestPanel, /createUrlIngestRequest/);
-assert.match(ingestPanel, /Queue URL/);
+assert.match(ingestPanel, /Queued and accepted/);
 assert.match(urlIngest, /\/Sources\/ingest-requests/);
 assert.match(urlIngest, /kinic\.url_ingest_request/);
+assert.match(urlIngest, /claimed_at: null/);
+assert.match(urlIngest, /finished_at: null/);
+assert.match(urlIngest, /\/api\/url-ingest\/trigger/);
+assert.match(ingestTriggerRoute, /KINIC_WIKI_GENERATOR_URL/);
+assert.match(ingestTriggerRoute, /KINIC_WIKI_WORKER_TOKEN/);
+assert.match(ingestTriggerRoute, /chrome-extension:\/\/jcfniiflikojmbfnaoamlbbddlikchaj/);
+assert.match(ingestTriggerRoute, /access-control-allow-origin/);
+assert.match(ingestTriggerRoute, /authorization: `Bearer \$\{token\}`/);
 assert.match(dashboardClient, /NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID/);
 assert.match(dashboardClient, /listDatabasesPublic/);
 assert.match(dashboardClient, /mergeDatabaseRows/);
 assert.match(dashboardClient, /Promise\.allSettled/);
 assert.match(dashboardClient, /Public database list unavailable/);
 assert.match(dashboardClient, /await refresh\(null, databaseId\);/);
+assert.match(dashboardClient, /Select a database to manage/);
+assert.match(dashboardClient, /Open Database dashboard/);
+assert.doesNotMatch(dashboardClient, /Database id is missing\./);
 assert.match(dashboardClient, /<SummaryPanel database=\{database\} databaseId=\{databaseId\} principal=\{principal \?\? "anonymous"\} publicReadable=\{database\.publicReadable\} \/>/);
 assert.doesNotMatch(homePage, /process\.env\.KINIC_WIKI_CANISTER_ID/);
 assert.doesNotMatch(dashboardClient, /process\.env\.KINIC_WIKI_CANISTER_ID/);
@@ -106,6 +134,7 @@ assert.match(dashboardUi, /loadingLabel="Granting\.\.\."/);
 assert.match(dashboardUi, /Enable LLM writer/);
 assert.match(dashboardUi, /Disable LLM writer/);
 assert.match(dashboardUi, /Set LLM writer/);
+assert.match(dashboardUi, /URL ingest trigger sessions are valid for 30 minutes/);
 assert.match(dashboardUi, /principalDisplayName\(props\.action\.principalText\)/);
 assert.match(dashboardMemberTable, /loadingLabel="Revoking\.\.\."/);
 assert.match(dashboardMemberTable, /onRoleChange/);

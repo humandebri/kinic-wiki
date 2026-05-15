@@ -19,8 +19,8 @@ http://localhost:3000/<database-id>/Wiki
 The dashboard can create databases after Internet Identity login. CLI setup is still useful for scripted local setup:
 
 ```bash
-cargo run -p vfs-cli -- --canister-id <canister-id> database create
-cargo run -p vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
 `database create` prints the generated database ID. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `NEXT_PUBLIC_II_PROVIDER_URL` overrides the Internet Identity frontend URL for local II. `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
@@ -36,6 +36,17 @@ NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io
 NEXT_PUBLIC_II_PROVIDER_URL=https://id.ai
 NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 ```
+
+Ops Q&A uses `DEEPSEEK_API_KEY` only in the server runtime. Store it in `wikibrowser/.env.local` for local runs. For production, set it as a Cloudflare Worker secret:
+
+```bash
+pnpm exec wrangler secret put DEEPSEEK_API_KEY
+pnpm exec wrangler kv namespace create OPS_ANSWER_RATE_LIMIT
+```
+
+Copy the returned KV namespace id into the `OPS_ANSWER_RATE_LIMIT` binding in `wrangler.jsonc` before deploy. Never expose the API key as `NEXT_PUBLIC_DEEPSEEK_API_KEY`.
+
+Ops Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic counter, so the limit is a practical abuse throttle, not an exact quota under concurrent requests.
 
 ## Scope
 
@@ -66,7 +77,10 @@ Submitting a URL writes one request node to the same database:
 /Sources/ingest-requests/<request-id>.md
 ```
 
-`workers/wiki-generator` scans those requests, fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
+Ingest request nodes are regular `file` nodes. Only fetched raw web evidence under `/Sources/raw/<id>/<id>.md` is stored as `source`.
+
+When `KINIC_WIKI_GENERATOR_URL` and the `KINIC_WIKI_WORKER_TOKEN` secret are set, the browser asks the VFS canister to authorize a 30 minute session trigger ticket for the II caller, writes the request, then calls `/api/url-ingest/trigger`. That server route checks the canister session ticket and configured canister id before forwarding `canisterId`, `databaseId`, and `requestPath` to the generator Worker with bearer auth. The ticket is replayable within its TTL; duplicate jobs are handled by Worker/job idempotency and rate limits. Writer access is checked when the ticket is issued; revoking writer access does not immediately invalidate an already issued ticket before its TTL. `Origin` is only a CORS allowlist, not the authorization boundary.
+The worker fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
 The generator Worker principal must have writer access to the target database.
 
 ## Checks
