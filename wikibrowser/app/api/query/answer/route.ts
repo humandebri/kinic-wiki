@@ -199,6 +199,7 @@ async function callDeepSeek(input: AnswerRequest, apiKey: string, fetchImpl: Fet
       body: JSON.stringify({
         model: process.env.KINIC_WIKI_WORKER_MODEL || DEFAULT_MODEL,
         max_tokens: 1_200,
+        thinking: { type: "disabled" },
         response_format: { type: "json_object" },
         messages: [
           {
@@ -211,7 +212,8 @@ async function callDeepSeek(input: AnswerRequest, apiKey: string, fetchImpl: Fet
               "If evidence is missing or conflicting, set abstained true and say why.",
               "If the context is insufficient, set abstained true and say what is missing.",
               "Return JSON with answer string, citations string array, and abstained boolean.",
-              "Citations must be exact paths from the supplied context."
+              "Citations must be exact paths from the supplied context.",
+              'Example JSON: {"answer":"根拠不足。回答に使える wiki context がない。","citations":[],"abstained":true}'
             ].join("\n")
           },
           {

@@ -183,6 +183,7 @@ type RawQueryContext = {
 };
 
 type VfsActor = {
+  // Query answer wrappers keep the public browser naming while the current canister Candid surface still exposes ops_* session methods.
   authorize_ops_answer_session: (request: RawQueryAnswerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   authorize_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   canister_health: () => Promise<RawCanisterHealth>;
@@ -471,6 +472,7 @@ export async function authorizeQueryAnswerSession(
 ): Promise<void> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
+    // Compatibility note: the canister method is still ops_*; callers should use the query answer wrapper names above.
     const result = await actor.authorize_ops_answer_session(rawQueryAnswerSessionRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);
@@ -481,6 +483,7 @@ export async function authorizeQueryAnswerSession(
 export async function checkQueryAnswerSession(canisterId: string, request: QueryAnswerSessionCheckRequest): Promise<QueryAnswerSessionCheckResult> {
   return callVfs(async () => {
     const actor = await createVfsActor(canisterId);
+    // Compatibility note: the canister method is still ops_*; callers should use the query answer wrapper names above.
     const result = await actor.check_ops_answer_session(rawQueryAnswerSessionCheckRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);

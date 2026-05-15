@@ -194,10 +194,12 @@ await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY
       assert.equal(inputUrl(input), "https://api.deepseek.com/chat/completions");
       const body = JSON.parse(init?.body);
       assert.deepEqual(body.response_format, { type: "json_object" });
+      assert.deepEqual(body.thinking, { type: "disabled" });
       const systemPrompt = body.messages.at(0).content;
       assert.match(systemPrompt, /Answer in the user's language/);
       assert.match(systemPrompt, /links are navigation hints, not evidence/);
       assert.match(systemPrompt, /missing or conflicting/);
+      assert.match(systemPrompt, /Example JSON/);
       const promptInput = JSON.parse(body.messages.at(-1).content);
       assert.equal(promptInput.question, "What does the wiki say?");
       assert.equal(promptInput.selectedPath, "/Wiki/demo.md");

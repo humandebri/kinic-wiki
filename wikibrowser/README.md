@@ -37,7 +37,7 @@ NEXT_PUBLIC_II_PROVIDER_URL=https://id.ai
 NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>
 ```
 
-Ops Q&A uses `DEEPSEEK_API_KEY` only in the server runtime. Store it in `wikibrowser/.env.local` for local runs. For production, set it as a Cloudflare Worker secret:
+Query Q&A uses `DEEPSEEK_API_KEY` only in the server runtime. Store it in `wikibrowser/.env.local` for local runs. For production, set it as a Cloudflare Worker secret:
 
 ```bash
 pnpm exec wrangler secret put DEEPSEEK_API_KEY
@@ -46,7 +46,7 @@ pnpm exec wrangler kv namespace create QUERY_ANSWER_RATE_LIMIT
 
 Copy the returned KV namespace id into the `QUERY_ANSWER_RATE_LIMIT` binding in `wrangler.jsonc` before deploy. Never expose the API key as `NEXT_PUBLIC_DEEPSEEK_API_KEY`.
 
-Ops Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic counter, so the limit is a practical abuse throttle, not an exact quota under concurrent requests.
+Query Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic counter, so the limit is a practical abuse throttle, not an exact quota under concurrent requests.
 
 ## Scope
 
@@ -81,7 +81,11 @@ Ingest request nodes are regular `file` nodes. Only fetched raw web evidence und
 
 When `KINIC_WIKI_GENERATOR_URL` and the `KINIC_WIKI_WORKER_TOKEN` secret are set, the browser asks the VFS canister to authorize a 30 minute session trigger ticket for the II caller, writes the request, then calls `/api/url-ingest/trigger`. That server route checks the canister session ticket and configured canister id before forwarding `canisterId`, `databaseId`, and `requestPath` to the generator Worker with bearer auth. The ticket is replayable within its TTL; duplicate jobs are handled by Worker/job idempotency and rate limits. Writer access is checked when the ticket is issued; revoking writer access does not immediately invalidate an already issued ticket before its TTL. `Origin` is only a CORS allowlist, not the authorization boundary.
 The worker fetches supported `http` / `https` HTML or text URLs, writes the normalized source to `/Sources/raw/<id>/<id>.md`, then generates one review-ready draft under `/Wiki/conversations`.
-The generator Worker principal must have writer access to the target database.
+The generator Worker principal must have writer access to the target database. New databases include the default LLM writer service principal as a `writer` member so URL ingest and draft generation can run immediately. Owners can revoke that member, but URL ingest sessions will fail while the service principal lacks writer access.
+
+## Public Access
+
+Granting `reader` to the anonymous principal `2vxsx-fae` makes a database public readable. Public readable databases expose wiki content and the database member list to anonymous browser sessions. The public dashboard shows member principals and roles in read-only mode, including owner, collaborator, anonymous, and service principals such as the default LLM writer.
 
 ## Checks
 
@@ -156,7 +160,7 @@ Covered methods:
 ## Public MVP
 
 Initial deployment target is Cloudflare Workers with `NEXT_PUBLIC_WIKI_IC_HOST=https://icp0.io` and `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID=<mainnet-wiki-canister-id>`.
-The app is public read-only and accepts database IDs for the fixed canister. The target DB must grant reader access to anonymous principal `2vxsx-fae`.
+The app is public read-only and accepts database IDs for the fixed canister. The target DB must grant reader access to anonymous principal `2vxsx-fae`. Anonymous public access also includes read-only member list visibility.
 Canister unreachable / API failures are shown as browser errors and are not treated as not-found states.
 The `/<database-id>/...` and `/dashboard/<database-id>` URLs are App Router dynamic routes. Read and authenticated calls go directly from the browser to the configured IC gateway.
 

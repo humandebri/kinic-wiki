@@ -67,7 +67,8 @@ assert.match(queryPanelSource, /sessionNonce/);
 assert.match(queryPanelSource, /2_000/);
 assert.match(queryPanelSource, /htmlFor="query-command">Query/);
 assert.match(queryPanelSource, /LLM answer/);
-assert.match(queryPanelSource, /LLM for ask/);
+assert.match(queryPanelSource, /Search by default/);
+assert.match(queryPanelSource, /non-LLM/);
 assert.match(queryPanelSource, /read-only/);
 assert.match(queryContextSource, /isAnswerContextNode\(input\.currentNode\)/);
 assert.match(queryContextSource, /node\.kind === "file" && isContextPath\(node\.path\) && node\.content\.trim\(\)\.length > 0/);
@@ -182,7 +183,27 @@ assert.equal(readIdentityMode(null, false, false, false, true), "anonymous");
 assert.equal(classifyQueryInput("https://example.com/a", "/Wiki", "user").kind, "queue_url");
 assert.equal(classifyQueryInput("recent", "/Wiki", "user").kind, "recent");
 assert.equal(classifyQueryInput("lint facts", "/Wiki/current.md", "user").targetPath, "/Wiki/facts.md");
-assert.equal(classifyQueryInput("budget", "/Wiki", "anonymous").kind, "ask");
+assert.deepEqual(classifyQueryInput("budget", "/Wiki", "anonymous"), {
+  kind: "search",
+  targetPath: "/Wiki",
+  sideEffect: "none",
+  identityMode: "anonymous",
+  query: "budget"
+});
+assert.deepEqual(classifyQueryInput("search: budget", "/Wiki", "user"), {
+  kind: "search",
+  targetPath: "/Wiki",
+  sideEffect: "none",
+  identityMode: "user",
+  query: "budget"
+});
+assert.deepEqual(classifyQueryInput("ask: budget status", "/Wiki", "user"), {
+  kind: "ask",
+  targetPath: "/Wiki",
+  sideEffect: "none",
+  identityMode: "user",
+  question: "budget status"
+});
 assert.equal(classifyQueryInput("前の方針は？", "/Wiki", "user").kind, "ask");
 
 const hit = normalizeSearchHit({

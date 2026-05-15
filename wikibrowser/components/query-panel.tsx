@@ -3,7 +3,7 @@
 import type { Identity } from "@icp-sdk/core/agent";
 import type { FormEvent, ReactNode } from "react";
 import { useState } from "react";
-import { AlertTriangle, Clock3, Link2, MessageSquareText, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Clock3, Link2, MessageSquareText, Search, ShieldCheck } from "lucide-react";
 import { RecentPanel } from "@/components/recent-panel";
 import { createUrlIngestRequest } from "@/lib/url-ingest";
 import { collectLintHints, type LintHint } from "@/lib/lint-hints";
@@ -12,12 +12,13 @@ import { collectQueryAnswerContext } from "@/lib/query-context";
 import { hrefForPath } from "@/lib/paths";
 import type { ReadIdentityMode } from "@/lib/wiki-helpers";
 import { errorMessage } from "@/lib/wiki-helpers";
-import type { WikiNode } from "@/lib/types";
-import { authorizeQueryAnswerSession, readNode } from "@/lib/vfs-client";
+import type { SearchNodeHit, WikiNode } from "@/lib/types";
+import { authorizeQueryAnswerSession, readNode, searchNodes } from "@/lib/vfs-client";
 
 type QueryResult =
   | { kind: "message"; text: string; tone: "info" | "error" }
   | { kind: "lint"; targetPath: string; hints: LintHint[] }
+  | { kind: "search"; query: string; hits: SearchNodeHit[] }
   | { kind: "answer"; answer: string; citations: string[]; abstained: boolean };
 
 export function QueryPanel({
@@ -67,6 +68,10 @@ export function QueryPanel({
     }
     setPendingAction(null);
     if (action.kind === "recent") return;
+    if (action.kind === "search") {
+      await searchWiki(action);
+      return;
+    }
     if (action.kind === "ask") {
       await answerQuestion(action);
       return;
@@ -86,6 +91,18 @@ export function QueryPanel({
     }
   }
 
+  async function searchWiki(action: Extract<QueryAction, { kind: "search" }>) {
+    setBusy(true);
+    try {
+      const hits = await searchNodes(canisterId, databaseId, action.query, 10, action.targetPath, readIdentity ?? undefined);
+      setResult({ kind: "search", query: action.query, hits });
+    } catch (cause) {
+      setResult({ kind: "message", tone: "error", text: errorMessage(cause) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function answerQuestion(action: Extract<QueryAction, { kind: "ask" }>) {
     if (!writeIdentity) {
       setResult({ kind: "message", tone: "error", text: "Login with Internet Identity to ask wiki questions." });
@@ -97,7 +114,7 @@ export function QueryPanel({
       return;
     }
     setLastAskAtMs(now);
-      setBusy(true);
+    setBusy(true);
     try {
       const sessionNonce = crypto.randomUUID();
       await authorizeQueryAnswerSession(canisterId, writeIdentity, { databaseId, sessionNonce });
@@ -150,13 +167,13 @@ export function QueryPanel({
       <form className="border-b border-line p-3" onSubmit={submit}>
         <div className="flex items-center justify-between gap-2">
           <label className="text-xs font-semibold uppercase tracking-[0.12em] text-muted" htmlFor="query-command">Query</label>
-          <span className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">LLM for ask</span>
+          <span className="rounded border border-line bg-white px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">Search by default</span>
         </div>
         <div className="mt-2 grid gap-2">
           <textarea
             id="query-command"
             className="min-h-[112px] w-full resize-none rounded-lg border border-line bg-white px-3 py-2.5 text-sm leading-5 outline-none placeholder:text-muted focus:border-accent"
-            placeholder="Ask a wiki question, or type: lint facts, recent, https://..."
+            placeholder="Search keywords, or type: ask: question, lint facts, recent, https://..."
             rows={4}
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -175,8 +192,8 @@ export function QueryPanel({
 }
 
 function ActionPreview({ action, busy, onConfirm }: { action: QueryAction; busy: boolean; onConfirm: (() => void) | null }) {
-  const icon = action.kind === "ask" ? <MessageSquareText size={15} /> : action.kind === "lint" ? <AlertTriangle size={15} /> : action.kind === "queue_url" ? <Link2 size={15} /> : <Clock3 size={15} />;
-  const title = action.kind === "ask" ? "LLM answer" : action.kind === "lint" ? "Lint note" : action.kind === "queue_url" ? "Queue URL" : "Recent nodes";
+  const icon = action.kind === "ask" ? <MessageSquareText size={15} /> : action.kind === "search" ? <Search size={15} /> : action.kind === "lint" ? <AlertTriangle size={15} /> : action.kind === "queue_url" ? <Link2 size={15} /> : <Clock3 size={15} />;
+  const title = action.kind === "ask" ? "LLM answer" : action.kind === "search" ? "Search wiki" : action.kind === "lint" ? "Lint note" : action.kind === "queue_url" ? "Queue URL" : "Recent nodes";
   const target = action.kind === "queue_url" ? action.url : action.targetPath ?? "current database";
   return (
     <div className="border-b border-line bg-paper px-3 py-2.5 text-xs">
@@ -186,6 +203,7 @@ function ActionPreview({ action, busy, onConfirm }: { action: QueryAction; busy:
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-semibold text-ink">{title}</span>
             {action.kind === "ask" ? <MetaBadge>LLM</MetaBadge> : null}
+            {action.kind === "search" ? <MetaBadge>non-LLM</MetaBadge> : null}
             <MetaBadge>{action.identityMode}</MetaBadge>
             <MetaBadge>{action.sideEffect === "none" ? "read-only" : action.sideEffect}</MetaBadge>
           </div>
@@ -229,6 +247,23 @@ function QueryResultView({ canisterId, databaseId, readMode, result }: { caniste
       </div>
     );
   }
+  if (result.kind === "search") {
+    return (
+      <div className="m-3 space-y-2 rounded-lg border border-line bg-white p-3 text-xs leading-5">
+        <p className="font-semibold text-ink">Search results for {result.query}</p>
+        {result.hits.length === 0 ? <p className="text-muted">No results.</p> : null}
+        {result.hits.map((hit) => {
+          const excerpt = resultExcerpt(hit);
+          return (
+            <a key={`${hit.path}:${hit.score}`} className="block rounded border border-line bg-paper p-2 no-underline hover:border-accent" href={hrefForPath(canisterId, databaseId, hit.path, undefined, "query", undefined, undefined, readMode)}>
+              <span className="block truncate font-mono text-accent">{hit.path}</span>
+              {excerpt ? <span className="mt-1 block text-ink">{excerpt}</span> : null}
+            </a>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div className="m-3 space-y-2 rounded-lg border border-line bg-white p-3 text-xs leading-5">
       <a className="font-mono text-accent no-underline hover:underline" href={hrefForPath(canisterId, databaseId, result.targetPath, "raw", "query", undefined, undefined, readMode)}>
@@ -244,6 +279,12 @@ function QueryResultView({ canisterId, databaseId, readMode, result }: { caniste
       ))}
     </div>
   );
+}
+
+function resultExcerpt(hit: SearchNodeHit): string | null {
+  if (hit.preview?.excerpt) return hit.preview.excerpt;
+  if (hit.snippet && hit.snippet !== hit.path) return hit.snippet;
+  return null;
 }
 
 function isAnswerBody(value: unknown): value is { answer: string; citations: string[]; abstained: boolean } {
