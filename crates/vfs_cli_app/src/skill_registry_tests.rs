@@ -25,6 +25,7 @@ use vfs_types::{
 #[derive(Default)]
 struct SkillMockClient {
     nodes: Mutex<BTreeMap<String, Node>>,
+    mkdirs: Mutex<Vec<String>>,
     searches: Mutex<Vec<SearchNodesRequest>>,
     writes: AtomicUsize,
 }
@@ -131,6 +132,10 @@ impl VfsApi for SkillMockClient {
     }
 
     async fn mkdir_node(&self, request: MkdirNodeRequest) -> Result<MkdirNodeResult> {
+        self.mkdirs
+            .lock()
+            .expect("mkdir lock")
+            .push(request.path.clone());
         Ok(MkdirNodeResult {
             path: request.path,
             created: true,
@@ -249,6 +254,10 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     )
     .await
     .expect("upsert");
+    assert_mkdirs_include(
+        &client,
+        &["/Wiki", "/Wiki/skills", "/Wiki/skills/legal-review"],
+    );
     assert!(
         client
             .read_node("default", "/Wiki/skills/legal-review/SKILL.md")
@@ -396,6 +405,14 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
     )
     .await
     .expect("record run");
+    assert_mkdirs_include(
+        &client,
+        &[
+            "/Sources",
+            "/Sources/skill-runs",
+            "/Sources/skill-runs/legal-review",
+        ],
+    );
     assert!(
         run["run_path"]
             .as_str()
@@ -884,6 +901,15 @@ async fn skill_improvement_proposal_is_recorded_and_approved_without_editing_ski
     )
     .await
     .expect("proposal");
+    assert_mkdirs_include(
+        &client,
+        &[
+            "/Wiki",
+            "/Wiki/skills",
+            "/Wiki/skills/legal-review",
+            "/Wiki/skills/legal-review/improvement-proposals",
+        ],
+    );
     let proposal_path = proposal["proposal_path"].as_str().unwrap();
     let proposal_name = proposal_path
         .strip_prefix("/Wiki/skills/legal-review/improvement-proposals/")
@@ -1022,6 +1048,16 @@ fn assert_rfc3339_field(content: &str, key: &str) {
         .unwrap_or_else(|| panic!("{key} should exist"));
     DateTime::parse_from_rfc3339(value).expect("timestamp should be RFC3339");
     assert!(value.ends_with('Z'));
+}
+
+fn assert_mkdirs_include(client: &SkillMockClient, expected: &[&str]) {
+    let mkdirs = client.mkdirs.lock().expect("mkdir lock");
+    for path in expected {
+        assert!(
+            mkdirs.iter().any(|mkdir| mkdir == path),
+            "expected mkdir for {path}, got {mkdirs:?}"
+        );
+    }
 }
 
 fn proposal_content(skill_id: &str, status: &str) -> String {

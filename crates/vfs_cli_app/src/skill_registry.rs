@@ -18,7 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 pub(crate) use vfs_cli::skill_kb::{find_skills, inspect_skill};
 use vfs_client::VfsApi;
-use vfs_types::{DeleteNodeRequest, ListNodesRequest, NodeEntryKind, NodeKind, WriteNodeRequest};
+use vfs_types::{
+    DeleteNodeRequest, ListNodesRequest, MkdirNodeRequest, NodeEntryKind, NodeKind,
+    WriteNodeRequest,
+};
 
 pub async fn run_skill_command(
     client: &impl VfsApi,
@@ -360,6 +363,7 @@ pub(crate) async fn propose_improvement(
     let content = format!(
         "---\nkind: kinic.skill_improvement_proposal\nschema_version: 1\nskill_id: {id}\nstatus: proposed\nsource_runs:\n{source_runs}\ncreated_at: {created_at}\ncreated_by: cli\n---\n# Skill Improvement Proposal\n\n## Summary\n\n{summary}\n\n## Evidence\n\n{evidence_links}\n\n## Proposed Diff\n\n```diff\n{diff}\n```\n"
     );
+    ensure_parent_folders(client, database_id, &proposal_path).await?;
     client
         .write_node(WriteNodeRequest {
             database_id: database_id.to_string(),
@@ -488,6 +492,7 @@ async fn write_file_node(
     path: &str,
     content: String,
 ) -> Result<()> {
+    ensure_parent_folders(client, database_id, path).await?;
     let current = client.read_node(database_id, path).await?;
     client
         .write_node(WriteNodeRequest {
@@ -499,6 +504,25 @@ async fn write_file_node(
             expected_etag: current.map(|node| node.etag),
         })
         .await?;
+    Ok(())
+}
+
+async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &str) -> Result<()> {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push('/');
+        current.push_str(segment);
+        client
+            .mkdir_node(MkdirNodeRequest {
+                database_id: database_id.to_string(),
+                path: current.clone(),
+            })
+            .await?;
+    }
     Ok(())
 }
 

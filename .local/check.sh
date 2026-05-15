@@ -31,6 +31,12 @@ ICP_WASM_OUTPUT_PATH="${TMPDIR:-/tmp}/vfs_canister.wasm" \
 )
 
 (
+  cd workers/wiki-generator
+  pnpm typecheck
+  pnpm test
+)
+
+(
   cd extensions/wiki-clipper
   npm run build
   npm test
