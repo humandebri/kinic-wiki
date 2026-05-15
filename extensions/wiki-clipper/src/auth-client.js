@@ -2,22 +2,22 @@
 // What: Internet Identity AuthClient helpers for extension UI/offscreen pages.
 // Why: MV3 service workers lack a stable window context for AuthClient.
 import { AuthClient } from "@icp-sdk/auth/client";
+import {
+  AUTH_SESSION_TTL_MS,
+  AUTH_SESSION_TTL_NS,
+  MAINNET_II_PROVIDER_URL,
+  WIKI_CANISTER_DERIVATION_ORIGIN,
+  authClientCreateOptions
+} from "../../../shared/ii-auth/index.js";
 
-const NS_PER_DAY = BigInt(24 * 60 * 60) * BigInt(1_000_000_000);
-const AUTH_DAYS = 29;
-export const DERIVATION_ORIGIN = "https://xis3j-paaaa-aaaai-axumq-cai.icp0.io";
+export const DERIVATION_ORIGIN = WIKI_CANISTER_DERIVATION_ORIGIN;
 
 export const AUTH_OPTIONS = {
-  createOptions: {
-    idleOptions: {
-      idleTimeout: AUTH_DAYS * 24 * 60 * 60 * 1000,
-      disableDefaultIdleCallback: true
-    }
-  },
+  createOptions: authClientCreateOptions(AUTH_SESSION_TTL_MS),
   loginOptions: {
-    identityProvider: "https://id.ai",
+    identityProvider: MAINNET_II_PROVIDER_URL,
     derivationOrigin: DERIVATION_ORIGIN,
-    maxTimeToLive: BigInt(AUTH_DAYS) * NS_PER_DAY,
+    maxTimeToLive: AUTH_SESSION_TTL_NS,
     windowOpenerFeatures: "toolbar=0,location=0,menubar=0,width=500,height=500,left=100,top=100"
   }
 };

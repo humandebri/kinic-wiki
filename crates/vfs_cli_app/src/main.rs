@@ -5,9 +5,13 @@ use anyhow::Result;
 use clap::Parser;
 use vfs_cli::commands::{print_database_current, run_database_unlink};
 use vfs_cli::connection::{resolve_connection, resolve_connection_optional_canister};
-use vfs_cli_app::cli::{Cli, Command, DatabaseCommand};
+use vfs_cli_app::cli::{Cli, Command, DatabaseCommand, IdentityModeArg};
 use vfs_cli_app::commands::run_command;
-use vfs_cli_app::identity::export_default_identity_pem;
+use vfs_cli_app::identity::load_default_identity;
+use vfs_cli_app::identity_mode::{
+    ClientIdentityMode, anonymous_can_read_database, identity_is_database_member,
+    resolve_client_identity_mode,
+};
 use vfs_client::CanisterVfsClient;
 
 #[tokio::main]
@@ -36,16 +40,71 @@ async fn main() -> Result<()> {
         cli.connection.canister_id.clone(),
         cli.connection.database_id.clone(),
     )?;
-    let client = if cli.command.requires_identity() {
-        let identity_pem = export_default_identity_pem().await?;
-        CanisterVfsClient::new_with_identity_pem(
-            &connection.replica_host,
-            &connection.canister_id,
-            &identity_pem,
-        )
-        .await?
+    let auto_probes_database = matches!(cli.connection.identity_mode, IdentityModeArg::Auto)
+        && cli.command.probes_anonymous_database_read()
+        && !cli.command.requires_identity();
+    let anonymous_probe = if auto_probes_database {
+        let database_id = connection.database_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "database id is required for anonymous access check; pass --database-id or link a workspace database"
+            )
+        })?;
+        let anonymous =
+            CanisterVfsClient::new(&connection.replica_host, &connection.canister_id).await?;
+        Some(anonymous_can_read_database(&anonymous, database_id).await?)
     } else {
-        CanisterVfsClient::new(&connection.replica_host, &connection.canister_id).await?
+        None
+    };
+    let mut identity_client = None;
+    let identity_membership = if anonymous_probe == Some(true) {
+        let database_id = connection.database_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "database id is required for identity membership check; pass --database-id or link a workspace database"
+            )
+        })?;
+        let client = new_identity_client(&connection).await.map_err(|error| {
+            anyhow::anyhow!(
+                "failed to check selected identity membership for public database; use --identity-mode anonymous to force anonymous read: {error}"
+            )
+        })?;
+        let is_member = identity_is_database_member(&client, database_id)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to check selected identity membership for public database; use --identity-mode anonymous to force anonymous read: {error}"
+                )
+            })?;
+        identity_client = Some(client);
+        Some(is_member)
+    } else {
+        None
+    };
+    let client_mode = resolve_client_identity_mode(
+        &cli.command,
+        cli.connection.identity_mode,
+        anonymous_probe,
+        identity_membership,
+    )?;
+    let client = match client_mode {
+        ClientIdentityMode::Anonymous => {
+            CanisterVfsClient::new(&connection.replica_host, &connection.canister_id).await?
+        }
+        ClientIdentityMode::Identity => match identity_client {
+            Some(client) => client,
+            None => new_identity_client(&connection).await?,
+        },
     };
     run_command(&client, cli, &connection).await
+}
+
+async fn new_identity_client(
+    connection: &vfs_cli::connection::ResolvedConnection,
+) -> Result<CanisterVfsClient> {
+    let identity = load_default_identity().await?;
+    CanisterVfsClient::new_with_boxed_identity(
+        &connection.replica_host,
+        &connection.canister_id,
+        identity,
+    )
+    .await
 }

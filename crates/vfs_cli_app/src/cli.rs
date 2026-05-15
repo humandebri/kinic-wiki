@@ -5,7 +5,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
 pub use vfs_cli::cli::{
-    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, IdentityModeArg, NodeKindArg,
+    SearchPreviewModeArg,
 };
 use wiki_domain::WIKI_ROOT_PATH;
 
@@ -458,6 +459,53 @@ impl Command {
         }
     }
 
+    pub fn probes_anonymous_database_read(&self) -> bool {
+        match self {
+            Self::Skill { command } => matches!(
+                command,
+                SkillCommand::Find { .. }
+                    | SkillCommand::Inspect { .. }
+                    | SkillCommand::Install { public: true, .. }
+            ),
+            Self::ReadNode { .. }
+            | Self::ListNodes { .. }
+            | Self::ListChildren { .. }
+            | Self::GlobNodes { .. }
+            | Self::RecentNodes { .. }
+            | Self::ReadNodeContext { .. }
+            | Self::GraphNeighborhood { .. }
+            | Self::GraphLinks { .. }
+            | Self::IncomingLinks { .. }
+            | Self::OutgoingLinks { .. }
+            | Self::SearchRemote { .. }
+            | Self::SearchPathRemote { .. }
+            | Self::Status { .. } => true,
+            Self::Database { .. }
+            | Self::Github { .. }
+            | Self::RebuildIndex
+            | Self::RebuildScopeIndex { .. }
+            | Self::GenerateConversationWiki { .. }
+            | Self::WriteNode { .. }
+            | Self::AppendNode { .. }
+            | Self::EditNode { .. }
+            | Self::DeleteNode { .. }
+            | Self::DeleteTree { .. }
+            | Self::PurgeUrlIngest { .. }
+            | Self::MkdirNode { .. }
+            | Self::MoveNode { .. }
+            | Self::MultiEditNode { .. } => false,
+        }
+    }
+
+    pub fn prefers_identity_in_auto(&self) -> bool {
+        matches!(
+            self,
+            Self::Database {
+                command: DatabaseCommand::List { .. }
+            }
+        )
+    }
+
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
             Self::Database { command } => Some(VfsCommand::Database {
@@ -665,8 +713,8 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Command, DatabaseCommand, NodeKindArg, SkillCommand, SkillImportCommand,
-        SkillStatusArg,
+        Cli, Command, DatabaseCommand, IdentityModeArg, NodeKindArg, SkillCommand,
+        SkillImportCommand, SkillStatusArg,
     };
     use clap::{CommandFactory, Parser};
 
@@ -779,9 +827,11 @@ mod tests {
     fn command_identity_requirement_keeps_reads_anonymous() {
         let read = Cli::parse_from(["kinic-vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
         assert!(!read.command.requires_identity());
+        assert!(read.command.probes_anonymous_database_read());
 
         let status = Cli::parse_from(["kinic-vfs-cli", "status"]);
         assert!(!status.command.requires_identity());
+        assert!(status.command.probes_anonymous_database_read());
 
         let private_install = Cli::parse_from([
             "kinic-vfs-cli",
@@ -792,6 +842,7 @@ mod tests {
             "skill.lock.json",
         ]);
         assert!(private_install.command.requires_identity());
+        assert!(!private_install.command.probes_anonymous_database_read());
 
         let public_install = Cli::parse_from([
             "kinic-vfs-cli",
@@ -803,6 +854,7 @@ mod tests {
             "--public",
         ]);
         assert!(!public_install.command.requires_identity());
+        assert!(public_install.command.probes_anonymous_database_read());
 
         let write = Cli::parse_from([
             "kinic-vfs-cli",
@@ -813,6 +865,46 @@ mod tests {
             "index.md",
         ]);
         assert!(write.command.requires_identity());
+        assert!(!write.command.probes_anonymous_database_read());
+
+        let list = Cli::parse_from(["kinic-vfs-cli", "database", "list"]);
+        assert!(!list.command.requires_identity());
+        assert!(list.command.prefers_identity_in_auto());
+    }
+
+    #[test]
+    fn main_cli_parses_identity_mode() {
+        let default_cli =
+            Cli::parse_from(["kinic-vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
+        assert_eq!(default_cli.connection.identity_mode, IdentityModeArg::Auto);
+
+        let anonymous_cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "--identity-mode",
+            "anonymous",
+            "read-node",
+            "--path",
+            "/Wiki/index.md",
+        ]);
+        assert_eq!(
+            anonymous_cli.connection.identity_mode,
+            IdentityModeArg::Anonymous
+        );
+
+        let identity_cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "--identity-mode",
+            "identity",
+            "write-node",
+            "--path",
+            "/Wiki/index.md",
+            "--input",
+            "index.md",
+        ]);
+        assert_eq!(
+            identity_cli.connection.identity_mode,
+            IdentityModeArg::Identity
+        );
     }
 
     #[test]

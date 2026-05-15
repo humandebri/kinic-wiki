@@ -28,6 +28,14 @@ pub struct ConnectionArgs {
 
     #[arg(long, help = "Target database id for DB-backed VFS operations")]
     pub database_id: Option<String>,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = IdentityModeArg::Auto,
+        help = "Canister identity mode: auto, anonymous, or identity"
+    )]
+    pub identity_mode: IdentityModeArg,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -311,6 +319,13 @@ pub enum DatabaseRoleArg {
     Owner,
     Writer,
     Reader,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityModeArg {
+    Auto,
+    Anonymous,
+    Identity,
 }
 
 impl NodeKindArg {

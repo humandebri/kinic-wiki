@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Command, ConnectionArgs, NodeKindArg};
+use crate::cli::{Cli, Command, ConnectionArgs, IdentityModeArg, NodeKindArg};
 use crate::commands::run_command;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -298,6 +298,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
                     database_id: Some("default".to_string()),
                     local: false,
                     canister_id: None,
+                    identity_mode: IdentityModeArg::Auto,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -339,6 +340,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
                     database_id: Some("default".to_string()),
                     local: false,
                     canister_id: None,
+                    identity_mode: IdentityModeArg::Auto,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -374,6 +376,7 @@ async fn purge_url_ingest_dry_run_does_not_delete() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page#fragment".to_string()),
@@ -405,6 +408,7 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -444,6 +448,7 @@ async fn purge_url_ingest_returns_error_when_delete_fails() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -488,6 +493,7 @@ async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -534,6 +540,7 @@ async fn purge_url_ingest_source_path_requires_matching_request() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -577,6 +584,7 @@ async fn purge_url_ingest_source_path_requires_request_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -621,6 +629,7 @@ async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -652,6 +661,7 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -723,6 +733,7 @@ async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
                 database_id: Some("default".to_string()),
                 local: false,
                 canister_id: None,
+                identity_mode: IdentityModeArg::Auto,
             },
             command: Command::PurgeUrlIngest {
                 url: None,

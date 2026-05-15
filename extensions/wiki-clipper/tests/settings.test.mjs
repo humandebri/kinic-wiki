@@ -6,6 +6,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { AUTH_OPTIONS } from "../src/auth-client.js";
 import { normalizeWritableDatabases } from "../src/vfs-actor.js";
+import {
+  AUTH_SESSION_TTL_MS,
+  AUTH_SESSION_TTL_NS,
+  MAINNET_II_PROVIDER_URL,
+  WIKI_CANISTER_DERIVATION_ORIGIN
+} from "../../../shared/ii-auth/index.js";
 
 test("settings popup omits fixed runtime inputs", () => {
   const html = readFileSync(new URL("../popup/popup.html", import.meta.url), "utf8");
@@ -59,9 +65,10 @@ test("database dropdown options include only hot owner and writer databases", ()
 });
 
 test("Internet Identity options use 29 day TTL and derivation origin", () => {
-  assert.equal(AUTH_OPTIONS.loginOptions.derivationOrigin, "https://xis3j-paaaa-aaaai-axumq-cai.icp0.io");
-  assert.equal(AUTH_OPTIONS.loginOptions.maxTimeToLive, 29n * 24n * 60n * 60n * 1_000_000_000n);
-  assert.equal(AUTH_OPTIONS.createOptions.idleOptions.idleTimeout, 29 * 24 * 60 * 60 * 1000);
+  assert.equal(AUTH_OPTIONS.loginOptions.identityProvider, MAINNET_II_PROVIDER_URL);
+  assert.equal(AUTH_OPTIONS.loginOptions.derivationOrigin, WIKI_CANISTER_DERIVATION_ORIGIN);
+  assert.equal(AUTH_OPTIONS.loginOptions.maxTimeToLive, AUTH_SESSION_TTL_NS);
+  assert.equal(AUTH_OPTIONS.createOptions.idleOptions.idleTimeout, AUTH_SESSION_TTL_MS);
   assert.equal(AUTH_OPTIONS.createOptions.idleOptions.disableDefaultIdleCallback, true);
 });
 
