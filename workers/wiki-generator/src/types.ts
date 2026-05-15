@@ -68,13 +68,19 @@ export type WikiDraft = {
   follow_ups: WikiDraftItem[];
 };
 
-export type QueueMessage = {
-  kind?: "source";
+export type SourceQueueMessage = {
+  kind: "source";
   databaseId: string;
   sourcePath: string;
   sourceEtag: string;
   requestPath?: string;
 };
+
+export type UrlIngestQueueMessage = UrlIngestTriggerInput & {
+  kind: "url_ingest";
+};
+
+export type QueueMessage = SourceQueueMessage | UrlIngestQueueMessage;
 
 export type ManualRunInput = {
   databaseId: string;

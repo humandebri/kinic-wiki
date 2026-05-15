@@ -6,9 +6,9 @@ import { enqueueSourceJob, loadJob, markCompleted, markFailed, markProcessing, s
 import { generateDraft, validateDraftSources } from "./openai.js";
 import { ensureTargetCanBeWritten, renderDraftMarkdown, slugForDraft } from "./render.js";
 import { validateCanonicalSourcePath } from "./source-path.js";
-import { markIngestRequestCompleted, markIngestRequestFailed } from "./url-ingest.js";
+import { markIngestRequestCompleted, markIngestRequestFailed, triggerUrlIngestRequest } from "./url-ingest.js";
 import { createVfsClient, ensureParentFolders, type VfsClient } from "./vfs.js";
-import type { ManualRunInput, QueueMessage, SearchNodeHit, WikiNode, WorkerConfig } from "./types.js";
+import type { ManualRunInput, QueueMessage, SearchNodeHit, SourceQueueMessage, WikiNode, WorkerConfig } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
 export async function runManual(env: RuntimeEnv, input: ManualRunInput): Promise<Response> {
@@ -19,6 +19,7 @@ export async function runManual(env: RuntimeEnv, input: ManualRunInput): Promise
 
   if (!input.dryRun) {
     const enqueued = await enqueueSourceJob(env, {
+      kind: "source",
       databaseId: input.databaseId,
       sourcePath: input.sourcePath,
       sourceEtag: source.etag
@@ -41,6 +42,14 @@ export async function runManual(env: RuntimeEnv, input: ManualRunInput): Promise
 }
 
 export async function processQueueMessage(env: RuntimeEnv, message: QueueMessage): Promise<void> {
+  if (message.kind === "url_ingest") {
+    await triggerUrlIngestRequest(env, message);
+    return;
+  }
+  await processSourceQueueMessage(env, message);
+}
+
+async function processSourceQueueMessage(env: RuntimeEnv, message: SourceQueueMessage): Promise<void> {
   const config = loadConfig(env);
   validateCanonicalSourcePath(message.sourcePath, config.sourcePrefix);
   const job = await loadJob(env.DB, message.databaseId, message.sourcePath);
@@ -93,18 +102,31 @@ export function parseManualRunInput(value: unknown): ManualRunInput | string {
 
 export function parseQueueMessage(value: unknown): QueueMessage | null {
   if (!isObject(value)) return null;
-  if (typeof value.databaseId !== "string") return null;
-  if (typeof value.sourcePath !== "string") return null;
-  if (typeof value.sourceEtag !== "string") return null;
-  if ("kind" in value && value.kind !== undefined && value.kind !== "source") return null;
-  if ("requestPath" in value && value.requestPath !== undefined && typeof value.requestPath !== "string") return null;
-  return {
-    kind: "source",
-    databaseId: value.databaseId,
-    sourcePath: value.sourcePath,
-    sourceEtag: value.sourceEtag,
-    requestPath: typeof value.requestPath === "string" ? value.requestPath : undefined
-  };
+  if (value.kind === "source") {
+    if (typeof value.databaseId !== "string") return null;
+    if (typeof value.sourcePath !== "string") return null;
+    if (typeof value.sourceEtag !== "string") return null;
+    if ("requestPath" in value && value.requestPath !== undefined && typeof value.requestPath !== "string") return null;
+    return {
+      kind: "source",
+      databaseId: value.databaseId,
+      sourcePath: value.sourcePath,
+      sourceEtag: value.sourceEtag,
+      requestPath: typeof value.requestPath === "string" ? value.requestPath : undefined
+    };
+  }
+  if (value.kind === "url_ingest") {
+    if (typeof value.canisterId !== "string") return null;
+    if (typeof value.databaseId !== "string") return null;
+    if (typeof value.requestPath !== "string") return null;
+    return {
+      kind: "url_ingest",
+      canisterId: value.canisterId,
+      databaseId: value.databaseId,
+      requestPath: value.requestPath
+    };
+  }
+  return null;
 }
 
 async function generateFromSource(env: RuntimeEnv, vfs: VfsClient, config: WorkerConfig, databaseId: string, source: WikiNode): Promise<GeneratedDraft> {

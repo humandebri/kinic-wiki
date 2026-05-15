@@ -3,12 +3,12 @@
 // Why: Generation should run outside the wiki browser UI server.
 import { isAuthorized } from "./auth.js";
 import { parseManualRunInput, parseQueueMessage, processQueueMessage, runManual } from "./processing.js";
-import { parseUrlIngestTriggerInput, prepareUrlIngestTrigger, triggerUrlIngestRequest, UrlIngestTriggerError } from "./url-ingest.js";
+import { parseUrlIngestTriggerInput, UrlIngestTriggerError, validateUrlIngestTriggerInput } from "./url-ingest.js";
 import type { QueueMessage } from "./types.js";
 import type { RuntimeEnv } from "./env.js";
 
 export default {
-  async fetch(request, env, ctx): Promise<Response> {
+  async fetch(request, env, _ctx): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/url-ingest") {
       const authError = await workerAuthError(request, env);
@@ -23,18 +23,13 @@ export default {
       if (typeof input === "string") {
         return jsonResponse({ error: input }, 400);
       }
-      let triggerContext: Awaited<ReturnType<typeof prepareUrlIngestTrigger>>;
       try {
-        triggerContext = await prepareUrlIngestTrigger(env, input);
+        validateUrlIngestTriggerInput(env, input);
       } catch (error) {
         const status = error instanceof UrlIngestTriggerError ? error.status : 500;
         return jsonResponse({ error: errorMessage(error) }, status);
       }
-      ctx.waitUntil(
-        triggerUrlIngestRequest(env, input, triggerContext).catch((error) => {
-          console.error("url ingest trigger failed", errorMessage(error));
-        })
-      );
+      await env.WIKI_GENERATION_QUEUE.send({ kind: "url_ingest", ...input });
       return jsonResponse({ accepted: true, databaseId: input.databaseId, requestPath: input.requestPath }, 202);
     }
     if (request.method !== "POST" || url.pathname !== "/run") {
@@ -66,7 +61,12 @@ export default {
         message.ack();
         continue;
       }
-      await processQueueMessage(env, parsed);
+      try {
+        await processQueueMessage(env, parsed);
+      } catch (error) {
+        console.error("wiki-generator queue message failed", errorMessage(error));
+        throw error;
+      }
       message.ack();
     }
   }

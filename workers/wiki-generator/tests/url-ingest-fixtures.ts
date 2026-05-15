@@ -179,14 +179,26 @@ function completedJobFromQueue(values: D1Value[]): unknown {
 }
 
 function isQueueMessage(value: unknown): value is QueueMessage {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "databaseId" in value &&
-    "sourcePath" in value &&
-    "sourceEtag" in value &&
-    typeof value.databaseId === "string" &&
-    typeof value.sourcePath === "string" &&
-    typeof value.sourceEtag === "string"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  if ("kind" in value && value.kind === "source") {
+    return (
+      "databaseId" in value &&
+      "sourcePath" in value &&
+      "sourceEtag" in value &&
+      typeof value.databaseId === "string" &&
+      typeof value.sourcePath === "string" &&
+      typeof value.sourceEtag === "string"
+    );
+  }
+  if ("kind" in value && value.kind === "url_ingest") {
+    return (
+      "canisterId" in value &&
+      "databaseId" in value &&
+      "requestPath" in value &&
+      typeof value.canisterId === "string" &&
+      typeof value.databaseId === "string" &&
+      typeof value.requestPath === "string"
+    );
+  }
+  return false;
 }
