@@ -61,8 +61,8 @@ fn load_internet_identity(
     let public_key = decode_hex_field(&stored.public_key, "publicKey")?;
     let now_nanos = now_nanos()?;
     let delegations = parse_signed_delegations(&stored, now_nanos, identity_name)?;
-    let identity = DelegatedIdentity::new(public_key, session_identity, delegations)
-        .with_context(|| format!("failed to verify II delegation for `{identity_name}`"))?;
+    ensure_delegation_matches_session_key(&*session_identity, &delegations, identity_name)?;
+    let identity = DelegatedIdentity::new_unchecked(public_key, session_identity, delegations);
     Ok(Box::new(identity))
 }
 
@@ -108,6 +108,28 @@ fn parse_signed_delegations(
             })
         })
         .collect()
+}
+
+fn ensure_delegation_matches_session_key(
+    session_identity: &dyn ic_agent::Identity,
+    delegations: &[SignedDelegation],
+    identity_name: &str,
+) -> Result<()> {
+    let session_public_key = session_identity
+        .public_key()
+        .ok_or_else(|| anyhow!("exported session key for `{identity_name}` has no public key"))?;
+    let delegated_public_key = delegations
+        .last()
+        .ok_or_else(|| refresh_required(identity_name))?
+        .delegation
+        .pubkey
+        .as_slice();
+    if delegated_public_key != session_public_key.as_slice() {
+        bail!(
+            "icp-cli Internet Identity delegation for `{identity_name}` does not match the exported session key; run `icp identity login {identity_name}`"
+        );
+    }
+    Ok(())
 }
 
 fn read_identity_metadata(identity_dir: &Path, identity_name: &str) -> Result<IdentityMetadata> {
@@ -242,6 +264,7 @@ mod tests {
 
     const ROOT_SECP256K1_PEM: &str = "-----BEGIN EC PARAMETERS-----\nBgUrgQQACg==\n-----END EC PARAMETERS-----\n-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEIAgy7nZEcVHkQ4Z1Kdqby8SwyAiyKDQmtbEHTIM+WNeBoAcGBSuBBAAK\noUQDQgAEgO87rJ1ozzdMvJyZQ+GABDqUxGLvgnAnTlcInV3NuhuPv4O3VGzMGzeB\nN3d26cRxD99TPtm8uo2OuzKhSiq6EQ==\n-----END EC PRIVATE KEY-----\n";
     const ROOT_PUBLIC_KEY_HEX: &str = "3056301006072a8648ce3d020106052b8104000a0342000480ef3bac9d68cf374cbc9c9943e180043a94c462ef8270274e57089d5dcdba1b8fbf83b7546ccc1b3781377776e9c4710fdf533ed9bcba8d8ebb32a14a2aba11";
+    const CANISTER_SIGNATURE_ROOT_PUBLIC_KEY_HEX: &str = "303c300c060a2b0601040183b8430102032c000a000000000000000701019e63ea315f972f402b1817d6cffacace890908573c288b3c3aae61ef799e5924";
     const SESSION_PRIME256V1_PEM: &str = "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIL1ybmbwx+uKYsscOZcv71MmKhrNqfPP0ke1unET5AY4oAoGCCqGSM49\nAwEHoUQDQgAEUbbZV4NerZTPWfbQ749/GNLu8TaH8BUS/I7/+ipsu+MPywfnBFIZ\nSks4xGbA/ZbazsrMl4v446U5UIVxCGGaKw==\n-----END EC PRIVATE KEY-----\n";
     const SESSION_PUBLIC_KEY_HEX: &str = "3059301306072a8648ce3d020106082a8648ce3d0301070342000451b6d957835ead94cf59f6d0ef8f7f18d2eef13687f01512fc8efffa2a6cbbe30fcb07e70452194a4b38c466c0fd96dacecacc978bf8e3a53950857108619a2b";
 
@@ -301,11 +324,64 @@ mod tests {
             }],
         };
         let chain = parse_signed_delegations(&stored, 1, "ii").unwrap();
+        ensure_delegation_matches_session_key(&*session, &chain, "ii").unwrap();
         let identity =
             DelegatedIdentity::new(hex::decode(ROOT_PUBLIC_KEY_HEX).unwrap(), session, chain)
                 .unwrap();
 
         assert_eq!(identity.sender().unwrap(), root.sender().unwrap());
+    }
+
+    #[test]
+    fn builds_unchecked_delegated_identity_from_canister_signature_root() {
+        let session = vfs_client::identity_from_pem(SESSION_PRIME256V1_PEM.as_bytes()).unwrap();
+        let public_key = hex::decode(CANISTER_SIGNATURE_ROOT_PUBLIC_KEY_HEX).unwrap();
+        let stored = StoredDelegationChain {
+            public_key: CANISTER_SIGNATURE_ROOT_PUBLIC_KEY_HEX.to_string(),
+            delegations: vec![StoredSignedDelegation {
+                signature: "d9d9f7a2".to_string(),
+                delegation: StoredDelegation {
+                    pubkey: SESSION_PUBLIC_KEY_HEX.to_string(),
+                    expiration: "38fef81a76b80000".to_string(),
+                    targets: None,
+                },
+            }],
+        };
+        let chain = parse_signed_delegations(&stored, 1, "ii").unwrap();
+
+        assert!(
+            DelegatedIdentity::new(
+                public_key.clone(),
+                vfs_client::identity_from_pem(SESSION_PRIME256V1_PEM.as_bytes()).unwrap(),
+                chain.clone(),
+            )
+            .is_err()
+        );
+        ensure_delegation_matches_session_key(&*session, &chain, "ii").unwrap();
+        let identity = DelegatedIdentity::new_unchecked(public_key.clone(), session, chain);
+
+        assert_eq!(identity.public_key(), Some(public_key));
+    }
+
+    #[test]
+    fn mismatched_delegation_requests_icp_identity_login() {
+        let session = vfs_client::identity_from_pem(SESSION_PRIME256V1_PEM.as_bytes()).unwrap();
+        let stored = StoredDelegationChain {
+            public_key: CANISTER_SIGNATURE_ROOT_PUBLIC_KEY_HEX.to_string(),
+            delegations: vec![StoredSignedDelegation {
+                signature: "d9d9f7a2".to_string(),
+                delegation: StoredDelegation {
+                    pubkey: ROOT_PUBLIC_KEY_HEX.to_string(),
+                    expiration: "38fef81a76b80000".to_string(),
+                    targets: None,
+                },
+            }],
+        };
+        let chain = parse_signed_delegations(&stored, 1, "kinic-ii").unwrap();
+        let error = ensure_delegation_matches_session_key(&*session, &chain, "kinic-ii")
+            .expect_err("mismatched session key should be rejected");
+
+        assert!(error.to_string().contains("icp identity login kinic-ii"));
     }
 
     #[test]
