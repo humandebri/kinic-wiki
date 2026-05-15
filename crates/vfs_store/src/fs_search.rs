@@ -121,7 +121,7 @@ pub(crate) fn load_ranked_fts_candidates(
         let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
         let rows = crate::sqlite::query_map(
             &mut stmt,
-            crate::sqlite::params_from_iter(values.iter()),
+            crate::sqlite::params_from_values(&values),
             |row| {
                 Ok((
                     crate::sqlite::row_get::<i64>(row, 0)?,
@@ -179,7 +179,7 @@ pub(crate) fn load_path_candidates(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         |row| {
             Ok(SearchPathHit {
                 row_id: crate::sqlite::row_get::<i64>(row, 0)?,
@@ -222,7 +222,7 @@ pub(crate) fn load_content_substring_candidates(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let rows = crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         |row| {
             Ok((
                 crate::sqlite::row_get::<i64>(row, 0)?,
@@ -482,16 +482,12 @@ fn load_contents_by_id(conn: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, S
         .join(", ");
     let sql = format!("SELECT id, content FROM fs_nodes WHERE id IN ({placeholders})");
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    let rows = crate::sqlite::query_map(
-        &mut stmt,
-        crate::sqlite::params_from_iter(ids.iter().copied()),
-        |row| {
-            Ok((
-                crate::sqlite::row_get::<i64>(row, 0)?,
-                crate::sqlite::row_get::<String>(row, 1)?,
-            ))
-        },
-    )
+    let rows = crate::sqlite::query_map(&mut stmt, crate::sqlite::params_from_i64s(ids), |row| {
+        Ok((
+            crate::sqlite::row_get::<i64>(row, 0)?,
+            crate::sqlite::row_get::<String>(row, 1)?,
+        ))
+    })
     .map_err(|error| error.to_string())?;
     Ok(rows.into_iter().collect())
 }

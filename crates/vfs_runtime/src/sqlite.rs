@@ -284,7 +284,7 @@ pub(crate) trait ExecuteValues {
 #[cfg(target_arch = "wasm32")]
 impl ExecuteValues for Connection {
     fn execute_values(&self, sql: &str, values: &[types::Value]) -> Result<()> {
-        let params = params_from_iter(values.iter());
+        let params = params_from_values(values);
         self.execute(sql, params.as_slice())
     }
 }
@@ -292,7 +292,7 @@ impl ExecuteValues for Connection {
 #[cfg(target_arch = "wasm32")]
 impl ExecuteValues for Transaction<'_> {
     fn execute_values(&self, sql: &str, values: &[types::Value]) -> Result<()> {
-        let params = params_from_iter(values.iter());
+        let params = params_from_values(values);
         self.execute(sql, params.as_slice())
     }
 }
@@ -307,32 +307,6 @@ pub(crate) fn execute_values(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn params_from_iter<I, T>(values: I) -> Vec<&'static dyn ToSql>
-where
-    I: IntoIterator<Item = T>,
-    T: IntoParamRef,
-{
-    values
-        .into_iter()
-        .map(IntoParamRef::into_param_ref)
-        .collect()
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) trait IntoParamRef {
-    fn into_param_ref(self) -> &'static dyn ToSql;
-}
-
-#[cfg(target_arch = "wasm32")]
-impl IntoParamRef for &types::Value {
-    fn into_param_ref(self) -> &'static dyn ToSql {
-        Box::leak(Box::new(self.clone()))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl IntoParamRef for i64 {
-    fn into_param_ref(self) -> &'static dyn ToSql {
-        Box::leak(Box::new(types::Value::Integer(self)))
-    }
+pub(crate) fn params_from_values(values: &[types::Value]) -> Vec<&dyn ToSql> {
+    values.iter().map(|value| value as &dyn ToSql).collect()
 }

@@ -156,8 +156,8 @@ impl FsStore {
     pub fn status(&self) -> Result<Status, String> {
         self.read_conn(|conn| {
             Ok(Status {
-                file_count: count_nodes(&conn, "file")?,
-                source_count: count_nodes(&conn, "source")?,
+                file_count: count_nodes(conn, "file")?,
+                source_count: count_nodes(conn, "source")?,
             })
         })
     }
@@ -229,7 +229,7 @@ impl FsStore {
     ) -> Result<WriteNodeResult, String> {
         let path = normalize_node_path(&request.path, false)?;
         self.write_conn(|tx| {
-            let existing = load_stored_node(&tx, &path)?;
+            let existing = load_stored_node(tx, &path)?;
             if existing
                 .as_ref()
                 .is_some_and(|stored| stored.node.kind == NodeKind::Folder)
@@ -241,12 +241,12 @@ impl FsStore {
                 Some(current) => append_existing_node(current.node.clone(), request, now)?,
                 None => create_appended_node(path, request, now)?,
             };
-            let revision = record_change(&tx, &node)?;
-            update_path_state(&tx, &node.path, revision)?;
+            let revision = record_change(tx, &node)?;
+            update_path_state(tx, &node.path, revision)?;
             node.etag = compute_node_etag(&node);
-            let row_id = save_node(&tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
-            sync_node_fts(&tx, existing.as_ref(), Some((row_id, &node)))?;
-            sync_node_links(&tx, &node)?;
+            let row_id = save_node(tx, existing.as_ref().map(|stored| stored.row_id), &node)?;
+            sync_node_fts(tx, existing.as_ref(), Some((row_id, &node)))?;
+            sync_node_links(tx, &node)?;
             Ok(WriteNodeResult {
                 node: node_ack(&node),
                 created,
@@ -260,7 +260,7 @@ impl FsStore {
         }
         let path = normalize_node_path(&request.path, false)?;
         self.write_conn(|tx| {
-            let current = load_stored_node(&tx, &path)?
+            let current = load_stored_node(tx, &path)?
                 .ok_or_else(|| format!("node does not exist: {path}"))?;
             if current.node.kind == NodeKind::Folder {
                 return Err(format!("cannot edit folder: {path}"));
@@ -277,12 +277,12 @@ impl FsStore {
             let mut node = current.node.clone();
             node.content = content;
             node.updated_at = now;
-            let revision = record_change(&tx, &node)?;
-            update_path_state(&tx, &node.path, revision)?;
+            let revision = record_change(tx, &node)?;
+            update_path_state(tx, &node.path, revision)?;
             node.etag = compute_node_etag(&node);
-            save_node(&tx, Some(current.row_id), &node)?;
-            sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
-            sync_node_links(&tx, &node)?;
+            save_node(tx, Some(current.row_id), &node)?;
+            sync_node_fts(tx, Some(&current), Some((current.row_id, &node)))?;
+            sync_node_links(tx, &node)?;
             Ok(EditNodeResult {
                 node: node_ack(&node),
                 replacement_count,
@@ -297,7 +297,7 @@ impl FsStore {
     ) -> Result<MkdirNodeResult, String> {
         let path = normalize_node_path(&request.path, false)?;
         self.write_conn(|tx| {
-            if let Some(existing) = load_stored_node(&tx, &path)? {
+            if let Some(existing) = load_stored_node(tx, &path)? {
                 if existing.node.kind == NodeKind::Folder {
                     return Ok(MkdirNodeResult {
                         path,
@@ -315,10 +315,10 @@ impl FsStore {
                 etag: String::new(),
                 metadata_json: "{}".to_string(),
             };
-            let revision = record_change(&tx, &node)?;
-            update_path_state(&tx, &node.path, revision)?;
+            let revision = record_change(tx, &node)?;
+            update_path_state(tx, &node.path, revision)?;
             node.etag = compute_node_etag(&node);
-            save_node(&tx, None, &node)?;
+            save_node(tx, None, &node)?;
             Ok(MkdirNodeResult {
                 path,
                 created: true,
@@ -333,7 +333,7 @@ impl FsStore {
             return Err("from_path and to_path must differ".to_string());
         }
         self.write_conn(|tx| {
-            let current = load_stored_node(&tx, &from_path)?
+            let current = load_stored_node(tx, &from_path)?
                 .ok_or_else(|| format!("node does not exist: {from_path}"))?;
             if current.node.etag != request.expected_etag.unwrap_or_default() {
                 return Err(format!(
@@ -348,7 +348,7 @@ impl FsStore {
                     return Err("cannot move folder into itself".to_string());
                 }
             }
-            let target = load_stored_node(&tx, &to_path)?;
+            let target = load_stored_node(tx, &to_path)?;
             let overwrote = target.is_some();
             if current.node.kind == NodeKind::Folder && overwrote {
                 return Err(format!("target node already exists: {to_path}"));
@@ -363,10 +363,10 @@ impl FsStore {
                 return Err(format!("cannot overwrite folder: {to_path}"));
             }
             if current.node.kind == NodeKind::Folder {
-                let subtree = load_stored_subtree(&tx, &from_path)?;
+                let subtree = load_stored_subtree(tx, &from_path)?;
                 for stored in &subtree {
                     let next_path = rebase_path(&stored.node.path, &from_path, &to_path)?;
-                    if next_path != stored.node.path && load_stored_node(&tx, &next_path)?.is_some()
+                    if next_path != stored.node.path && load_stored_node(tx, &next_path)?.is_some()
                     {
                         return Err(format!("target node already exists: {next_path}"));
                     }
@@ -376,17 +376,17 @@ impl FsStore {
                     let old_path = moved.path.clone();
                     moved.path = rebase_path(&old_path, &from_path, &to_path)?;
                     moved.updated_at = now;
-                    let from_revision = record_path_removal(&tx, &old_path)?;
-                    update_path_state(&tx, &old_path, from_revision)?;
-                    let to_revision = record_change(&tx, &moved)?;
-                    update_path_state(&tx, &moved.path, to_revision)?;
+                    let from_revision = record_path_removal(tx, &old_path)?;
+                    update_path_state(tx, &old_path, from_revision)?;
+                    let to_revision = record_change(tx, &moved)?;
+                    update_path_state(tx, &moved.path, to_revision)?;
                     moved.etag = compute_node_etag(&moved);
-                    save_moved_node(&tx, stored.row_id, &moved)?;
-                    sync_node_fts(&tx, Some(&stored), Some((stored.row_id, &moved)))?;
-                    delete_source_links(&tx, &old_path)?;
-                    sync_node_links(&tx, &moved)?;
+                    save_moved_node(tx, stored.row_id, &moved)?;
+                    sync_node_fts(tx, Some(&stored), Some((stored.row_id, &moved)))?;
+                    delete_source_links(tx, &old_path)?;
+                    sync_node_links(tx, &moved)?;
                 }
-                let moved = load_node(&tx, &to_path)?
+                let moved = load_node(tx, &to_path)?
                     .ok_or_else(|| format!("node does not exist: {to_path}"))?;
                 return Ok(MoveNodeResult {
                     node: node_ack(&moved),
@@ -395,21 +395,21 @@ impl FsStore {
                 });
             }
             if let Some(target) = target.as_ref() {
-                delete_source_links(&tx, &target.node.path)?;
-                delete_node_row(&tx, target)?;
+                delete_source_links(tx, &target.node.path)?;
+                delete_node_row(tx, target)?;
             }
             let mut moved = current.node.clone();
             moved.path = to_path.clone();
             moved.updated_at = now;
-            let from_revision = record_path_removal(&tx, &from_path)?;
-            update_path_state(&tx, &from_path, from_revision)?;
-            let to_revision = record_change(&tx, &moved)?;
-            update_path_state(&tx, &to_path, to_revision)?;
+            let from_revision = record_path_removal(tx, &from_path)?;
+            update_path_state(tx, &from_path, from_revision)?;
+            let to_revision = record_change(tx, &moved)?;
+            update_path_state(tx, &to_path, to_revision)?;
             moved.etag = compute_node_etag(&moved);
-            save_moved_node(&tx, current.row_id, &moved)?;
-            sync_node_fts(&tx, Some(&current), Some((current.row_id, &moved)))?;
-            delete_source_links(&tx, &from_path)?;
-            sync_node_links(&tx, &moved)?;
+            save_moved_node(tx, current.row_id, &moved)?;
+            sync_node_fts(tx, Some(&current), Some((current.row_id, &moved)))?;
+            delete_source_links(tx, &from_path)?;
+            sync_node_links(tx, &moved)?;
             Ok(MoveNodeResult {
                 node: node_ack(&moved),
                 from_path,
@@ -478,7 +478,7 @@ impl FsStore {
             let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
             crate::sqlite::query_map(
                 &mut stmt,
-                crate::sqlite::params_from_iter(values.iter()),
+                crate::sqlite::params_from_values(&values),
                 |row| {
                     Ok(RecentNodeHit {
                         path: crate::sqlite::row_get::<String>(row, 0)?,
@@ -502,7 +502,7 @@ impl FsStore {
             return Err("edits must not be empty".to_string());
         }
         self.write_conn(|tx| {
-            let current = load_stored_node(&tx, &path)?
+            let current = load_stored_node(tx, &path)?
                 .ok_or_else(|| format!("node does not exist: {path}"))?;
             if current.node.kind == NodeKind::Folder {
                 return Err(format!("cannot edit folder: {path}"));
@@ -515,12 +515,12 @@ impl FsStore {
             let mut node = current.node.clone();
             node.content = content;
             node.updated_at = now;
-            let revision = record_change(&tx, &node)?;
-            update_path_state(&tx, &node.path, revision)?;
+            let revision = record_change(tx, &node)?;
+            update_path_state(tx, &node.path, revision)?;
             node.etag = compute_node_etag(&node);
-            save_node(&tx, Some(current.row_id), &node)?;
-            sync_node_fts(&tx, Some(&current), Some((current.row_id, &node)))?;
-            sync_node_links(&tx, &node)?;
+            save_node(tx, Some(current.row_id), &node)?;
+            sync_node_fts(tx, Some(&current), Some((current.row_id, &node)))?;
+            sync_node_links(tx, &node)?;
             Ok(MultiEditNodeResult {
                 node: node_ack(&node),
                 replacement_count,
@@ -536,7 +536,7 @@ impl FsStore {
         let path = normalize_node_path(&request.path, false)?;
         self.write_conn(|tx| {
         let current =
-            load_stored_node(&tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))?;
+            load_stored_node(tx, &path)?.ok_or_else(|| format!("node does not exist: {path}"))?;
         if current.node.etag != request.expected_etag.unwrap_or_default() {
             return Err(format!("expected_etag does not match current etag: {path}"));
         }
@@ -545,8 +545,8 @@ impl FsStore {
                 return Err(format!("cannot delete protected folder: {path}"));
             }
             let index_path = folder_index_path(&path);
-            let index_node = load_folder_index_child(&tx, current.row_id, &index_path)?;
-            if has_visible_folder_children(&tx, current.row_id, &index_path)? {
+            let index_node = load_folder_index_child(tx, current.row_id, &index_path)?;
+            if has_visible_folder_children(tx, current.row_id, &index_path)? {
                 return Err(format!("folder is not empty: {path}"));
             }
             match index_node {
@@ -562,7 +562,7 @@ impl FsStore {
                             "expected_folder_index_etag does not match current etag: {index_path}"
                         ));
                     }
-                    delete_node_with_history(&tx, &index_node)?;
+                    delete_node_with_history(tx, &index_node)?;
                 }
                 None if request.expected_folder_index_etag.is_some() => {
                     return Err(format!("folder index node does not exist: {index_path}"));
@@ -574,7 +574,7 @@ impl FsStore {
                 "expected_folder_index_etag is only valid for folder deletes: {path}"
             ));
         }
-        delete_node_with_history(&tx, &current)?;
+        delete_node_with_history(tx, &current)?;
         Ok(DeleteNodeResult { path })
         })
     }
@@ -826,7 +826,7 @@ impl FsStore {
             let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
             let mut candidates = crate::sqlite::query_map(
                 &mut stmt,
-                crate::sqlite::params_from_iter(values.iter()),
+                crate::sqlite::params_from_values(&values),
                 |row| {
                     let path = crate::sqlite::row_get::<String>(row, 1)?;
                     let first_match_position = crate::sqlite::row_get::<i64>(row, 3)?;
@@ -1275,7 +1275,7 @@ fn load_snapshot_nodes_page(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let paths = crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         |row| crate::sqlite::row_get::<String>(row, 0),
     )
     .map_err(|error| error.to_string())?;
@@ -1330,7 +1330,7 @@ fn load_changed_paths_page(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         |row| crate::sqlite::row_get::<String>(row, 0),
     )
     .map_err(|error| error.to_string())
@@ -1350,7 +1350,7 @@ fn has_prefix_changes_after_revision(
     }
     sql.push_str(" LIMIT 1");
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    crate::sqlite::statement_exists(&mut stmt, crate::sqlite::params_from_iter(values.iter()))
+    crate::sqlite::statement_exists(&mut stmt, crate::sqlite::params_from_values(&values))
         .map_err(|error| error.to_string())
 }
 

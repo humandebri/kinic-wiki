@@ -34,14 +34,14 @@ pub fn run_fs_migrations(conn: &mut Connection) -> Result<(), String> {
 
 pub fn run_fs_migrations_in_tx(tx: &Transaction<'_>) -> Result<(), String> {
     ensure_schema_migrations_table(tx)?;
-    reject_legacy_schema(&tx)?;
+    reject_legacy_schema(tx)?;
     for (version, sql) in MIGRATIONS {
-        if migration_already_applied(&tx, version)? {
+        if migration_already_applied(tx, version)? {
             continue;
         }
         tx.execute_batch(sql).map_err(|error| error.to_string())?;
-        run_post_migration_hook(&tx, version)?;
-        record_schema_migration(&tx, version)?;
+        run_post_migration_hook(tx, version)?;
+        record_schema_migration(tx, version)?;
     }
     Ok(())
 }

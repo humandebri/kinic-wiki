@@ -190,7 +190,7 @@ impl VfsService {
             let event_id =
                 crate::sqlite::last_insert_rowid(conn).map_err(|error| error.to_string())?;
             if event_id % USAGE_EVENTS_PURGE_INTERVAL == 0 {
-                let _ = purge_old_usage_events(&conn);
+                let _ = purge_old_usage_events(conn);
             }
             Ok(())
         })
@@ -233,11 +233,11 @@ impl VfsService {
         now: i64,
     ) -> Result<DatabaseMeta, String> {
         self.write_index(|tx| {
-            let mount_id = allocate_mount_id(&tx)?;
+            let mount_id = allocate_mount_id(tx)?;
             let mut selected_database_id = None;
             for attempt in 0_u32..100 {
                 let database_id = generated_database_id(caller, now, mount_id, attempt);
-                if !database_exists(&tx, &database_id)? {
+                if !database_exists(tx, &database_id)? {
                     selected_database_id = Some(database_id);
                     break;
                 }
@@ -259,8 +259,8 @@ impl VfsService {
                 ],
             )
             .map_err(|error| error.to_string())?;
-            record_mount_history(&tx, &database_id, mount_id, "create", now)?;
-            insert_initial_database_members(&tx, &database_id, caller, now)?;
+            record_mount_history(tx, &database_id, mount_id, "create", now)?;
+            insert_initial_database_members(tx, &database_id, caller, now)?;
             Ok(DatabaseMeta {
                 database_id,
                 db_file_name,
@@ -279,10 +279,10 @@ impl VfsService {
     ) -> Result<DatabaseMeta, String> {
         validate_database_id(database_id)?;
         self.write_index(|tx| {
-            if database_exists(&tx, database_id)? {
+            if database_exists(tx, database_id)? {
                 return Err(format!("database already exists: {database_id}"));
             }
-            let mount_id = allocate_mount_id(&tx)?;
+            let mount_id = allocate_mount_id(tx)?;
             let db_file_name = self.database_file_name(database_id, mount_id)?;
             tx.execute(
                 "INSERT INTO databases
@@ -298,8 +298,8 @@ impl VfsService {
                 ],
             )
             .map_err(|error| error.to_string())?;
-            record_mount_history(&tx, database_id, mount_id, "create", now)?;
-            insert_initial_database_members(&tx, database_id, caller, now)?;
+            record_mount_history(tx, database_id, mount_id, "create", now)?;
+            insert_initial_database_members(tx, database_id, caller, now)?;
             Ok(DatabaseMeta {
                 database_id: database_id.to_string(),
                 db_file_name,
@@ -545,9 +545,9 @@ impl VfsService {
             );
         }
         self.write_index(|tx| {
-            let mount_id = allocate_mount_id(&tx)?;
-            record_mount_history(&tx, database_id, mount_id, "restore", now)?;
-            record_database_restore_session(&tx, &rollback, now)?;
+            let mount_id = allocate_mount_id(tx)?;
+            record_mount_history(tx, database_id, mount_id, "restore", now)?;
+            record_database_restore_session(tx, &rollback, now)?;
             tx.execute(
                 "DELETE FROM database_restore_chunks WHERE database_id = ?1",
                 params![database_id],
@@ -586,7 +586,7 @@ impl VfsService {
         now: i64,
     ) -> Result<(), String> {
         self.write_index(|tx| {
-            let current_status = load_database_status(&tx, &rollback.database_id)?;
+            let current_status = load_database_status(tx, &rollback.database_id)?;
             if current_status != DatabaseStatus::Restoring {
                 return Err(format!(
                     "database restore rollback requires restoring status: {}",
@@ -598,7 +598,7 @@ impl VfsService {
                 params![rollback.database_id],
             )
             .map_err(|error| error.to_string())?;
-            restore_database_state(&tx, &rollback, now)?;
+            restore_database_state(tx, &rollback, now)?;
             Ok(())
         })
     }
@@ -624,7 +624,7 @@ impl VfsService {
                 params![database_id],
             )
             .map_err(|error| error.to_string())?;
-            restore_database_state(&tx, &rollback, now)?;
+            restore_database_state(tx, &rollback, now)?;
             Ok(())
         })?;
         Ok(meta)

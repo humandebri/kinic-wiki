@@ -124,7 +124,7 @@ pub(crate) fn load_graph_links(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         edge_from_row,
     )
     .map_err(|error| error.to_string())

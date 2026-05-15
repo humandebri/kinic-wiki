@@ -168,7 +168,7 @@ async fn run_create_restore_smoke(
         })
         .await?;
 
-    assert_database_isolation(&client, &database_id, &isolation_database_id).await?;
+    assert_database_isolation(client, &database_id, &isolation_database_id).await?;
 
     let before_links = client
         .outgoing_links(OutgoingLinksRequest {
@@ -186,7 +186,7 @@ async fn run_create_restore_smoke(
 
     let archive = client.begin_database_archive(&database_id).await?;
     let archive_bytes =
-        read_archive_bytes(&client, &database_id, archive.size_bytes, chunk_size).await?;
+        read_archive_bytes(client, &database_id, archive.size_bytes, chunk_size).await?;
     let snapshot_hash = Sha256::digest(&archive_bytes).to_vec();
     client
         .finalize_database_archive(&database_id, snapshot_hash.clone())
@@ -198,7 +198,7 @@ async fn run_create_restore_smoke(
     {
         return Err(anyhow!("archived database unexpectedly allowed read_node"));
     }
-    assert_isolation_database_still_hot(&client, &isolation_database_id).await?;
+    assert_isolation_database_still_hot(client, &isolation_database_id).await?;
 
     client
         .begin_database_restore(&database_id, snapshot_hash.clone(), archive.size_bytes)

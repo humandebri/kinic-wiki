@@ -118,7 +118,7 @@ pub(crate) fn load_scoped_entry_rows(
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     crate::sqlite::query_map(
         &mut stmt,
-        crate::sqlite::params_from_iter(values.iter()),
+        crate::sqlite::params_from_values(&values),
         map_scoped_entry_row,
     )
     .map_err(|error| error.to_string())
