@@ -131,7 +131,7 @@ fn canister_list_databases_returns_caller_membership_summaries() {
 fn update_entrypoints_record_usage_events() {
     install_empty_test_service();
 
-    let database_id = create_database().expect("database should create");
+    let database_id = create_database("usage-events".to_string()).expect("database should create");
     assert_eq!(usage_event_count(), 1);
 
     let failed = write_node(WriteNodeRequest {
@@ -232,12 +232,11 @@ fn write_nodes_rejects_invalid_source_path() {
 }
 
 #[test]
-fn canister_create_database_returns_generated_id_for_followup_reads() {
+fn canister_create_database_returns_requested_id_for_followup_reads() {
     install_empty_test_service();
 
-    let database_id = create_database().expect("database should create");
-    assert!(database_id.starts_with("db_"));
-    assert_eq!(database_id.len(), 15);
+    let database_id = create_database("team-skills".to_string()).expect("database should create");
+    assert_eq!(database_id, "team-skills");
 
     let status = status(database_id.clone());
     assert_eq!(status.file_count, 0);
@@ -246,7 +245,7 @@ fn canister_create_database_returns_generated_id_for_followup_reads() {
         database_id,
         path: "/Wiki".to_string(),
     })
-    .expect("generated database should list");
+    .expect("requested database should list");
     assert!(children.is_empty());
 }
 

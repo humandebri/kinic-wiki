@@ -232,7 +232,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
     check_ops_answer_session: idl.Func([OpsAnswerSessionCheckRequest], [ResultOpsAnswerSessionCheck], ["query"]),
     check_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionCheckRequest], [ResultUnit], ["query"]),
-    create_database: idl.Func([], [ResultCreateDatabase], []),
+    create_database: idl.Func([idl.Text], [ResultCreateDatabase], []),
     delete_node: idl.Func([DeleteNodeRequest], [ResultDeleteNode], []),
     grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),

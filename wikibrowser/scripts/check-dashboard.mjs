@@ -8,6 +8,7 @@ const dashboardUi = readFileSync(new URL("../app/dashboard/dashboard-ui.tsx", im
 const dashboardActionButton = readFileSync(new URL("../app/dashboard/action-button.tsx", import.meta.url), "utf8");
 const dashboardAccessControl = readFileSync(new URL("../app/dashboard/access-control.ts", import.meta.url), "utf8");
 const dashboardMemberTable = readFileSync(new URL("../app/dashboard/member-table.tsx", import.meta.url), "utf8");
+const createDatabaseDialog = readFileSync(new URL("../app/create-database-dialog.tsx", import.meta.url), "utf8");
 const homeUi = readFileSync(new URL("../app/home-ui.tsx", import.meta.url), "utf8");
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 const wikiLayout = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
@@ -78,6 +79,18 @@ assert.match(homePage, /publicResult\.status === "rejected" \? `Public database 
 assert.doesNotMatch(homePage, /if \(publicResult\.status === "rejected"\) return `Public database list unavailable/);
 assert.match(homePage, /myDatabases = databases\.filter\(\(database\) => database\.member\)/);
 assert.match(homePage, /publicDatabases = databases\.filter\(\(database\) => !database\.member && database\.publicReadable\)/);
+assert.match(homePage, /const \[createDialogOpen, setCreateDialogOpen\] = useState\(false\);/);
+assert.match(homePage, /const \[newDatabaseId, setNewDatabaseId\] = useState\(""\);/);
+assert.match(homePage, /const databaseIdInput = newDatabaseId\.trim\(\);/);
+assert.match(homePage, /createDatabaseAuthenticated\(canisterId, authClient\.getIdentity\(\), databaseIdInput\)/);
+assert.match(homePage, /<CreateDatabaseDialog/);
+assert.match(homePage, /setCreateDialogOpen\(false\);/);
+assert.match(homePage, /function databaseIdError\(databaseId: string\): string \| null/);
+assert.match(createDatabaseDialog, /role="dialog"/);
+assert.match(createDatabaseDialog, /aria-modal="true"/);
+assert.match(createDatabaseDialog, /id="database-id-input"/);
+assert.match(createDatabaseDialog, /disabled=\{createDisabled\}/);
+assert.match(createDatabaseDialog, /Database ID becomes the route and access-management key\./);
 assert.match(homePage, /member: false, publicReadable: true/);
 assert.match(homePage, /member: true, publicReadable: publicIds\.has\(database\.databaseId\)/);
 assert.match(homeUi, /member: boolean/);
@@ -159,7 +172,7 @@ assert.match(homePage, /refreshSeqRef/);
 assert.match(homePage, /isCurrentRefresh/);
 assert.match(dashboardClient, /refreshSeqRef/);
 assert.match(dashboardClient, /isCurrentRefresh/);
-assert.match(homePage, /await authClient\.logout\(\);\n    setPrincipal\(null\);\n    setCreatedDatabaseId\(null\);\n    setError\(null\);\n    setPublicError\(null\);\n    await refreshDatabases\(null\);/);
+assert.match(homePage, /await authClient\.logout\(\);\n    setPrincipal\(null\);\n    setCreatedDatabaseId\(null\);\n    setCreateDialogOpen\(false\);\n    setNewDatabaseId\(""\);\n    setError\(null\);\n    setPublicError\(null\);\n    await refreshDatabases\(null\);/);
 assert.doesNotMatch(homePage, /setDatabases\(\[\]\);\n    setCreatedDatabaseId\(null\);\n    setError\(null\);\n    setWarning\(null\);\n    setLoadState\("idle"\);/);
 assert.match(dashboardClient, /refreshSeqRef\.current \+= 1;\n    await authClient\.logout/);
 

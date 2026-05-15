@@ -76,7 +76,7 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode anonymous --da
 Create a database before reading or writing:
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create <database-id>
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database list
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database link <database-id>
@@ -84,7 +84,7 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- write-node --path /Wiki/file.m
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
-`database create` prints the generated database ID.
+`database create <database-id>` creates the requested database ID and prints it on success.
 `database list` prints databases attached to the caller principal.
 
 For public browser reads, grant anonymous reader access explicitly:

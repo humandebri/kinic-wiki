@@ -419,7 +419,7 @@ impl Command {
         match self {
             Self::Database { command } => matches!(
                 command,
-                DatabaseCommand::Create
+                DatabaseCommand::Create { .. }
                     | DatabaseCommand::Grant { .. }
                     | DatabaseCommand::Revoke { .. }
                     | DatabaseCommand::Members { .. }
@@ -782,6 +782,16 @@ mod tests {
 
     #[test]
     fn main_cli_parses_database_link_commands() {
+        let cli = Cli::parse_from(["kinic-vfs-cli", "database", "create", "team-db"]);
+        let Command::Database {
+            command: DatabaseCommand::Create { database_id },
+        } = cli.command
+        else {
+            panic!("expected database create command");
+        };
+        assert_eq!(database_id, "team-db");
+        assert!(Cli::try_parse_from(["kinic-vfs-cli", "database", "create"]).is_err());
+
         let cli = Cli::parse_from(["kinic-vfs-cli", "database", "link", "team-db"]);
         let Command::Database {
             command: DatabaseCommand::Link { database_id },

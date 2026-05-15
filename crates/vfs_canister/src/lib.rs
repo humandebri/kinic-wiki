@@ -171,24 +171,28 @@ fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String>
 }
 
 #[update]
-fn create_database() -> Result<String, String> {
-    with_usage("create_database", None, |service, caller, now| {
-        let meta = service.reserve_generated_database(caller, now)?;
-        if let Err(error) = mount_database_file(&meta) {
-            let cleanup_error = service
-                .discard_database_reservation(&meta.database_id)
-                .err();
-            return Err(database_create_error(error, cleanup_error));
-        }
-        if let Err(error) = service.run_database_migrations(&meta.database_id) {
-            unmount_database_file(&meta.db_file_name);
-            let cleanup_error = service
-                .discard_database_reservation(&meta.database_id)
-                .err();
-            return Err(database_create_error(error, cleanup_error));
-        }
-        Ok(meta.database_id)
-    })
+fn create_database(database_id: String) -> Result<String, String> {
+    with_usage(
+        "create_database",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.reserve_database(&database_id, caller, now)?;
+            if let Err(error) = mount_database_file(&meta) {
+                let cleanup_error = service
+                    .discard_database_reservation(&meta.database_id)
+                    .err();
+                return Err(database_create_error(error, cleanup_error));
+            }
+            if let Err(error) = service.run_database_migrations(&meta.database_id) {
+                unmount_database_file(&meta.db_file_name);
+                let cleanup_error = service
+                    .discard_database_reservation(&meta.database_id)
+                    .err();
+                return Err(database_create_error(error, cleanup_error));
+            }
+            Ok(meta.database_id)
+        },
+    )
 }
 
 #[update]

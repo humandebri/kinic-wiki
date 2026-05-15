@@ -356,7 +356,7 @@ service : () -> {
   check_url_ingest_trigger_session : (UrlIngestTriggerSessionCheckRequest) -> (
       Result_1,
     ) query;
-  create_database : () -> (Result_4);
+  create_database : (text) -> (Result_4);
   delete_database : (text) -> (Result_1);
   delete_node : (DeleteNodeRequest) -> (Result_5);
   edit_node : (EditNodeRequest) -> (Result_6);

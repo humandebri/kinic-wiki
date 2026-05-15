@@ -566,8 +566,8 @@ async fn run_database_command(
     command: DatabaseCommand,
 ) -> Result<()> {
     match command {
-        DatabaseCommand::Create => {
-            let database_id = client.create_database().await?;
+        DatabaseCommand::Create { database_id } => {
+            let database_id = client.create_database(&database_id).await?;
             println!("{database_id}");
         }
         DatabaseCommand::List { json } => {
@@ -1084,10 +1084,10 @@ mod tests {
         async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn create_database(&self) -> Result<String> {
+        async fn create_database(&self, database_id: &str) -> Result<String> {
             let mut created = self.created.lock().unwrap();
             *created += 1;
-            Ok("db_k7p9x2mq4v8r".to_string())
+            Ok(database_id.to_string())
         }
         async fn list_databases(&self) -> Result<Vec<DatabaseSummary>> {
             let mut lists = self.database_lists.lock().unwrap();
@@ -1431,13 +1431,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_create_uses_generated_id_command() {
+    async fn database_create_uses_requested_id_command() {
         let client = MockClient::default();
         run_vfs_command(
             &client,
             &test_connection(),
             VfsCommand::Database {
-                command: super::DatabaseCommand::Create,
+                command: super::DatabaseCommand::Create {
+                    database_id: "team-skills".to_string(),
+                },
             },
         )
         .await

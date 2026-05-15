@@ -3,6 +3,8 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { Plus } from "lucide-react";
+import { CreateDatabaseDialog } from "./create-database-dialog";
 import { AuthControls, CreatedDatabasePanel, DatabaseBody, StatusPanel } from "./home-ui";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseSummary } from "@/lib/types";
@@ -22,6 +24,8 @@ export default function HomePage() {
   const [publicError, setPublicError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [createdDatabaseId, setCreatedDatabaseId] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newDatabaseId, setNewDatabaseId] = useState("");
   const [creating, setCreating] = useState(false);
 
   const refreshDatabases = useCallback(
@@ -108,6 +112,8 @@ export default function HomePage() {
     await authClient.logout();
     setPrincipal(null);
     setCreatedDatabaseId(null);
+    setCreateDialogOpen(false);
+    setNewDatabaseId("");
     setError(null);
     setPublicError(null);
     await refreshDatabases(null);
@@ -115,11 +121,20 @@ export default function HomePage() {
 
   async function createDatabase() {
     if (!authClient || !canisterId) return;
+    const databaseIdInput = newDatabaseId.trim();
+    const validationError = databaseIdError(databaseIdInput);
+    if (validationError) {
+      setError(validationError);
+      setLoadState("error");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
-      const databaseId = await createDatabaseAuthenticated(canisterId, authClient.getIdentity());
+      const databaseId = await createDatabaseAuthenticated(canisterId, authClient.getIdentity(), databaseIdInput);
       setCreatedDatabaseId(databaseId);
+      setCreateDialogOpen(false);
+      setNewDatabaseId("");
       await refreshDatabases(authClient);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -131,6 +146,9 @@ export default function HomePage() {
 
   const myDatabases = databases.filter((database) => database.member);
   const publicDatabases = databases.filter((database) => !database.member && database.publicReadable);
+  const trimmedDatabaseId = newDatabaseId.trim();
+  const databaseIdValidationError = databaseIdError(trimmedDatabaseId);
+  const createDisabled = creating || loadState === "loading" || databaseIdValidationError !== null;
 
   return (
     <main className="min-h-screen px-6 py-8">
@@ -158,6 +176,20 @@ export default function HomePage() {
         {error ? <StatusPanel tone="error" message={error} /> : null}
         {warning ? <StatusPanel tone="info" message={warning} /> : null}
         {createdDatabaseId ? <CreatedDatabasePanel databaseId={createdDatabaseId} /> : null}
+        <CreateDatabaseDialog
+          createDisabled={createDisabled}
+          creating={creating}
+          databaseId={newDatabaseId}
+          open={createDialogOpen}
+          validationError={databaseIdValidationError}
+          onCancel={() => {
+            if (creating) return;
+            setCreateDialogOpen(false);
+            setNewDatabaseId("");
+          }}
+          onChange={setNewDatabaseId}
+          onSubmit={() => void createDatabase()}
+        />
 
         <section className="rounded-lg border border-line bg-paper shadow-sm">
           {principal ? (
@@ -167,12 +199,13 @@ export default function HomePage() {
                 <p className="mt-1 font-mono text-xs text-muted">{principal}</p>
               </div>
               <button
-                className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
                 disabled={creating || loadState === "loading"}
                 type="button"
-                onClick={createDatabase}
+                onClick={() => setCreateDialogOpen(true)}
               >
-                {creating ? "Creating..." : "Create database"}
+                <Plus aria-hidden size={15} />
+                <span>{creating ? "Creating..." : "Create database"}</span>
               </button>
             </div>
           ) : (
@@ -207,4 +240,10 @@ function listWarning(publicResult: PromiseSettledResult<DatabaseSummary[]>, memb
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Unexpected error";
+}
+
+function databaseIdError(databaseId: string): string | null {
+  if (databaseId.length === 0) return "Database ID is required.";
+  if (databaseId.length > 64) return "Database ID must be 1..64 characters.";
+  return /^[A-Za-z0-9_-]+$/.test(databaseId) ? null : "Database ID may only contain ASCII letters, digits, '-' and '_'.";
 }

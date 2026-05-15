@@ -190,7 +190,7 @@ type VfsActor = {
   canister_health: () => Promise<RawCanisterHealth>;
   check_ops_answer_session: (request: RawQueryAnswerSessionCheckRequest) => Promise<{ Ok: RawQueryAnswerSessionCheckResult } | { Err: string }>;
   check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
-  create_database: () => Promise<{ Ok: string } | { Err: string }>;
+  create_database: (databaseId: string) => Promise<{ Ok: string } | { Err: string }>;
   delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
   mkdir_node: (request: RawMkdirNodeRequest) => Promise<{ Ok: RawMkdirNodeResult } | { Err: string }>;
@@ -360,10 +360,10 @@ export async function listDatabasesPublic(canisterId: string): Promise<DatabaseS
   });
 }
 
-export async function createDatabaseAuthenticated(canisterId: string, identity: Identity): Promise<string> {
+export async function createDatabaseAuthenticated(canisterId: string, identity: Identity, databaseId: string): Promise<string> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
-    const result = await actor.create_database();
+    const result = await actor.create_database(databaseId);
     if ("Err" in result) {
       throw new Error(result.Err);
     }

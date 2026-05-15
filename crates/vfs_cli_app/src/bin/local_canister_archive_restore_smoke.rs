@@ -119,8 +119,8 @@ async fn run_create_restore_smoke(
     canister_id: &str,
     chunk_size: u32,
 ) -> Result<SmokeState> {
-    let database_id = client.create_database().await?;
-    let isolation_database_id = client.create_database().await?;
+    let database_id = client.create_database("archive-smoke").await?;
+    let isolation_database_id = client.create_database("archive-smoke-isolation").await?;
     ensure_parent_folders(client, &database_id, PRIMARY_SOURCE_PATH).await?;
     ensure_parent_folders(client, &isolation_database_id, PRIMARY_SOURCE_PATH).await?;
     client

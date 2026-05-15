@@ -1,6 +1,6 @@
 # Wiki Browser
 
-Read-only browser for Kinic Wiki canisters. The app is a lightweight knowledge IDE and debug UI, not the primary Agent Memory API surface.
+Dashboard for Kinic Wiki canister databases. The app is a lightweight knowledge IDE and debug UI, not the primary Agent Memory API surface.
 
 ## Local
 
@@ -19,11 +19,11 @@ http://localhost:3000/<database-id>/Wiki
 The dashboard can create databases after Internet Identity login. CLI setup is still useful for scripted local setup:
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create <database-id>
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
-`database create` prints the generated database ID. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `NEXT_PUBLIC_II_PROVIDER_URL` overrides the Internet Identity frontend URL for local II. `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
+`database create <database-id>` creates the requested database ID and prints it on success. `NEXT_PUBLIC_WIKI_IC_HOST` controls the browser-side IC agent host. `NEXT_PUBLIC_II_PROVIDER_URL` overrides the Internet Identity frontend URL for local II. `NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID` selects the fixed wiki canister:
 
 ```bash
 # local icp network
@@ -51,6 +51,8 @@ Query Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic 
 ## Scope
 
 - Browse `/Wiki` and `/Sources`
+- Create databases and manage database access
+- Edit Markdown nodes under `/Wiki`
 - Create URL ingest requests under `/Sources/ingest-requests` from the current database browser route
 - Render Markdown preview and raw content
 - Search by path or full text
@@ -58,10 +60,11 @@ Query Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic 
 - Show incoming backlinks and a lightweight graph view
 - Show lightweight lint hints
 - Inspect path, etag, update time, size, role, outgoing links, and inferred raw sources
+- Expose Open Graph and X link preview images
 - Read canister health and Agent Memory API metadata through the hand-written Candid subset
 - Show route-level 404 and VFS not-found states
 
-No full editing or lint workflow is included.
+No full lint workflow is included.
 
 ## URL Ingest
 

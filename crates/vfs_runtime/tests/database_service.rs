@@ -102,14 +102,6 @@ fn database_member_count(root: &std::path::Path, database_id: &str) -> i64 {
     .expect("member count should load")
 }
 
-fn assert_generated_database_id(database_id: &str) {
-    assert!(database_id.starts_with("db_"));
-    assert_eq!(database_id.len(), 15);
-    assert!(database_id.bytes().all(|byte| {
-        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_')
-    }));
-}
-
 fn schema_migration_count(root: &std::path::Path, version: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -755,14 +747,14 @@ fn ops_answer_session_rejects_invalid_and_expired_nonce() {
 }
 
 #[test]
-fn generated_database_create_returns_hash_id_and_owner_member() {
+fn database_create_returns_requested_id_and_owner_member() {
     let (service, root) = service_with_root();
 
     let meta = service
-        .create_generated_database("owner", 1)
-        .expect("generated database should create");
+        .create_database("team-skills", "owner", 1)
+        .expect("database should create");
 
-    assert_generated_database_id(&meta.database_id);
+    assert_eq!(meta.database_id, "team-skills");
     assert_eq!(meta.mount_id, 11);
     assert_eq!(database_member_count(&root, &meta.database_id), 2);
     let row = database_index_row(&root, &meta.database_id);
@@ -773,21 +765,17 @@ fn generated_database_create_returns_hash_id_and_owner_member() {
 }
 
 #[test]
-fn generated_database_create_avoids_same_input_collision_by_mount_id() {
+fn database_create_rejects_duplicate_requested_id() {
     let service = service();
 
-    let first = service
-        .create_generated_database("owner", 1)
-        .expect("first generated database should create");
-    let second = service
-        .create_generated_database("owner", 1)
-        .expect("second generated database should create");
+    service
+        .create_database("team-skills", "owner", 1)
+        .expect("first database should create");
+    let error = service
+        .create_database("team-skills", "owner", 2)
+        .expect_err("duplicate database id should fail");
 
-    assert_generated_database_id(&first.database_id);
-    assert_generated_database_id(&second.database_id);
-    assert_ne!(first.database_id, second.database_id);
-    assert_eq!(first.mount_id, 11);
-    assert_eq!(second.mount_id, 12);
+    assert!(error.contains("database already exists"));
 }
 
 #[test]

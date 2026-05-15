@@ -249,7 +249,9 @@ pub enum VfsCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DatabaseCommand {
-    Create,
+    Create {
+        database_id: String,
+    },
     List {
         #[arg(long)]
         json: bool,
