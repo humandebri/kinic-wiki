@@ -1618,6 +1618,77 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinic-vfs-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "candid",
+ "chrono",
+ "clap",
+ "hex",
+ "ic-agent",
+ "json5",
+ "kinic-vfs-cli-core",
+ "kinic-vfs-client",
+ "kinic-vfs-types",
+ "kinic-wiki-domain",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "kinic-vfs-cli-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "kinic-vfs-client",
+ "kinic-vfs-types",
+ "kinic-wiki-domain",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "kinic-vfs-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "candid",
+ "ic-agent",
+ "k256",
+ "kinic-vfs-types",
+]
+
+[[package]]
+name = "kinic-vfs-types"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "serde",
+]
+
+[[package]]
+name = "kinic-wiki-domain"
+version = "0.1.0"
+dependencies = [
+ "kinic-vfs-types",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3016,81 +3087,25 @@ dependencies = [
  "ic-http-certification",
  "ic-stable-structures",
  "ic-wasi-polyfill",
+ "kinic-vfs-types",
+ "kinic-wiki-domain",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "vfs-runtime",
- "vfs-types",
- "wiki-domain",
-]
-
-[[package]]
-name = "vfs-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "candid",
- "chrono",
- "clap",
- "hex",
- "ic-agent",
- "json5",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "vfs-cli-core",
- "vfs-client",
- "vfs-types",
- "wiki-domain",
-]
-
-[[package]]
-name = "vfs-cli-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "toml",
- "vfs-client",
- "vfs-types",
- "wiki-domain",
-]
-
-[[package]]
-name = "vfs-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "candid",
- "ic-agent",
- "k256",
- "vfs-types",
 ]
 
 [[package]]
 name = "vfs-runtime"
 version = "0.1.0"
 dependencies = [
+ "kinic-vfs-types",
+ "kinic-wiki-domain",
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",
  "vfs-store",
- "vfs-types",
- "wiki-domain",
 ]
 
 [[package]]
@@ -3098,21 +3113,13 @@ name = "vfs-store"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "kinic-vfs-types",
  "pulldown-cmark",
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",
  "time",
  "uuid",
- "vfs-types",
-]
-
-[[package]]
-name = "vfs-types"
-version = "0.1.0"
-dependencies = [
- "candid",
- "serde",
 ]
 
 [[package]]
@@ -3277,13 +3284,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "wiki-domain"
-version = "0.1.0"
-dependencies = [
- "vfs-types",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 use crate::cli::{SkillRunOutcomeArg, SkillStatusArg};
 use crate::skill_registry::{
-    SkillRunInput, approve_proposal, find_skills, inspect_skill, markdown_target_package_key,
-    propose_improvement, record_skill_run, set_skill_status, upsert_skill,
+    SkillRunInput, approve_proposal, find_skills, inspect_skill, install_skill_lockfile,
+    markdown_target_package_key, propose_improvement, record_skill_run, set_skill_status,
+    upsert_skill,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -423,6 +424,63 @@ async fn skill_upsert_find_inspect_status_and_run_use_vfs_nodes() {
         .await
         .expect("inspect with run summary");
     assert_eq!(inspected["run_summary"]["runs"], 1);
+}
+
+#[tokio::test]
+async fn skill_install_writes_lockfile_without_local_package_install() {
+    let client = SkillMockClient::default();
+    client
+        .write_node(WriteNodeRequest {
+            database_id: "team-db".to_string(),
+            path: "/Wiki/skills/legal-review/manifest.md".to_string(),
+            kind: NodeKind::File,
+            content: manifest("reviewed"),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await
+        .expect("seed manifest");
+    client
+        .write_node(WriteNodeRequest {
+            database_id: "team-db".to_string(),
+            path: "/Wiki/skills/legal-review/SKILL.md".to_string(),
+            kind: NodeKind::File,
+            content: "# Legal Review\n".to_string(),
+            metadata_json: "{}".to_string(),
+            expected_etag: None,
+        })
+        .await
+        .expect("seed skill");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lockfile = temp.path().join("skill.lock.json");
+
+    let result = install_skill_lockfile(&client, "team-db", "legal-review", &lockfile, false)
+        .await
+        .expect("install lockfile");
+
+    assert_eq!(result["lockfile"], lockfile.display().to_string());
+    let lock: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&lockfile).expect("lockfile should exist"))
+            .expect("lockfile json");
+    assert_eq!(lock["schema_version"], 1);
+    assert_eq!(lock["database_id"], "team-db");
+    assert_eq!(lock["id"], "legal-review");
+    assert_eq!(lock["public"], false);
+    assert_eq!(
+        lock["manifest_path"],
+        "/Wiki/skills/legal-review/manifest.md"
+    );
+    assert_eq!(lock["entry_path"], "/Wiki/skills/legal-review/SKILL.md");
+    assert!(lock["manifest_hash"].as_str().unwrap().len() == 64);
+    assert!(lock["entry_hash"].as_str().unwrap().len() == 64);
+    assert!(lock["installed_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(
+        client
+            .read_node("team-db", "/Wiki/skills/legal-review/installed/SKILL.md")
+            .await
+            .expect("read nonexistent install target"),
+        None
+    );
 }
 
 #[tokio::test]

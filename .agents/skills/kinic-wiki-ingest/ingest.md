@@ -13,7 +13,7 @@ Turn raw source material into review-ready wiki updates under the canister-backe
 5. Use `search-remote` or `search-path-remote` only when the relevant canonical notes are missing, ambiguous, or insufficient.
    - For wiki-only inspection or edits, pass `--prefix /Wiki` or `path: "/Wiki"` unless raw source material is explicitly needed.
 6. Choose the minimum coherent set of pages to update.
-7. Edit `/Wiki/...` directly through `vfs-cli` remote VFS commands.
+7. Edit `/Wiki/...` directly through `kinic-vfs-cli` remote VFS commands.
 8. When a reorganization needs explicit removal of obsolete `/Wiki/...` page groups, use `delete-tree` from the CLI rather than treating deletion as an implicit side effect.
 9. Update `log.md` for every page creation, deletion, or edit done in the workflow.
 10. Read only the recent tail of `log.md` before appending, for example `tail -n 5`, unless a longer window is clearly needed.

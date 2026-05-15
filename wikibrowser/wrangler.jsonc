@@ -14,6 +14,12 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "kv_namespaces": [
+    {
+      "binding": "OPS_ANSWER_RATE_LIMIT",
+      "id": "REPLACE_WITH_OPS_ANSWER_RATE_LIMIT_KV_NAMESPACE_ID"
+    }
+  ],
   "services": [
     {
       "binding": "WORKER_SELF_REFERENCE",

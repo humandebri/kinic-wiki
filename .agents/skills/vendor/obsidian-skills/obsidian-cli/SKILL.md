@@ -16,7 +16,7 @@ Use this skill when the user wants to:
 In this repo:
 
 - human review happens in Obsidian
-- agent operations happen through filesystem edits and `wiki-cli`
+- agent operations happen through filesystem edits and `kinic-vfs-cli`
 - plugin-specific behavior still belongs to the plugin code and repo-specific skills
 
 ## Guidance

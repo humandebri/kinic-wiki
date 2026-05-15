@@ -1,7 +1,8 @@
 import type { ChildNode } from "@/lib/types";
 
 export type ViewMode = "preview" | "raw" | "edit";
-export type ModeTab = "explorer" | "recent" | "ingest" | "sources";
+export type ModeTab = "explorer" | "ops" | "ingest" | "sources";
+export type ReadIdentityMode = "anonymous" | "user";
 
 export type LoadState<T> = {
   data: T | null;
@@ -33,6 +34,25 @@ export function rootChild(path: "/Wiki" | "/Sources"): ChildNode {
 
 export function canExpandChildNode(node: ChildNode): boolean {
   return node.kind === "directory" || node.kind === "folder" || node.hasChildren;
+}
+
+export function parseModeTab(value: string | null): ModeTab {
+  if (value === "ops" || value === "recent") return "ops";
+  if (value === "ingest" || value === "sources" || value === "explorer") return value;
+  return "explorer";
+}
+
+export function readIdentityMode(
+  readMode: "anonymous" | null,
+  hasReadIdentity: boolean,
+  hasDatabaseRole: boolean,
+  memberRolesLoaded: boolean,
+  publicReadable: boolean
+): ReadIdentityMode {
+  if (readMode === "anonymous" || !hasReadIdentity) return "anonymous";
+  if (hasDatabaseRole) return "user";
+  if (publicReadable) return "anonymous";
+  return memberRolesLoaded ? "anonymous" : "user";
 }
 
 export function errorMessage(error: unknown): string {

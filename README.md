@@ -8,7 +8,7 @@ It also includes a DB-backed Skill Knowledge Base for teams that want to find, e
 
 ```mermaid
 flowchart LR
-    A["Agent or CLI"] --> B["vfs-cli / shared client"]
+    A["Agent or CLI"] --> B["kinic-vfs-cli / shared client"]
     B --> C["IC canister"]
     C --> D["SQLite store + FTS"]
 ```
@@ -61,8 +61,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 bash scripts/build-vfs-canister.sh
-icp network start -d
-icp deploy -e local
+icp network start -d -e local-wiki
+icp deploy -e local-wiki
 ```
 
 If you need to install the Rust target manually first, use `rustup target add wasm32-wasip1`.
@@ -71,8 +71,8 @@ Resolve the target canister with one of:
 
 - `--canister-id`
 - `VFS_CANISTER_ID`
-- `~/.config/vfs-cli/config.toml`
-- `~/.vfs-cli.toml`
+- `~/.config/kinic-vfs-cli/config.toml`
+- `~/.kinic-vfs-cli.toml`
 
 Minimal config:
 
@@ -100,12 +100,12 @@ See [`docs/QUICKSTART_SKILL_KB.md`](docs/QUICKSTART_SKILL_KB.md) for the manual 
 The sample under [`examples/skill-kb`](examples/skill-kb) shows the intended loop: upload a skill package, find it from task context, inspect package files and evidence, record run evidence, then promote it.
 The demo script can be rerun; if the database already exists, it links and continues.
 
-DB-backed commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` DB is created implicitly. Older single-DB commands such as `vfs-cli read-node --path /Wiki/index.md` must now select a DB:
+DB-backed commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` DB is created implicitly. Older single-DB commands such as `kinic-vfs-cli read-node --path /Wiki/index.md` must now select a DB:
 
 ```bash
-cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database create
-cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/index.md --input index.md
-cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/index.md --input index.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
 ```
 
 `database create` prints the generated DB ID. Use that ID for `--database-id` and grants. Public browser reads use the anonymous principal `2vxsx-fae`, so public DBs must grant that principal `reader`.
@@ -114,11 +114,19 @@ cargo run -p vfs-cli --bin vfs-cli -- --canister-id <canister-id> database grant
 
 ### CLI
 
-Use `vfs-cli` when working from a shell or script.
-See [`docs/CLI.md`](docs/CLI.md) for flags, search preview modes, and examples.
-See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for Skill Knowledge Base layout, manifest fields, database-role access, and Browser support.
+Use `kinic-vfs-cli` when working from a shell or script.
+The Browser is the primary public UI. `kinic-vfs-cli` is the single operator and power-user binary for two command surfaces:
+
+- wiki/database operations: database setup, grants, scripted node reads and writes, search, and archive/restore.
+- skill registry operations: package upsert/import, discovery, inspection, run evidence, proposals, status changes, and lockfile-only install.
+
+See [`docs/CLI.md`](docs/CLI.md) for wiki/database flags, search preview modes, and operator examples.
+See [`docs/SKILL_REGISTRY.md`](docs/SKILL_REGISTRY.md) for `kinic-vfs-cli skill ...`, Skill Knowledge Base layout, manifest fields, database-role access, and Browser support.
+See [`docs/RELEASE.md`](docs/RELEASE.md) for GitHub Release artifacts, Homebrew install, and fallback Cargo install. See [`docs/PUBLIC_SMOKE.md`](docs/PUBLIC_SMOKE.md) for the local public-read smoke flow.
 
 Main commands:
+
+Wiki and database operations:
 
 - `rebuild-index`
 - `rebuild-scope-index`
@@ -142,9 +150,17 @@ Main commands:
 - `search-remote`
 - `search-path-remote`
 - `status`
+- `database archive-export`
+- `database archive-restore`
+- `database archive-cancel`
+- `database restore-cancel`
+
+Skill registry operations:
+
 - `skill upsert`
 - `skill find`
 - `skill inspect`
+- `skill install`
 - `skill import github`
 - `skill propose-improvement`
 - `skill approve-proposal`

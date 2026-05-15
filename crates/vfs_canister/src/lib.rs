@@ -27,6 +27,7 @@ use vfs_types::{
     IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MemoryCapability,
     MemoryManifest, MemoryRoot, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
     MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    OpsAnswerSessionCheckRequest, OpsAnswerSessionCheckResult, OpsAnswerSessionRequest,
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
     SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
@@ -346,6 +347,19 @@ fn finalize_database_restore(database_id: String) -> Result<(), String> {
 }
 
 #[update]
+fn cancel_database_restore(database_id: String) -> Result<(), String> {
+    with_usage(
+        "cancel_database_restore",
+        Some(database_id.clone()),
+        |service, caller, now| {
+            let meta = service.cancel_database_restore(&database_id, caller, now)?;
+            unmount_database_file(&meta.db_file_name);
+            Ok(())
+        },
+    )
+}
+
+#[update]
 fn write_node(request: WriteNodeRequest) -> Result<WriteNodeResult, String> {
     let database_id = request.database_id.clone();
     with_usage("write_node", Some(database_id), |service, caller, now| {
@@ -370,6 +384,23 @@ fn check_url_ingest_trigger_session(
     request: UrlIngestTriggerSessionCheckRequest,
 ) -> Result<(), String> {
     with_service(|service| service.check_url_ingest_trigger_session(request, now_millis()))
+}
+
+#[update]
+fn authorize_ops_answer_session(request: OpsAnswerSessionRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "authorize_ops_answer_session",
+        Some(database_id),
+        |service, caller, now| service.authorize_ops_answer_session(caller, request, now),
+    )
+}
+
+#[query]
+fn check_ops_answer_session(
+    request: OpsAnswerSessionCheckRequest,
+) -> Result<OpsAnswerSessionCheckResult, String> {
+    with_service(|service| service.check_ops_answer_session(request, now_millis()))
 }
 
 #[update]

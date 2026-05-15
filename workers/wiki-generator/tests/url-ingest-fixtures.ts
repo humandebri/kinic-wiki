@@ -48,10 +48,10 @@ export function testEnv(queue: TestQueue): RuntimeEnv {
   };
 }
 
-export async function withFetchedPage(run: () => Promise<void>): Promise<void> {
+export async function withFetchedPage(run: () => Promise<void>, html = "<html><head><title>Fetched Title</title></head><body>Hello source</body></html>"): Promise<void> {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (): Promise<Response> =>
-    new Response("<html><head><title>Fetched Title</title></head><body>Hello source</body></html>", {
+    new Response(html, {
       headers: { "content-type": "text/html" }
     });
   try {

@@ -11,6 +11,7 @@ ChatGPT raw-source export and URL ingest use Internet Identity and require write
 ```bash
 npm install
 npm run build
+npm run release:check
 ```
 
 Optional build-time database selection hints can be set in `extensions/wiki-clipper/.env`:
@@ -22,6 +23,14 @@ KINIC_CAPTURE_DATABASE_ID=db_d36yep4rv43e
 Load `extensions/wiki-clipper` as an unpacked extension after `dist/service-worker.js`, `dist/content-ui.js`, and `dist/popup.js` exist.
 The manifest includes a fixed Chrome extension key. The resulting extension origin is `chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj`. Internet Identity uses `https://xis3j-paaaa-aaaai-axumq-cai.icp0.io` as the derivation origin, and that VFS canister allows both the fixed ID and the old local ID `chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci`.
 Open settings from the extension details page `Extension options`.
+
+## Chrome Web Store release
+
+```bash
+npm run release:package
+```
+
+The package is written to `extensions/wiki-clipper/release/`. Public listing copy, permission reasons, review notes, and the privacy policy draft live in `store-listing/`. Use `https://kinic.io/privacy-policy` as the Chrome Web Store privacy policy URL.
 
 ## Flow
 
@@ -54,6 +63,7 @@ The CLI creates a conversation wiki scaffold. Re-running it preserves hand-edite
 - Canister ID is fixed to `xis3j-paaaa-aaaai-axumq-cai`.
 - IC host is fixed to `https://icp0.io`.
 - Database ID is unset until explicitly saved. `KINIC_CAPTURE_DATABASE_ID` only preselects a matching settings option.
+- Public manifest host permissions exclude local `localhost` and `127.0.0.1` canister hosts.
 - Mainnet hosts require explicit confirmation before export.
 - ChatGPT raw-source export and URL ingest writes use the logged-in Internet Identity principal and require writer access for that principal.
 - URL ingest needs WikiBrowser `KINIC_WIKI_WORKER_TOKEN` configured to trigger processing.

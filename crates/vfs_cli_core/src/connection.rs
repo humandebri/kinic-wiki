@@ -109,7 +109,7 @@ fn resolve_connection_from_sources(
     );
     if preview.canister_id.is_none() {
         bail!(
-            "missing connection setting: canister_id; set --canister-id, {}, .kinic/config.toml, ~/.config/vfs-cli/config.toml, or ~/.vfs-cli.toml",
+            "missing connection setting: canister_id; set --canister-id, {}, .kinic/config.toml, ~/.config/kinic-vfs-cli/config.toml, or ~/.kinic-vfs-cli.toml",
             CANISTER_ID_ENV
         );
     }
@@ -271,11 +271,14 @@ fn find_workspace_root() -> Result<Option<PathBuf>> {
 
 fn find_user_config_path() -> Option<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from)?;
-    let primary = home.join(".config").join("vfs-cli").join("config.toml");
+    let primary = home
+        .join(".config")
+        .join("kinic-vfs-cli")
+        .join("config.toml");
     if primary.is_file() {
         return Some(primary);
     }
-    let fallback = home.join(".vfs-cli.toml");
+    let fallback = home.join(".kinic-vfs-cli.toml");
     fallback.is_file().then_some(fallback)
 }
 
@@ -451,12 +454,12 @@ mod tests {
     fn config_path_prefers_xdg_location_over_home_file() {
         let dir = tempdir().expect("temp dir should exist");
         let home = dir.path();
-        let xdg = home.join(".config").join("vfs-cli");
+        let xdg = home.join(".config").join("kinic-vfs-cli");
         std::fs::create_dir_all(&xdg).expect("xdg dir should exist");
         std::fs::write(xdg.join("config.toml"), "replica_host = \"http://xdg\"\n")
             .expect("xdg config should write");
         std::fs::write(
-            home.join(".vfs-cli.toml"),
+            home.join(".kinic-vfs-cli.toml"),
             "replica_host = \"http://home\"\n",
         )
         .expect("home config should write");
@@ -496,11 +499,14 @@ mod tests {
     }
 
     fn find_user_config_path_with_home(home: &std::path::Path) -> Option<PathBuf> {
-        let primary = home.join(".config").join("vfs-cli").join("config.toml");
+        let primary = home
+            .join(".config")
+            .join("kinic-vfs-cli")
+            .join("config.toml");
         if primary.is_file() {
             return Some(primary);
         }
-        let fallback = home.join(".vfs-cli.toml");
+        let fallback = home.join(".kinic-vfs-cli.toml");
         fallback.is_file().then_some(fallback)
     }
 }

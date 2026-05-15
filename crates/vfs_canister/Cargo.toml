@@ -20,8 +20,8 @@ ic-wasi-polyfill = "0.13.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", optional = true }
 vfs-runtime = { path = "../vfs_runtime" }
-vfs-types = { path = "../vfs_types" }
-wiki-domain = { path = "../wiki_domain" }
+vfs_types = { package = "kinic-vfs-types", version = "0.1.0", path = "../vfs_types" }
+wiki_domain = { package = "kinic-wiki-domain", version = "0.1.0", path = "../wiki_domain" }
 
 [dev-dependencies]
 sha2 = "0.10.9"

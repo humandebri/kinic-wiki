@@ -109,6 +109,18 @@ export const expectedTypes = {
     kind: "record",
     fields: { database_id: "text", request_path: "text", session_nonce: "text" }
   },
+  OpsAnswerSessionRequest: {
+    kind: "record",
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  OpsAnswerSessionCheckRequest: {
+    kind: "record",
+    fields: { database_id: "text", session_nonce: "text" }
+  },
+  OpsAnswerSessionCheckResult: {
+    kind: "record",
+    fields: { principal: "text" }
+  },
   MemoryCapability: { kind: "record", fields: { name: "text", description: "text" } },
   MemoryManifest: {
     kind: "record",
@@ -250,27 +262,32 @@ export const expectedTypes = {
 };
 
 export const didTypeAliases = {
-  ResultChildren: "Result_10",
-  ResultCreateDatabase: "Result_3",
-  ResultDatabases: "Result_12",
-  ResultDeleteNode: "Result_4",
-  ResultMkdirNode: "Result_14",
-  ResultMoveNode: "Result_15",
-  ResultMembers: "Result_11",
+  OpsAnswerSessionCheckRequest: "OpsAnswerSessionRequest",
+  UrlIngestTriggerSessionRequest: "OpsAnswerSessionRequest",
+  ResultChildren: "Result_11",
+  ResultCreateDatabase: "Result_4",
+  ResultDatabases: "Result_13",
+  ResultDeleteNode: "Result_5",
+  ResultMkdirNode: "Result_15",
+  ResultMoveNode: "Result_16",
+  ResultMembers: "Result_12",
   ResultUnit: "Result_1",
   ResultWriteNode: "Result",
-  ResultLinks: "Result_9",
-  ResultNode: "Result_18",
-  ResultNodeContext: "Result_19",
-  ResultQueryContext: "Result_16",
-  ResultRecent: "Result_20",
-  ResultSearch: "Result_21",
-  ResultSourceEvidence: "Result_22"
+  ResultLinks: "Result_10",
+  ResultNode: "Result_19",
+  ResultNodeContext: "Result_20",
+  ResultQueryContext: "Result_17",
+  ResultRecent: "Result_21",
+  ResultSearch: "Result_22",
+  ResultSourceEvidence: "Result_23",
+  ResultOpsAnswerSessionCheck: "Result_3"
 };
 
 export const expectedMethods = {
+  authorize_ops_answer_session: { input: ["OpsAnswerSessionRequest"], output: "ResultUnit", mode: "update" },
   authorize_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionRequest"], output: "ResultUnit", mode: "update" },
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
+  check_ops_answer_session: { input: ["OpsAnswerSessionCheckRequest"], output: "ResultOpsAnswerSessionCheck", mode: "query" },
   check_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionCheckRequest"], output: "ResultUnit", mode: "query" },
   create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
   delete_node: { input: ["DeleteNodeRequest"], output: "ResultDeleteNode", mode: "update" },

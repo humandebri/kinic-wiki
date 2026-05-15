@@ -99,6 +99,7 @@ Restore can only begin from `archived` or `deleted`. It cannot begin from `hot` 
 If the canister cannot mount the newly allocated DB file during begin, the DB rolls back to its previous `archived` or `deleted` state. The failed mount ID remains in mount history and is not reused.
 
 If finalize fails because the file size is wrong, the DB stays `restoring`. The caller can write missing bytes and retry finalize.
+If the restore must be abandoned, `cancel_database_restore(database_id)` returns the DB to the pre-restore `archived` or `deleted` state and removes partial restore chunks and bytes. The restore mount ID remains in mount history and is not reused.
 Restore rejects chunks larger than 1 MiB and declared DB sizes larger than `i64::MAX`.
 Restore finalize also hashes the whole restored SQLite file in one update, so large imports have the same instruction and cycle-cost concern as archive finalize.
 
@@ -118,5 +119,5 @@ Busy DBs may require caller retry by restarting the snapshot export flow.
 ## Follow-ups
 
 - `delete_database` currently deletes the SQLite file before marking the DB `deleted`. A later lifecycle change should add a `deleting` state or equivalent two-phase flow before reordering this safely.
-- Archive/restore APIs are canister-level primitives. The CLI does not yet provide archive export/import commands.
+- The CLI exposes archive export/import as `database archive-export` and `database archive-restore`. External object storage integration is still caller-owned.
 - Caffeine or external object storage integration is out of scope for v1.

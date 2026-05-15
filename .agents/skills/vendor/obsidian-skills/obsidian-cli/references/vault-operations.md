@@ -13,6 +13,6 @@ For the managed wiki area:
 
 - use `Wiki/pages/<slug>.md`
 - keep links in `[[slug]]` form
-- let `wiki-cli` and the plugin own push/pull behavior
+- let `kinic-vfs-cli` and the plugin own push/pull behavior
 
 Do not invent parallel local stores for content that should live in the working copy.

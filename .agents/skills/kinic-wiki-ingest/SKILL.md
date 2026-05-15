@@ -20,6 +20,7 @@ Do not use this skill for:
 - ad hoc question answering without source intake
 - health-only review of an existing wiki
 - hidden publish or push workflows
+- Skill Registry package lifecycle work; use `kinic-skill-registry`
 
 Core rules:
 

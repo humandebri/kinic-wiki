@@ -10,7 +10,8 @@ const { folderIndexPath, isFolderIndexNode, isReservedFolderIndexName, visibleCh
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
-const { canExpandChildNode } = await importTs("../lib/wiki-helpers.ts");
+const { canExpandChildNode, parseModeTab, readIdentityMode } = await importTs("../lib/wiki-helpers.ts");
+const { classifyOpsInput } = await importTs("../lib/ops-actions.ts");
 const { buildSourceClipDocument, normalizeClipUrl, parseTags, sourceClipPath, renderSourceClipMarkdown } = await importTs("../lib/source-clips.ts");
 const explorerTreeSource = readFileSync(new URL("../components/explorer-tree.tsx", import.meta.url), "utf8");
 const documentPaneSource = readFileSync(new URL("../components/document-pane.tsx", import.meta.url), "utf8");
@@ -19,6 +20,7 @@ const markdownEditorSource = readFileSync(new URL("../components/markdown-editor
 const panelSource = readFileSync(new URL("../components/panel.tsx", import.meta.url), "utf8");
 const searchPanelSource = readFileSync(new URL("../components/search-panel.tsx", import.meta.url), "utf8");
 const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx", import.meta.url), "utf8");
+const opsPanelSource = readFileSync(new URL("../components/ops-panel.tsx", import.meta.url), "utf8");
 const vfsClientSource = readFileSync(new URL("../lib/vfs-client.ts", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
@@ -37,6 +39,9 @@ assert.match(wikiBrowserSource, /data-tid="header-login-button"/);
 assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
 assert.match(wikiBrowserSource, /LayoutDashboard/);
 assert.match(wikiBrowserSource, /aria-label="Back to database dashboard"/);
+assert.match(wikiBrowserSource, /md:grid-cols-\[auto_auto_minmax\(0,1fr\)\]/);
+assert.match(wikiBrowserSource, /inline-flex items-center gap-1 rounded-lg border border-line/);
+assert.doesNotMatch(wikiBrowserSource, /hidden items-center gap-1 rounded-lg border border-line[\s\S]*md:flex/);
 assert.match(wikiBrowserSource, /value === "edit"/);
 assert.match(wikiBrowserSource, /canLeaveDirtyEdit/);
 assert.match(wikiBrowserSource, /UNSAVED_MARKDOWN_MESSAGE/);
@@ -51,6 +56,13 @@ assert.match(wikiBrowserSource, /folderIndexPath\(selectedPath\)/);
 assert.match(wikiBrowserSource, /Use folder Edit to create index\.md\./);
 assert.match(wikiBrowserSource, /deleteNodeAuthenticated\(canisterId, readIdentity, \{\s+databaseId,\s+path: indexNode\.path,/);
 assert.match(wikiBrowserSource, /memberDatabases\.find/);
+assert.match(wikiBrowserSource, /SIDEBAR_TABS: ModeTab\[\] = \["explorer", "ops", "ingest", "sources"\]/);
+assert.match(wikiBrowserSource, /publicDatabaseIds/);
+assert.match(opsPanelSource, /authorizeOpsAnswerSession/);
+assert.match(opsPanelSource, /Login with Internet Identity to ask wiki questions/);
+assert.match(opsPanelSource, /sessionNonce/);
+assert.match(opsPanelSource, /2_000/);
+assert.match(opsPanelSource, /<span>Run<\/span>/);
 assert.match(wikiBrowserSource, /ExplorerHeaderActions/);
 assert.match(wikiBrowserSource, /ExplorerCreateForm/);
 assert.match(wikiBrowserSource, /ExplorerMoveForm/);
@@ -69,6 +81,9 @@ assert.match(wikiBrowserSource, /node\.kind === "folder"/);
 assert.match(wikiBrowserSource, /!node\.hasChildren/);
 assert.match(wikiBrowserSource, /DocumentBreadcrumbs/);
 assert.match(documentPaneSource, /label="Edit"/);
+assert.match(documentPaneSource, /Copy path/);
+assert.match(documentPaneSource, /Copy raw/);
+assert.match(documentPaneSource, /navigator\.clipboard\.writeText/);
 assert.match(documentPaneSource, /node\.data\?\.kind === "folder"/);
 assert.match(documentPaneSource, /FolderIndexSection/);
 assert.match(documentPaneSource, /emptyFolderIndexNode/);
@@ -145,6 +160,17 @@ assert.deepEqual(
 assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file", true)), true);
 assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);
 assert.equal(canExpandChildNode(child("/Wiki/folder", "folder", "folder", false)), true);
+assert.equal(parseModeTab("recent"), "ops");
+assert.equal(parseModeTab("ops"), "ops");
+assert.equal(readIdentityMode(null, true, true, true, true), "user");
+assert.equal(readIdentityMode(null, true, false, true, true), "anonymous");
+assert.equal(readIdentityMode("anonymous", true, true, true, true), "anonymous");
+assert.equal(readIdentityMode(null, false, false, false, true), "anonymous");
+assert.equal(classifyOpsInput("https://example.com/a", "/Wiki", "user").kind, "queue_url");
+assert.equal(classifyOpsInput("recent", "/Wiki", "user").kind, "recent");
+assert.equal(classifyOpsInput("lint facts", "/Wiki/current.md", "user").targetPath, "/Wiki/facts.md");
+assert.equal(classifyOpsInput("search budget", "/Wiki", "anonymous").kind, "search");
+assert.equal(classifyOpsInput("前の方針は？", "/Wiki", "user").kind, "ask");
 
 const hit = normalizeSearchHit({
   path: "/Wiki/demo.md",

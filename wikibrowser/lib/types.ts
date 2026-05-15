@@ -70,6 +70,20 @@ export type UrlIngestTriggerSessionCheckRequest = {
   sessionNonce: string;
 };
 
+export type OpsAnswerSessionRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type OpsAnswerSessionCheckRequest = {
+  databaseId: string;
+  sessionNonce: string;
+};
+
+export type OpsAnswerSessionCheckResult = {
+  principal: string;
+};
+
 export type CanisterHealth = {
   cyclesBalance: bigint;
 };

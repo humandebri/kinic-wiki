@@ -13,6 +13,7 @@ use model::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 pub(crate) use vfs_cli::skill_kb::{find_skills, inspect_skill};
@@ -121,6 +122,15 @@ pub async fn run_skill_command(
             json,
         } => print(
             approve_proposal(client, database_id, &id, &proposal_path).await?,
+            json,
+        )?,
+        SkillCommand::Install {
+            id,
+            lockfile,
+            public,
+            json,
+        } => print(
+            install_skill_lockfile(client, database_id, &id, &lockfile, public).await?,
             json,
         )?,
     }
@@ -390,6 +400,49 @@ pub(crate) async fn approve_proposal(
     Ok(json!({ "id": id, "proposal_path": proposal_path, "status": "approved" }))
 }
 
+pub(crate) async fn install_skill_lockfile(
+    client: &impl VfsApi,
+    database_id: &str,
+    id: &str,
+    lockfile: &Path,
+    public: bool,
+) -> Result<serde_json::Value> {
+    let skill_id = SkillId::parse(id)?;
+    let base_path = skill_base_path(&skill_id, public);
+    let manifest_path = format!("{base_path}/manifest.md");
+    let entry_path = format!("{base_path}/SKILL.md");
+    let manifest = client
+        .read_node(database_id, &manifest_path)
+        .await?
+        .ok_or_else(|| anyhow!("manifest not found: {manifest_path}"))?;
+    let entry = client
+        .read_node(database_id, &entry_path)
+        .await?
+        .ok_or_else(|| anyhow!("SKILL.md not found: {entry_path}"))?;
+    let value = json!({
+        "schema_version": 1,
+        "database_id": database_id,
+        "id": skill_id.to_string(),
+        "public": public,
+        "manifest_path": manifest_path,
+        "entry_path": entry_path,
+        "manifest_etag": manifest.etag.clone(),
+        "entry_etag": entry.etag.clone(),
+        "manifest_hash": sha256_hex(&manifest.content),
+        "entry_hash": sha256_hex(&entry.content),
+        "installed_at": now_rfc3339()
+    });
+    std::fs::write(lockfile, serde_json::to_string_pretty(&value)?)
+        .with_context(|| format!("failed to write {}", lockfile.display()))?;
+    Ok(json!({
+        "id": skill_id.to_string(),
+        "catalog": catalog(public),
+        "lockfile": lockfile.display().to_string(),
+        "manifest_path": value["manifest_path"],
+        "entry_path": value["entry_path"]
+    }))
+}
+
 #[derive(Deserialize)]
 struct ProposalFrontmatter {
     kind: String,
@@ -605,6 +658,11 @@ fn path_to_package_key(path: &Path) -> Option<String> {
 
 fn read_optional(source_dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(source_dir.join(name)).ok()
+}
+
+fn sha256_hex(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl SkillStatusArg {

@@ -35,6 +35,7 @@ export function parseUrlIngestTriggerInput(value: unknown): UrlIngestTriggerInpu
   if (typeof canisterId !== "string" || canisterId.length === 0) return "canisterId is required";
   if (typeof databaseId !== "string" || databaseId.length === 0) return "databaseId is required";
   if (typeof requestPath !== "string" || requestPath.length === 0) return "requestPath is required";
+  if (!isIngestRequestPath(requestPath)) return `non-canonical ingest request path: ${requestPath}`;
   return { canisterId, databaseId, requestPath };
 }
 
@@ -101,6 +102,7 @@ export async function processUrlIngestRequest(env: RuntimeEnv, vfs: VfsClient, c
       current = await writeRequestState(vfs, databaseId, current, { status: "source_written", sourcePath: sourceAck.path, error: null });
     }
     if (!current.sourcePath) throw new Error("source_path is missing after source write");
+    validateSourcePath(config.sourcePrefix, current.sourcePath);
     sourceAck = sourceAck ?? (await requireSourceAck(vfs, databaseId, current.sourcePath));
     const queued = await enqueueSourceJob(env, {
       kind: "source",
@@ -337,8 +339,18 @@ function isEtagMismatch(error: unknown): boolean {
 }
 
 function validateIngestRequestPath(path: string): void {
-  if (!path.startsWith(`${INGEST_REQUEST_PREFIX}/`) || !path.endsWith(".md")) {
+  if (!isIngestRequestPath(path)) {
     throw new UrlIngestTriggerError(`non-canonical ingest request path: ${path}`, 400);
+  }
+}
+
+function isIngestRequestPath(path: string): boolean {
+  return path.startsWith(`${INGEST_REQUEST_PREFIX}/`) && path.endsWith(".md");
+}
+
+function validateSourcePath(sourcePrefix: string, path: string): void {
+  if (!path.startsWith(`${sourcePrefix}/`)) {
+    throw new Error(`source_path is outside source prefix: ${path}`);
   }
 }
 

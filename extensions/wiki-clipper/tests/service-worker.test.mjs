@@ -89,7 +89,7 @@ test("auth-status opens settings when unauthenticated", async () => {
     const response = await handleMessage({ type: "auth-status" }, null);
 
     assert.deepEqual(response, { ok: true, result: { isAuthenticated: false, principal: null } });
-    assert.deepEqual(settingsTabs, ["chrome-extension://id/popup/popup.html"]);
+    assert.deepEqual(settingsTabs, ["options"]);
   } finally {
     setOffscreenBridgeForTest(null);
     resetSettingsOpenThrottleForTest();
@@ -112,7 +112,7 @@ test("unauthenticated save-source opens settings once", async () => {
     await assert.rejects(() => handleMessage(message, sender()), /UNAUTHENTICATED/);
     await assert.rejects(() => handleMessage(message, sender()), /UNAUTHENTICATED/);
 
-    assert.deepEqual(settingsTabs, ["chrome-extension://id/popup/popup.html"]);
+    assert.deepEqual(settingsTabs, ["options"]);
   } finally {
     setOffscreenBridgeForTest(null);
     resetSettingsOpenThrottleForTest();
@@ -382,11 +382,9 @@ function installChromeForSettings(syncStorage, settingsTabs) {
       runtime: {
         getURL(path) {
           return `chrome-extension://id/${path}`;
-        }
-      },
-      tabs: {
-        async create({ url }) {
-          settingsTabs.push(url);
+        },
+        async openOptionsPage() {
+          settingsTabs.push("options");
         }
       },
       storage: {

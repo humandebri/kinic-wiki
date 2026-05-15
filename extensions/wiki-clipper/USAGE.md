@@ -29,6 +29,14 @@ The build creates:
 - `dist/popup.js`
 - `dist/service-worker.js`
 
+For Chrome Web Store packaging:
+
+```bash
+npm run release:package
+```
+
+The release package excludes source files, tests, `node_modules`, and local `.env` files.
+
 ## Load in Chrome
 
 1. Open `chrome://extensions`.

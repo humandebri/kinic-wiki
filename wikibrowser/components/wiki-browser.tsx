@@ -13,8 +13,8 @@ import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/componen
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
 import { IngestPanel } from "@/components/ingest-panel";
+import { OpsPanel } from "@/components/ops-panel";
 import { PanelHeader } from "@/components/panel";
-import { RecentPanel } from "@/components/recent-panel";
 import { SourcesPanel } from "@/components/sources-panel";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import { readBrowserNodeCache } from "@/lib/browser-node-cache";
@@ -29,13 +29,15 @@ import {
   inferNoteRole,
   isNotFoundError,
   loadingState,
+  parseModeTab,
+  readIdentityMode as resolveReadIdentityMode,
   ApiError,
   type ModeTab,
   type PathLoadState,
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "recent", "ingest", "sources"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "ops", "ingest", "sources"];
 const EMPTY_EDIT_STATE: DocumentEditState = { dirty: false, saveState: "idle" };
 const UNSAVED_MARKDOWN_MESSAGE = "You have unsaved Markdown changes. Leave edit mode?";
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
@@ -74,7 +76,17 @@ export function WikiBrowser() {
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [readIdentity, setReadIdentity] = useState<Identity | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
-  const effectiveReadIdentity = readMode === "anonymous" ? null : readIdentity;
+  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [memberDatabases, setMemberDatabases] = useState<DatabaseSummary[]>([]);
+  const [publicDatabaseIds, setPublicDatabaseIds] = useState<Set<string>>(() => new Set());
+  const [memberDatabasesLoaded, setMemberDatabasesLoaded] = useState(false);
+  const [databaseListError, setDatabaseListError] = useState<string | null>(null);
+  const currentDatabaseRole = useMemo(
+    () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
+    [databaseId, memberDatabases, readIdentity]
+  );
+  const currentReadIdentityMode = resolveReadIdentityMode(readMode, Boolean(readIdentity), Boolean(currentDatabaseRole), memberDatabasesLoaded, publicDatabaseIds.has(databaseId));
+  const effectiveReadIdentity = currentReadIdentityMode === "user" ? readIdentity : null;
   const authPrincipal = readIdentity?.getPrincipal().toText() ?? null;
   const readPrincipal = effectiveReadIdentity?.getPrincipal().toText() ?? null;
   const currentRequestKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
@@ -93,9 +105,6 @@ export function WikiBrowser() {
   const [explorerDraftName, setExplorerDraftName] = useState("");
   const [explorerActionError, setExplorerActionError] = useState<string | null>(null);
   const [explorerBusyAction, setExplorerBusyAction] = useState<"file" | "folder" | "rename" | "move" | "delete" | null>(null);
-  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
-  const [memberDatabases, setMemberDatabases] = useState<DatabaseSummary[]>([]);
-  const [databaseListError, setDatabaseListError] = useState<string | null>(null);
   const nodeContextCache = useRef(new Map<string, NodeContext>());
   const childNodesCache = useRef(new Map<string, ChildNode[]>());
   const folderIndexNodeCache = useRef(new Map<string, WikiNode | null>());
@@ -125,6 +134,7 @@ export function WikiBrowser() {
     Promise.resolve()
       .then(() => {
         if (cancelled) return null;
+        setMemberDatabasesLoaded(false);
         setDatabaseListError(null);
         return Promise.allSettled([
           listDatabasesPublic(canisterId),
@@ -137,6 +147,8 @@ export function WikiBrowser() {
         if (publicResult.status === "rejected" && memberResult.status === "rejected") {
           setDatabases([]);
           setMemberDatabases([]);
+          setPublicDatabaseIds(new Set());
+          setMemberDatabasesLoaded(false);
           setDatabaseListError(`${errorMessage(publicResult.reason)}; ${errorMessage(memberResult.reason)}`);
           return;
         }
@@ -144,12 +156,16 @@ export function WikiBrowser() {
         const authenticatedDatabases = memberResult.status === "fulfilled" ? memberResult.value : [];
         setDatabases(mergeDatabaseSummaries(authenticatedDatabases, publicDatabases));
         setMemberDatabases(authenticatedDatabases);
+        setPublicDatabaseIds(new Set(publicDatabases.map((database) => database.databaseId)));
+        setMemberDatabasesLoaded(memberResult.status === "fulfilled");
         setDatabaseListError(databaseListWarning(publicResult, memberResult));
       })
       .catch((cause) => {
         if (!cancelled) {
           setDatabases([]);
           setMemberDatabases([]);
+          setPublicDatabaseIds(new Set());
+          setMemberDatabasesLoaded(false);
           setDatabaseListError(errorMessage(cause));
         }
       });
@@ -324,7 +340,7 @@ export function WikiBrowser() {
   const currentChildren = currentChildrenState(invalidCanister, canisterId, databaseId, selectedPath, currentRequestKey, childNodes);
   const currentFolderIndexNode = currentNodeState(invalidCanister, canisterId, databaseId, folderIndexPath(selectedPath), folderIndexRequestKey, folderIndexNode);
   const noteRole = inferNoteRole(selectedPath);
-  const authPrompt = authPromptMode(tab, readIdentity, currentNode.error || currentChildren.error);
+  const authPrompt = authPromptMode(readIdentity, currentNode.error || currentChildren.error);
   const activeEditState = view === "edit" ? editState : EMPTY_EDIT_STATE;
   const canLeaveDirtyEdit = useCallback(() => !activeEditState.dirty || window.confirm(UNSAVED_MARKDOWN_MESSAGE), [activeEditState.dirty]);
   const guardedLogout = useCallback(() => {
@@ -333,10 +349,6 @@ export function WikiBrowser() {
     }
   }, [canLeaveDirtyEdit, logout]);
   const databaseOptions = useMemo(() => withCurrentDatabase(databases, databaseId), [databaseId, databases]);
-  const currentDatabaseRole = useMemo(
-    () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
-    [databaseId, memberDatabases, readIdentity]
-  );
   const explorerSelectionKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
   const selectedExplorerNode = selectedExplorerState?.key === explorerSelectionKey
     ? selectedExplorerState.node
@@ -674,6 +686,8 @@ export function WikiBrowser() {
             autoExpandExplorer={!(isGraphPage && !graphCenter)}
             readIdentity={readIdentity}
             effectiveReadIdentity={effectiveReadIdentity}
+            currentNode={currentNode.data}
+            readIdentityMode={currentReadIdentityMode}
             readMode={readMode}
             explorerRevision={explorerRevision}
             onSelectedExplorerNode={rememberSelectedExplorerNode}
@@ -692,6 +706,7 @@ export function WikiBrowser() {
                 path={selectedPath}
                 view={view}
                 editState={activeEditState}
+                rawContent={currentNode.data?.kind === "file" ? currentNode.data.content : null}
                 onViewChange={(nextView) => {
                   if (nextView !== "edit" && !canLeaveDirtyEdit()) {
                     return;
@@ -756,6 +771,8 @@ function LeftPane({
   autoExpandExplorer,
   readIdentity,
   effectiveReadIdentity,
+  currentNode,
+  readIdentityMode,
   readMode,
   explorerRevision,
   onSelectedExplorerNode
@@ -768,11 +785,26 @@ function LeftPane({
   autoExpandExplorer: boolean;
   readIdentity: Identity | null;
   effectiveReadIdentity: Identity | null;
+  currentNode: WikiNode | null;
+  readIdentityMode: "anonymous" | "user";
   readMode: "anonymous" | null;
   explorerRevision: number;
   onSelectedExplorerNode: (node: ChildNode) => void;
 }) {
-  if (tab === "recent") return <RecentPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} readMode={readMode} />;
+  if (tab === "ops") {
+    return (
+      <OpsPanel
+        canisterId={canisterId}
+        databaseId={databaseId}
+        selectedPath={selectedPath}
+        currentNode={currentNode}
+        readIdentity={effectiveReadIdentity}
+        writeIdentity={readIdentity}
+        readMode={readMode}
+        readIdentityMode={readIdentityMode}
+      />
+    );
+  }
   if (tab === "ingest") return <IngestPanel canisterId={canisterId} databaseId={databaseId} readIdentity={readIdentity} />;
   if (tab === "sources") return <SourcesPanel canisterId={canisterId} databaseId={databaseId} readIdentity={effectiveReadIdentity} writeIdentity={readIdentity} readMode={readMode} />;
   return (
@@ -1197,8 +1229,8 @@ function TopBar({
   }
 
   return (
-    <header className="flex min-h-[52px] flex-wrap items-center gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur sm:flex-nowrap sm:gap-4">
-      <div className="w-[168px] shrink-0">
+    <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
+      <div className="min-w-0">
         <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
           <LayoutDashboard size={15} />
           Knowledge IDE
@@ -1222,7 +1254,7 @@ function TopBar({
           ))}
         </select>
       </div>
-      <div className="flex min-w-[280px] flex-1 basis-full items-center justify-end gap-2 sm:basis-auto">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
         {visibleError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{visibleError}</span> : null}
         {principal ? (
           <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" type="button" onClick={onLogout}>
@@ -1240,7 +1272,7 @@ function TopBar({
           </button>
         )}
         <Link
-          className={`hidden items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline md:flex ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
+          className={`inline-flex items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
           href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
         >
           <Network size={15} />
@@ -1319,7 +1351,7 @@ function HeaderSearch({
   }
 
   return (
-    <form className="ml-auto flex w-full max-w-[720px] items-center gap-2 rounded-xl border border-line bg-white px-2 py-1.5 text-sm" onSubmit={submitSearch}>
+    <form className="flex min-w-0 flex-1 basis-full items-center gap-2 rounded-xl border border-line bg-white px-2 py-1.5 text-sm sm:basis-[360px] lg:max-w-[720px]" onSubmit={submitSearch}>
       <div className="flex shrink-0 rounded-lg border border-line bg-paper p-1 text-xs">
         <SearchKindButton active={kind === "path"} label="Path" onClick={() => setDraft({ key: draftKey, text, kind: "path" })} />
         <SearchKindButton active={kind === "full"} label="Full text" onClick={() => setDraft({ key: draftKey, text, kind: "full" })} />
@@ -1422,23 +1454,19 @@ function DocumentBreadcrumbs({
 }
 
 function tabTitle(tab: ModeTab): string {
-  if (tab === "recent") return "Recent";
+  if (tab === "ops") return "Ops";
   if (tab === "ingest") return "Ingest";
   if (tab === "sources") return "Sources";
   return "Explorer";
 }
 
-function authPromptMode(tab: ModeTab, readIdentity: Identity | null, loadError: string | null): "private" | "write" | null {
+function authPromptMode(readIdentity: Identity | null, loadError: string | null): "private" | null {
   if (readIdentity) return null;
-  if (tab === "ingest" || tab === "sources") return "write";
   return isPermissionError(loadError) ? "private" : null;
 }
 
 function parseTab(value: string | null): ModeTab {
-  if (value === "recent" || value === "ingest" || value === "sources" || value === "explorer") {
-    return value;
-  }
-  return "explorer";
+  return parseModeTab(value);
 }
 
 function parseView(value: string | null): ViewMode {

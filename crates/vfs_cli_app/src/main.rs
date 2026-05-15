@@ -1,6 +1,6 @@
 // Where: crates/vfs_cli_app/src/main.rs
-// What: Binary entrypoint for the agent-facing wiki CLI.
-// Why: Agents need one executable for remote node reads, writes, and maintenance.
+// What: Binary entrypoint for the single published kinic-vfs-cli executable.
+// Why: Wiki operations and Skill Registry operations share connection, identity, and DB selection.
 use anyhow::Result;
 use clap::Parser;
 use vfs_cli::commands::{print_database_current, run_database_unlink};

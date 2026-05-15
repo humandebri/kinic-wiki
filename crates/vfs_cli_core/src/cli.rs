@@ -8,7 +8,7 @@ use vfs_types::{DatabaseRole, GlobNodeType, NodeKind, SearchPreviewMode};
 pub const DEFAULT_VFS_ROOT_PATH: &str = "/";
 
 #[derive(Parser, Debug)]
-#[command(name = "vfs-cli")]
+#[command(name = "kinic-vfs-cli")]
 #[command(about = "Generic CLI for the Kinic VFS canister surface")]
 pub struct VfsCli {
     #[command(flatten)]
@@ -259,6 +259,30 @@ pub enum DatabaseCommand {
         database_id: String,
         #[arg(long)]
         json: bool,
+    },
+    ArchiveExport {
+        database_id: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 1_048_576)]
+        chunk_size: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    ArchiveRestore {
+        database_id: String,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value_t = 1_048_576)]
+        chunk_size: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    ArchiveCancel {
+        database_id: String,
+    },
+    RestoreCancel {
+        database_id: String,
     },
 }
 
