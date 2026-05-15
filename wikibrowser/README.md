@@ -41,10 +41,10 @@ Ops Q&A uses `DEEPSEEK_API_KEY` only in the server runtime. Store it in `wikibro
 
 ```bash
 pnpm exec wrangler secret put DEEPSEEK_API_KEY
-pnpm exec wrangler kv namespace create OPS_ANSWER_RATE_LIMIT
+pnpm exec wrangler kv namespace create QUERY_ANSWER_RATE_LIMIT
 ```
 
-Copy the returned KV namespace id into the `OPS_ANSWER_RATE_LIMIT` binding in `wrangler.jsonc` before deploy. Never expose the API key as `NEXT_PUBLIC_DEEPSEEK_API_KEY`.
+Copy the returned KV namespace id into the `QUERY_ANSWER_RATE_LIMIT` binding in `wrangler.jsonc` before deploy. Never expose the API key as `NEXT_PUBLIC_DEEPSEEK_API_KEY`.
 
 Ops Q&A rate limiting uses a Cloudflare KV minute bucket. KV is not an atomic counter, so the limit is a practical abuse throttle, not an exact quota under concurrent requests.
 

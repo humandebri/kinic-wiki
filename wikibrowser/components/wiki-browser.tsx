@@ -13,7 +13,7 @@ import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/componen
 import { ExplorerTree } from "@/components/explorer-tree";
 import { Inspector } from "@/components/inspector";
 import { IngestPanel } from "@/components/ingest-panel";
-import { OpsPanel } from "@/components/ops-panel";
+import { QueryPanel } from "@/components/query-panel";
 import { PanelHeader } from "@/components/panel";
 import { SourcesPanel } from "@/components/sources-panel";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
@@ -37,7 +37,7 @@ import {
   type ViewMode
 } from "@/lib/wiki-helpers";
 
-const SIDEBAR_TABS: ModeTab[] = ["explorer", "ops", "ingest", "sources"];
+const SIDEBAR_TABS: ModeTab[] = ["explorer", "query", "ingest", "sources"];
 const EMPTY_EDIT_STATE: DocumentEditState = { dirty: false, saveState: "idle" };
 const UNSAVED_MARKDOWN_MESSAGE = "You have unsaved Markdown changes. Leave edit mode?";
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
@@ -791,9 +791,9 @@ function LeftPane({
   explorerRevision: number;
   onSelectedExplorerNode: (node: ChildNode) => void;
 }) {
-  if (tab === "ops") {
+  if (tab === "query") {
     return (
-      <OpsPanel
+      <QueryPanel
         canisterId={canisterId}
         databaseId={databaseId}
         selectedPath={selectedPath}
@@ -1405,7 +1405,7 @@ function ModeTabs({
             href={hrefForPath(canisterId, databaseId, selectedPath, undefined, value, undefined, undefined, readMode)}
             className={`rounded-lg px-1.5 py-1.5 no-underline ${tab === value ? "bg-accent text-white" : "text-muted hover:bg-accentSoft hover:text-accentText"}`}
           >
-            {value}
+            {tabLabel(value)}
           </Link>
         ))}
       </div>
@@ -1454,10 +1454,15 @@ function DocumentBreadcrumbs({
 }
 
 function tabTitle(tab: ModeTab): string {
-  if (tab === "ops") return "Ops";
+  if (tab === "query") return "Query";
   if (tab === "ingest") return "Ingest";
   if (tab === "sources") return "Sources";
   return "Explorer";
+}
+
+function tabLabel(tab: ModeTab): string {
+  if (tab === "query") return "query";
+  return tab;
 }
 
 function authPromptMode(readIdentity: Identity | null, loadError: string | null): "private" | null {

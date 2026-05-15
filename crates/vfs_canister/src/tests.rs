@@ -19,10 +19,10 @@ use super::{
     create_database, delete_node, edit_node, export_snapshot,
     fail_next_mount_database_file_for_test, fetch_updates, finalize_database_archive, glob_nodes,
     grant_database_access, graph_links, graph_neighborhood, incoming_links, list_children,
-    list_databases, list_nodes, memory_manifest, mkdir_node, move_node, multi_edit_node,
-    outgoing_links, query_context, read_database_archive_chunk, read_node, read_node_context,
-    recent_nodes, revoke_database_access, search_node_paths, search_nodes, source_evidence, status,
-    write_node,
+    list_database_members, list_databases, list_nodes, memory_manifest, mkdir_node, move_node,
+    multi_edit_node, outgoing_links, query_context, read_database_archive_chunk, read_node,
+    read_node_context, recent_nodes, revoke_database_access, search_node_paths, search_nodes,
+    source_evidence, status, write_node,
 };
 
 fn install_test_service() {
@@ -235,6 +235,13 @@ fn anonymous_reader_grant_allows_public_read() {
         .expect("anonymous reader query should pass role check");
 
     assert_eq!(node, None);
+    let members = list_database_members("public".to_string())
+        .expect("anonymous reader should list public database members");
+    assert!(
+        members
+            .iter()
+            .any(|member| member.principal == "owner" && member.role == DatabaseRole::Owner)
+    );
 }
 
 #[test]

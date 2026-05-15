@@ -123,7 +123,7 @@ function DatabaseSection({
             <th className="px-4 py-3 font-medium">Archive</th>
             <th className="px-4 py-3 font-medium">Open</th>
             {mode === "member" ? <th className="px-4 py-3 font-medium">Skills</th> : null}
-            {mode === "member" ? <th className="px-4 py-3 font-medium">Manage</th> : null}
+            <th className="px-4 py-3 font-medium">Access</th>
           </tr>
         </thead>
         <tbody>
@@ -158,13 +158,11 @@ function DatabaseSection({
                   </Link>
                 </td>
               ) : null}
-              {mode === "member" ? (
-                <td className="px-4 py-3">
-                  <Link className="text-accent no-underline hover:underline" href={`/dashboard/${encodeURIComponent(database.databaseId)}`}>
-                    Manage
-                  </Link>
-                </td>
-              ) : null}
+              <td className="px-4 py-3">
+                <Link className="text-accent no-underline hover:underline" href={`/dashboard/${encodeURIComponent(database.databaseId)}`}>
+                  Access
+                </Link>
+              </td>
             </tr>
           ))}
         </tbody>
