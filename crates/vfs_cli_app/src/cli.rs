@@ -12,6 +12,7 @@ use wiki_domain::WIKI_ROOT_PATH;
 
 #[derive(Parser, Debug)]
 #[command(name = "kinic-vfs-cli")]
+#[command(version)]
 #[command(about = "Agent-facing CLI for the Kinic FS-first wiki")]
 pub struct Cli {
     #[command(flatten)]
@@ -730,6 +731,17 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(!help.contains("beam-bench"));
+    }
+
+    #[test]
+    fn main_cli_exposes_package_version() {
+        let command = Cli::command();
+        let version = command.render_version().to_string();
+
+        assert_eq!(
+            version.trim(),
+            concat!("kinic-vfs-cli ", env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]

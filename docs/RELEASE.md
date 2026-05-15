@@ -22,16 +22,16 @@ target/release/kinic-vfs-cli --canister-id <canister-id> database current
 Tag a release with a `v*` version:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The `Release CLI` workflow builds and uploads:
 
-- `kinic-vfs-cli-v0.1.0-linux-x86_64.tar.gz`
-- `kinic-vfs-cli-v0.1.0-linux-x86_64.sha256`
-- `kinic-vfs-cli-v0.1.0-macos-arm64.tar.gz`
-- `kinic-vfs-cli-v0.1.0-macos-arm64.sha256`
+- `kinic-vfs-cli-v0.1.1-linux-x86_64.tar.gz`
+- `kinic-vfs-cli-v0.1.1-linux-x86_64.sha256`
+- `kinic-vfs-cli-v0.1.1-macos-arm64.tar.gz`
+- `kinic-vfs-cli-v0.1.1-macos-arm64.sha256`
 
 Each tarball contains only:
 
@@ -42,9 +42,10 @@ Each tarball contains only:
 Verify after download:
 
 ```bash
-shasum -a 256 -c kinic-vfs-cli-v0.1.0-macos-arm64.sha256
-tar -xzf kinic-vfs-cli-v0.1.0-macos-arm64.tar.gz
+shasum -a 256 -c kinic-vfs-cli-v0.1.1-macos-arm64.sha256
+tar -xzf kinic-vfs-cli-v0.1.1-macos-arm64.tar.gz
 ./kinic-vfs-cli --help
+./kinic-vfs-cli --version
 ```
 
 ## Homebrew
@@ -56,7 +57,7 @@ After a GitHub Release is available:
 1. Read the release checksum:
 
    ```bash
-   shasum -a 256 kinic-vfs-cli-v0.1.0-macos-arm64.tar.gz
+   shasum -a 256 kinic-vfs-cli-v0.1.1-macos-arm64.tar.gz
    ```
 
 2. Copy [`../packaging/homebrew/Formula/kinic-vfs-cli.rb`](../packaging/homebrew/Formula/kinic-vfs-cli.rb) into `ICME-Lab/homebrew-tap`.
