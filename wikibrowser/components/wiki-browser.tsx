@@ -1236,7 +1236,7 @@ function TopBar({
     <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
       <div className="min-w-0">
         <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
-          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} />
+          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} unoptimized />
           Knowledge IDE
         </Link>
       </div>

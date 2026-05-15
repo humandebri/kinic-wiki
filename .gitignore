@@ -36,7 +36,6 @@ __pycache__/
 
 # icp-cli local state
 /.icp/cache/
-/.icp/data/
 
 # Local hooks and helper scripts
 /.githooks/
