@@ -21,7 +21,7 @@ use vfs_types::{
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
     SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
     SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
-    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
+    UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -945,6 +945,26 @@ impl VfsService {
         let result =
             self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
                 store.write_node(request, now)
+            });
+        if result.is_ok() {
+            self.refresh_logical_size(&database_id)?;
+        }
+        result
+    }
+
+    pub fn write_nodes(
+        &self,
+        caller: &str,
+        request: WriteNodesRequest,
+        now: i64,
+    ) -> Result<Vec<WriteNodeResult>, String> {
+        for node in &request.nodes {
+            validate_source_path_for_kind(&node.path, &node.kind)?;
+        }
+        let database_id = request.database_id.clone();
+        let result =
+            self.with_database_store(&database_id, caller, RequiredRole::Writer, |store| {
+                store.write_nodes(request, now)
             });
         if result.is_ok() {
             self.refresh_logical_size(&database_id)?;

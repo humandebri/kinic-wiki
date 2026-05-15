@@ -19,9 +19,11 @@ use std::path::{Path, PathBuf};
 pub(crate) use vfs_cli::skill_kb::{find_skills, inspect_skill};
 use vfs_client::VfsApi;
 use vfs_types::{
-    DeleteNodeRequest, ListNodesRequest, MkdirNodeRequest, NodeEntryKind, NodeKind,
-    WriteNodeRequest,
+    DeleteNodeRequest, ListNodesRequest, MkdirNodeRequest, NodeEntryKind, NodeKind, WriteNodeItem,
+    WriteNodeRequest, WriteNodesRequest,
 };
+
+const SKILL_PACKAGE_FILE_LIMIT_MAX: usize = 100;
 
 pub async fn run_skill_command(
     client: &impl VfsApi,
@@ -164,13 +166,34 @@ async fn write_skill_package(
     prune: bool,
     files: BTreeMap<String, String>,
 ) -> Result<serde_json::Value> {
+    validate_skill_package_file_count(files.len())?;
     let base_path = skill_base_path(skill_id, public);
     let file_names = files.keys().cloned().collect::<BTreeSet<_>>();
+    let entries = files.into_iter().collect::<Vec<_>>();
+    let paths = entries
+        .iter()
+        .map(|(name, _)| format!("{base_path}/{name}"))
+        .collect::<Vec<_>>();
+    ensure_parent_folders_for_paths(client, database_id, &paths).await?;
     let mut written_paths = Vec::new();
-    for (name, content) in files {
-        write_file_node(client, database_id, &format!("{base_path}/{name}"), content).await?;
-        written_paths.push(format!("{base_path}/{name}"));
+    let mut nodes = Vec::new();
+    for ((_, content), path) in entries.into_iter().zip(paths) {
+        let current = client.read_node(database_id, &path).await?;
+        nodes.push(WriteNodeItem {
+            path: path.clone(),
+            kind: NodeKind::File,
+            content,
+            metadata_json: "{}".to_string(),
+            expected_etag: current.map(|node| node.etag),
+        });
+        written_paths.push(path);
     }
+    client
+        .write_nodes(WriteNodesRequest {
+            database_id: database_id.to_string(),
+            nodes,
+        })
+        .await?;
     let pruned_paths = if prune {
         prune_package_files(client, database_id, &base_path, &file_names).await?
     } else {
@@ -486,28 +509,40 @@ fn validate_proposal_frontmatter(id: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
-async fn write_file_node(
+async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &str) -> Result<()> {
+    ensure_parent_folders_for_paths(client, database_id, &[path.to_string()]).await
+}
+
+async fn ensure_parent_folders_for_paths(
     client: &impl VfsApi,
     database_id: &str,
-    path: &str,
-    content: String,
+    paths: &[String],
 ) -> Result<()> {
-    ensure_parent_folders(client, database_id, path).await?;
-    let current = client.read_node(database_id, path).await?;
-    client
-        .write_node(WriteNodeRequest {
-            database_id: database_id.to_string(),
-            path: path.to_string(),
-            kind: NodeKind::File,
-            content,
-            metadata_json: "{}".to_string(),
-            expected_etag: current.map(|node| node.etag),
-        })
-        .await?;
+    let mut folders = BTreeSet::new();
+    for path in paths {
+        collect_parent_folders(path, &mut folders);
+    }
+    for folder in folders {
+        client
+            .mkdir_node(MkdirNodeRequest {
+                database_id: database_id.to_string(),
+                path: folder,
+            })
+            .await?;
+    }
     Ok(())
 }
 
-async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &str) -> Result<()> {
+fn validate_skill_package_file_count(count: usize) -> Result<()> {
+    if count == 0 || count > SKILL_PACKAGE_FILE_LIMIT_MAX {
+        return Err(anyhow!(
+            "skill package file count must be between 1 and {SKILL_PACKAGE_FILE_LIMIT_MAX}"
+        ));
+    }
+    Ok(())
+}
+
+fn collect_parent_folders(path: &str, folders: &mut BTreeSet<String>) {
     let segments = path
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -516,14 +551,8 @@ async fn ensure_parent_folders(client: &impl VfsApi, database_id: &str, path: &s
     for segment in segments.iter().take(segments.len().saturating_sub(1)) {
         current.push('/');
         current.push_str(segment);
-        client
-            .mkdir_node(MkdirNodeRequest {
-                database_id: database_id.to_string(),
-                path: current.clone(),
-            })
-            .await?;
+        folders.insert(current.clone());
     }
-    Ok(())
 }
 
 async fn prune_package_files(

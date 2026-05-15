@@ -19,7 +19,7 @@ use vfs_types::{
     MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
     MultiEditNodeResult, Node, NodeEntry, NodeEntryKind, NodeKind, RecentNodeHit,
     RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, Status,
-    WriteNodeRequest, WriteNodeResult,
+    WriteNodeItem, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 
 #[derive(Default)]
@@ -27,7 +27,9 @@ struct SkillMockClient {
     nodes: Mutex<BTreeMap<String, Node>>,
     mkdirs: Mutex<Vec<String>>,
     searches: Mutex<Vec<SearchNodesRequest>>,
+    stale_before_batch_path: Mutex<Option<String>>,
     writes: AtomicUsize,
+    write_batches: AtomicUsize,
 }
 
 #[async_trait]
@@ -70,38 +72,38 @@ impl VfsApi for SkillMockClient {
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
         let mut nodes = self.nodes.lock().expect("nodes lock");
-        let created = !nodes.contains_key(&request.path);
-        if let Some(current) = nodes.get(&request.path) {
-            if request.expected_etag.as_deref() != Some(current.etag.as_str()) {
-                anyhow::bail!(
-                    "expected_etag does not match current etag: {}",
-                    request.path
-                );
-            }
-        } else if request.expected_etag.is_some() {
-            anyhow::bail!("expected_etag must be None for new node: {}", request.path);
+        let mut write_count = self.writes.load(Ordering::SeqCst);
+        let result = apply_mock_write(&mut nodes, &mut write_count, request)?;
+        self.writes.store(write_count, Ordering::SeqCst);
+        Ok(result)
+    }
+
+    async fn write_nodes(&self, request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>> {
+        self.write_batches.fetch_add(1, Ordering::SeqCst);
+        let nodes = self.nodes.lock().expect("nodes lock");
+        let mut next_nodes = nodes.clone();
+        drop(nodes);
+        if let Some(path) = self
+            .stale_before_batch_path
+            .lock()
+            .expect("stale path lock")
+            .take()
+            && let Some(node) = next_nodes.get_mut(&path)
+        {
+            node.etag = "externally-updated".to_string();
         }
-        let write_id = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
-        let etag = format!("etag-write-{write_id}");
-        let node = Node {
-            path: request.path.clone(),
-            kind: request.kind.clone(),
-            content: request.content,
-            created_at: 1,
-            updated_at: 2,
-            etag: etag.clone(),
-            metadata_json: request.metadata_json,
-        };
-        nodes.insert(request.path.clone(), node);
-        Ok(WriteNodeResult {
-            created,
-            node: vfs_types::NodeMutationAck {
-                path: request.path,
-                kind: request.kind.clone(),
-                updated_at: 2,
-                etag,
-            },
-        })
+        let mut write_count = self.writes.load(Ordering::SeqCst);
+        let mut results = Vec::new();
+        for item in request.nodes {
+            results.push(apply_mock_write(
+                &mut next_nodes,
+                &mut write_count,
+                write_request_from_item(&request.database_id, item),
+            )?);
+        }
+        *self.nodes.lock().expect("nodes lock") = next_nodes;
+        self.writes.store(write_count, Ordering::SeqCst);
+        Ok(results)
     }
 
     async fn append_node(&self, _request: AppendNodeRequest) -> Result<WriteNodeResult> {
@@ -218,6 +220,56 @@ impl VfsApi for SkillMockClient {
             removed_paths: Vec::new(),
             next_cursor: None,
         })
+    }
+}
+
+fn apply_mock_write(
+    nodes: &mut BTreeMap<String, Node>,
+    write_count: &mut usize,
+    request: WriteNodeRequest,
+) -> Result<WriteNodeResult> {
+    let created = !nodes.contains_key(&request.path);
+    if let Some(current) = nodes.get(&request.path) {
+        if request.expected_etag.as_deref() != Some(current.etag.as_str()) {
+            anyhow::bail!(
+                "expected_etag does not match current etag: {}",
+                request.path
+            );
+        }
+    } else if request.expected_etag.is_some() {
+        anyhow::bail!("expected_etag must be None for new node: {}", request.path);
+    }
+    *write_count += 1;
+    let etag = format!("etag-write-{write_count}");
+    let node = Node {
+        path: request.path.clone(),
+        kind: request.kind.clone(),
+        content: request.content,
+        created_at: 1,
+        updated_at: 2,
+        etag: etag.clone(),
+        metadata_json: request.metadata_json,
+    };
+    nodes.insert(request.path.clone(), node);
+    Ok(WriteNodeResult {
+        created,
+        node: vfs_types::NodeMutationAck {
+            path: request.path,
+            kind: request.kind,
+            updated_at: 2,
+            etag,
+        },
+    })
+}
+
+fn write_request_from_item(database_id: &str, item: WriteNodeItem) -> WriteNodeRequest {
+    WriteNodeRequest {
+        database_id: database_id.to_string(),
+        path: item.path,
+        kind: item.kind,
+        content: item.content,
+        metadata_json: item.metadata_json,
+        expected_etag: item.expected_etag,
     }
 }
 
@@ -555,6 +607,119 @@ async fn skill_set_status_preserves_manifest_body_and_unknown_frontmatter() {
     assert!(updated.contains("status: promoted\n"));
     assert!(updated.contains("# Skill Manifest\n\nHuman-maintained notes stay here.\n"));
     assert!(!updated.contains("status: reviewed # old comment"));
+}
+
+#[tokio::test]
+async fn skill_upsert_uses_write_nodes_for_package_files() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(temp.path(), "SKILL.md", "# Legal Review\n\nReview.");
+    write(temp.path(), "manifest.md", &manifest("draft"));
+    write(temp.path(), "evals.md", "# Evals");
+
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect("upsert");
+
+    assert_eq!(client.write_batches.load(Ordering::SeqCst), 1);
+    assert_eq!(client.writes.load(Ordering::SeqCst), 3);
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/evals.md")
+            .await
+            .expect("read should succeed")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn skill_upsert_rejects_package_over_batch_limit_before_writing() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut skill = String::from("# Legal Review\n\nReview.");
+    for index in 0..99 {
+        let file_name = format!("extra-{index:03}.md");
+        skill.push_str(&format!("\n[{file_name}]({file_name})"));
+        write(temp.path(), &file_name, "# Extra");
+    }
+    write(temp.path(), "SKILL.md", &skill);
+    write(temp.path(), "manifest.md", &manifest("draft"));
+
+    let error = upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect_err("over-limit package should fail before write_nodes");
+
+    assert!(
+        error
+            .to_string()
+            .contains("skill package file count must be between 1 and 100")
+    );
+    assert_eq!(client.write_batches.load(Ordering::SeqCst), 0);
+    assert_eq!(client.writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn skill_upsert_batch_failure_does_not_partially_write_package_files() {
+    let client = SkillMockClient::default();
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(temp.path(), "SKILL.md", "# Legal Review\n\nReview.");
+    write(temp.path(), "manifest.md", &manifest("draft"));
+    upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect("initial upsert");
+    write(temp.path(), "SKILL.md", "# Legal Review\n\nUpdated.");
+    write(temp.path(), "evals.md", "# Evals");
+    *client
+        .stale_before_batch_path
+        .lock()
+        .expect("stale path lock") = Some("/Wiki/skills/legal-review/SKILL.md".to_string());
+
+    let error = upsert_skill(
+        &client,
+        "default",
+        temp.path(),
+        "legal-review",
+        false,
+        false,
+    )
+    .await
+    .expect_err("stale etag should fail batch");
+
+    assert!(error.to_string().contains("expected_etag"));
+    let skill = client
+        .read_node("default", "/Wiki/skills/legal-review/SKILL.md")
+        .await
+        .expect("read should succeed")
+        .expect("skill should exist");
+    assert!(!skill.content.contains("Updated."));
+    assert!(
+        client
+            .read_node("default", "/Wiki/skills/legal-review/evals.md")
+            .await
+            .expect("read should succeed")
+            .is_none()
+    );
 }
 
 #[tokio::test]
