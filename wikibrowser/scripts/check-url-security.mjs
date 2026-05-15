@@ -131,6 +131,8 @@ await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa" }, async () => {
 await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY: "deepseek-key" }, async () => {
   const forbidden = await opsAnswerRouteModule.POST(opsAnswerRequest("https://evil.example"));
   assert.equal(forbidden.status, 403);
+  const localForbidden = await opsAnswerRouteModule.POST(opsAnswerRequest("http://localhost:3000"));
+  assert.equal(localForbidden.status, 403);
 
   opsAnswerRouteModule.setOpsAnswerDepsForTest({
     checkSession: async () => ({ principal: "principal-1" }),
