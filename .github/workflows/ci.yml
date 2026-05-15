@@ -149,7 +149,7 @@ jobs:
       - name: Use stable Rust
         run: rustup default stable
       - name: Add wasm target
-        run: rustup target add wasm32-wasip1
+        run: rustup target add wasm32-unknown-unknown
       - name: Install WASI sysroot
         run: sudo apt-get update && sudo apt-get install -y wasi-libc
       - name: Install wasm tooling
