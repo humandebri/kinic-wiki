@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseUrlIngestRequest, parseUrlIngestTriggerInput, processUrlIngestRequest, shouldProcessIngestRequest, triggerUrlIngestRequest } from "../src/url-ingest.js";
-import type { UrlIngestRequest, WikiNode } from "../src/types.js";
+import type { SourceQueueMessage, UrlIngestRequest, WikiNode } from "../src/types.js";
 import { testEnv, TestQueue, TestVfsClient, withFetchedPage, workerConfig } from "./url-ingest-fixtures.js";
 
 const node: WikiNode = {
@@ -99,9 +99,10 @@ test("queued URL ingest uses source write ack without reading source after write
   assert.equal(vfs.sourceReadsBeforeWrite, 1);
   assert.equal(vfs.sourceReadsAfterWrite, 0);
   assert.equal(queue.messages.length, 1);
-  assert.equal(queue.messages[0]?.sourceEtag, "etag-source-write");
+  const message = sourceMessage(queue.messages[0]);
+  assert.equal(message.sourceEtag, "etag-source-write");
   assert.equal(vfs.lastRequest?.status, "generating");
-  assert.equal(vfs.lastRequest?.sourcePath, queue.messages[0]?.sourcePath);
+  assert.equal(vfs.lastRequest?.sourcePath, message.sourcePath);
   assert.equal(vfs.lastRequest?.finishedAt, null);
   assert.equal(vfs.lastRequest?.metadataJson, vfs.requestNode?.metadataJson);
   assert.ok(vfs.lastSourceWrite);
@@ -109,7 +110,7 @@ test("queued URL ingest uses source write ack without reading source after write
   assert.equal(metadata.request_type, "url_ingest");
   assert.equal(metadata.url, "https://example.com/a");
   assert.equal(metadata.status, "generating");
-  assert.equal(metadata.source_path, queue.messages[0]?.sourcePath);
+  assert.equal(metadata.source_path, message.sourcePath);
   assert.equal(metadata.custom, "preserved");
   assert.doesNotMatch(vfs.lastSourceWrite.content, /request_path/);
   assert.doesNotMatch(vfs.lastSourceWrite.metadataJson, /request_path/);
@@ -202,8 +203,9 @@ test("source_written URL ingest still reads source to recover etag", async () =>
 
   assert.equal(vfs.sourceReadsBeforeWrite, 1);
   assert.equal(vfs.sourceWrites, 0);
-  assert.equal(queue.messages[0]?.sourceEtag, "etag-existing-source");
-  assert.equal(queue.messages[0]?.sourcePath, "/Sources/raw/retry/retry.md");
+  const message = sourceMessage(queue.messages[0]);
+  assert.equal(message.sourceEtag, "etag-existing-source");
+  assert.equal(message.sourcePath, "/Sources/raw/retry/retry.md");
 });
 
 test("source_written URL ingest rejects source_path outside source prefix", async () => {
@@ -229,7 +231,7 @@ test("fetched source instructions cannot change trigger database", async () => {
   });
 
   assert.equal(queue.messages.length, 1);
-  assert.equal(queue.messages[0]?.databaseId, "db_1");
+  assert.equal(sourceMessage(queue.messages[0]).databaseId, "db_1");
 });
 
 test("second trigger for the same request is accepted without reprocessing", async () => {
@@ -341,4 +343,24 @@ function requestNode(request: UrlIngestRequest): WikiNode {
       "# URL Ingest Request"
     ].join("\n")
   };
+}
+
+function sourceMessage(message: unknown): SourceQueueMessage {
+  assert.ok(isSourceQueueMessage(message));
+  return message;
+}
+
+function isSourceQueueMessage(message: unknown): message is SourceQueueMessage {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    "kind" in message &&
+    "databaseId" in message &&
+    "sourcePath" in message &&
+    "sourceEtag" in message &&
+    message.kind === "source" &&
+    typeof message.databaseId === "string" &&
+    typeof message.sourcePath === "string" &&
+    typeof message.sourceEtag === "string"
+  );
 }

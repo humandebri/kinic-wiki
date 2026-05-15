@@ -6,7 +6,7 @@ use vfs_types::{
     GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, ListNodesRequest,
     MkdirNodeRequest, MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest,
     NodeEntryKind, NodeKind, OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest,
-    SearchNodePathsRequest, SearchPreviewMode, SourceEvidenceRequest,
+    SearchNodePathsRequest, SearchPreviewMode, SourceEvidenceRequest, WriteNodeRequest,
 };
 
 fn new_store() -> (tempfile::TempDir, FsStore) {
@@ -37,6 +37,142 @@ fn ensure_parent_folders(store: &FsStore, path: &str, now: i64) {
             )
             .expect("parent folder should exist or be created");
     }
+}
+
+#[test]
+fn write_mkdir_and_move_require_existing_folder_parent() {
+    let (_dir, store) = new_store();
+    let write_error = store
+        .write_node(
+            WriteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/missing/file.md".to_string(),
+                kind: NodeKind::File,
+                content: "orphan".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            10,
+        )
+        .expect_err("write without parent folder should fail");
+    assert_eq!(write_error, "parent folder does not exist: /Wiki/missing");
+
+    let mkdir_error = store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/missing/child".to_string(),
+            },
+            11,
+        )
+        .expect_err("mkdir without parent folder should fail");
+    assert_eq!(mkdir_error, "parent folder does not exist: /Wiki/missing");
+
+    let source = store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                content: "alpha".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            12,
+        )
+        .expect("source node should create");
+    let move_error = store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/a.md".to_string(),
+                to_path: "/Wiki/missing/a.md".to_string(),
+                expected_etag: Some(source.node.etag),
+                overwrite: false,
+            },
+            13,
+        )
+        .expect_err("move without target parent folder should fail");
+    assert_eq!(move_error, "parent folder does not exist: /Wiki/missing");
+}
+
+#[test]
+fn file_and_source_parents_cannot_contain_children() {
+    let (_dir, store) = new_store();
+    let file_parent = store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/file".to_string(),
+                content: "file parent".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("file parent should create");
+    let file_child_error = store
+        .write_node(
+            WriteNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/file/child.md".to_string(),
+                kind: NodeKind::File,
+                content: "child".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            11,
+        )
+        .expect_err("write below file should fail");
+    assert_eq!(file_child_error, "parent path is not a folder: /Wiki/file");
+
+    ensure_parent_folders(&store, "/Sources/raw/source/source.md", 12);
+    store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Sources/raw/source/source.md".to_string(),
+                content: "source parent".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: Some(NodeKind::Source),
+            },
+            13,
+        )
+        .expect("source parent should create");
+    let mkdir_error = store
+        .mkdir_node(
+            MkdirNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Sources/raw/source/source.md/child".to_string(),
+            },
+            14,
+        )
+        .expect_err("mkdir below source should fail");
+    assert_eq!(
+        mkdir_error,
+        "parent path is not a folder: /Sources/raw/source/source.md"
+    );
+    let move_error = store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/file".to_string(),
+                to_path: "/Sources/raw/source/source.md/file".to_string(),
+                expected_etag: Some(file_parent.node.etag),
+                overwrite: false,
+            },
+            15,
+        )
+        .expect_err("move below source should fail");
+    assert_eq!(
+        move_error,
+        "parent path is not a folder: /Sources/raw/source/source.md"
+    );
 }
 
 #[test]
@@ -1075,6 +1211,76 @@ fn move_node_moves_non_root_folder_subtree() {
             .expect("moved child should exist")
             .content,
         "alpha"
+    );
+}
+
+#[test]
+fn folder_move_collision_fails_without_partial_updates() {
+    let (_dir, store) = new_store();
+    ensure_parent_folders(&store, "/Wiki/work/item.md", 9);
+    let _source_child = store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/work/item.md".to_string(),
+                content: "source child".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect("source child should create");
+    ensure_parent_folders(&store, "/Wiki/archive/work/item.md", 10);
+    store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/archive/work/item.md".to_string(),
+                content: "target child".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            11,
+        )
+        .expect("target child should create");
+    let folder = store
+        .read_node("/Wiki/work")
+        .expect("folder read should succeed")
+        .expect("folder should exist");
+
+    let error = store
+        .move_node(
+            MoveNodeRequest {
+                database_id: "default".to_string(),
+                from_path: "/Wiki/work".to_string(),
+                to_path: "/Wiki/archive/work".to_string(),
+                expected_etag: Some(folder.etag),
+                overwrite: false,
+            },
+            12,
+        )
+        .expect_err("folder move collision should fail");
+
+    assert!(error.contains("target node already exists"));
+    assert_eq!(
+        store
+            .read_node("/Wiki/work/item.md")
+            .expect("old child read should succeed")
+            .expect("old child should remain")
+            .content,
+        "source child"
+    );
+    assert_eq!(
+        store
+            .read_node("/Wiki/archive/work/item.md")
+            .expect("target child read should succeed")
+            .expect("target child should remain")
+            .content,
+        "target child"
     );
 }
 

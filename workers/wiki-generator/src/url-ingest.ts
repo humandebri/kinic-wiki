@@ -39,12 +39,17 @@ export function parseUrlIngestTriggerInput(value: unknown): UrlIngestTriggerInpu
   return { canisterId, databaseId, requestPath };
 }
 
-export async function prepareUrlIngestTrigger(env: RuntimeEnv, input: UrlIngestTriggerInput): Promise<UrlIngestTriggerContext> {
+export function validateUrlIngestTriggerInput(env: RuntimeEnv, input: UrlIngestTriggerInput): WorkerConfig {
   const config = loadConfig(env);
   if (input.canisterId !== config.canisterId) {
     throw new UrlIngestTriggerError("canisterId does not match worker canister config", 400);
   }
   validateIngestRequestPath(input.requestPath);
+  return config;
+}
+
+export async function prepareUrlIngestTrigger(env: RuntimeEnv, input: UrlIngestTriggerInput): Promise<UrlIngestTriggerContext> {
+  const config = validateUrlIngestTriggerInput(env, input);
   const vfs = await createVfsClient(config, env.KINIC_WIKI_WORKER_IDENTITY_PEM);
   return { config, vfs };
 }

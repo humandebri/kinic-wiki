@@ -44,5 +44,4 @@ Read these references when needed:
 
 - shared repo rules: [../references/shared-rules.md](../references/shared-rules.md)
 - vendor markdown rules: [../vendor/obsidian-skills/obsidian-markdown/SKILL.md](../vendor/obsidian-skills/obsidian-markdown/SKILL.md)
-- vendor vault guidance: [../vendor/obsidian-skills/obsidian-cli/SKILL.md](../vendor/obsidian-skills/obsidian-cli/SKILL.md)
 - vendor source cleanup: [../vendor/obsidian-skills/defuddle/SKILL.md](../vendor/obsidian-skills/defuddle/SKILL.md)
