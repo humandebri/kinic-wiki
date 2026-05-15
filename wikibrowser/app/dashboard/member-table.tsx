@@ -64,7 +64,7 @@ function MemberRow(props: {
   const roleBusy = isBusyGrant(props.busyAction, props.member.principal, role);
   const changed = role !== props.member.role;
   return (
-    <tr className={`border-t border-line ${revokeBusy || roleBusy ? "bg-blue-50/60" : ""}`}>
+    <tr className={`border-t border-line ${revokeBusy || roleBusy ? "bg-accentSoft/70" : ""}`}>
       <td className="px-4 py-3 font-mono text-xs text-ink">{principalDisplayName(props.member.principal)}</td>
       <td className="px-4 py-3">
         <div className="flex min-w-[210px] items-center gap-2">

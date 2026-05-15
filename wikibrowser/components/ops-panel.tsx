@@ -163,7 +163,7 @@ export function OpsPanel({
             value={input}
             onChange={(event) => setInput(event.target.value)}
           />
-          <button className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-accent bg-accent px-3 text-sm font-medium text-white disabled:opacity-60" disabled={busy || !input.trim()} type="submit" title="Run operation">
+          <button className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-action bg-action px-3 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:translate-y-0 disabled:opacity-60" disabled={busy || !input.trim()} type="submit" title="Run operation">
             <ShieldCheck size={15} />
             <span>Run</span>
           </button>
@@ -201,7 +201,7 @@ function ActionPreview({ action, busy, onConfirm }: { action: OpsAction; busy: b
         <span>side effect: {action.sideEffect}</span>
       </div>
       {onConfirm ? (
-        <button className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60" disabled={busy} type="button" onClick={onConfirm}>
+        <button className="mt-2 inline-flex items-center gap-1.5 rounded-2xl border border-action bg-action px-3 py-1.5 text-xs font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:translate-y-0 disabled:opacity-60" disabled={busy} type="button" onClick={onConfirm}>
           <Link2 size={13} />
           {busy ? "Queueing..." : "Confirm queue"}
         </button>

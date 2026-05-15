@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Check, FilePlus, FolderPlus, GitBranch, LayoutDashboard, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
+import { Check, FilePlus, FolderPlus, GitBranch, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -859,7 +859,7 @@ function ExplorerHeaderActions({
     <div className="flex items-center gap-1">
       <button
         type="button"
-        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onNewFile}
         disabled={fileDisabled}
         title={fileTitle}
@@ -869,7 +869,7 @@ function ExplorerHeaderActions({
       </button>
       <button
         type="button"
-        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onNewFolder}
         disabled={folderDisabled}
         title={folderTitle}
@@ -879,7 +879,7 @@ function ExplorerHeaderActions({
       </button>
       <button
         type="button"
-        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onRename}
         disabled={renameDisabled}
         title={renameTitle}
@@ -889,7 +889,7 @@ function ExplorerHeaderActions({
       </button>
       <button
         type="button"
-        className="rounded-md p-1 text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onMove}
         disabled={moveDisabled}
         title={moveTitle}
@@ -899,7 +899,7 @@ function ExplorerHeaderActions({
       </button>
       <button
         type="button"
-        className="rounded-md p-1 text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md p-1 text-muted hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
         onClick={onDelete}
         disabled={deleteDisabled}
         title={deleteTitle}
@@ -947,7 +947,7 @@ function ExplorerCreateForm({
         />
         <button
           type="submit"
-          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
           disabled={busy}
           aria-label={submitLabel}
           title={submitLabel}
@@ -956,7 +956,7 @@ function ExplorerCreateForm({
         </button>
         <button
           type="button"
-          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
           onClick={onCancel}
           disabled={busy}
           aria-label="Cancel Explorer action"
@@ -1007,7 +1007,7 @@ function ExplorerMoveForm({
         </select>
         <button
           type="button"
-          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
           disabled={busy || !value}
           aria-label="Move selected node"
           title="Move selected node"
@@ -1017,7 +1017,7 @@ function ExplorerMoveForm({
         </button>
         <button
           type="button"
-          className="rounded-md p-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md p-1 text-muted hover:bg-accentSoft hover:text-accentText disabled:cursor-not-allowed disabled:opacity-40"
           onClick={onCancel}
           disabled={busy}
           aria-label="Cancel move"
@@ -1232,7 +1232,7 @@ function TopBar({
     <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
       <div className="min-w-0">
         <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
-          <LayoutDashboard size={15} />
+          <img className="h-5 w-5 rounded-md" src="/icon.png" alt="" />
           Knowledge IDE
         </Link>
       </div>
@@ -1262,7 +1262,7 @@ function TopBar({
           </button>
         ) : (
           <button
-            className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
             data-tid="header-login-button"
             disabled={!authReady}
             type="button"
@@ -1272,7 +1272,7 @@ function TopBar({
           </button>
         )}
         <Link
-          className={`inline-flex items-center gap-1 rounded-lg border border-line px-3 py-2 text-sm no-underline ${isGraphPage ? "bg-accent text-white" : "bg-white text-ink"}`}
+          className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm no-underline ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
           href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
         >
           <Network size={15} />
@@ -1364,7 +1364,7 @@ function HeaderSearch({
         placeholder="Search wiki"
         aria-label="Search wiki"
       />
-      <button className="rounded-lg bg-accent px-3 py-1.5 text-white" type="submit">
+      <button className="rounded-2xl bg-action px-3 py-1.5 font-bold text-white hover:-translate-y-[3px] hover:bg-accent" type="submit">
         Search
       </button>
     </form>
@@ -1375,7 +1375,7 @@ function SearchKindButton({ active, label, onClick }: { active: boolean; label: 
   return (
     <button
       type="button"
-      className={`rounded-md px-2 py-1 ${active ? "bg-white text-accent shadow-sm" : "text-muted"}`}
+      className={`rounded-md px-2 py-1 ${active ? "bg-white text-accentText shadow-sm" : "text-muted hover:text-accentText"}`}
       onClick={onClick}
     >
       {label}
@@ -1403,7 +1403,7 @@ function ModeTabs({
           <Link
             key={value}
             href={hrefForPath(canisterId, databaseId, selectedPath, undefined, value, undefined, undefined, readMode)}
-            className={`rounded-lg px-1.5 py-1.5 no-underline ${tab === value ? "bg-accent text-white" : "text-muted hover:bg-paper"}`}
+            className={`rounded-lg px-1.5 py-1.5 no-underline ${tab === value ? "bg-accent text-white" : "text-muted hover:bg-accentSoft hover:text-accentText"}`}
           >
             {value}
           </Link>

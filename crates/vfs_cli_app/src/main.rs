@@ -62,20 +62,28 @@ async fn main() -> Result<()> {
                 "database id is required for identity membership check; pass --database-id or link a workspace database"
             )
         })?;
-        let client = new_identity_client(&connection).await.map_err(|error| {
-            anyhow::anyhow!(
-                "failed to check selected identity membership for public database; use --identity-mode anonymous to force anonymous read: {error}"
-            )
-        })?;
-        let is_member = identity_is_database_member(&client, database_id)
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to check selected identity membership for public database; use --identity-mode anonymous to force anonymous read: {error}"
-                )
-            })?;
-        identity_client = Some(client);
-        Some(is_member)
+        match new_identity_client(&connection).await {
+            Ok(client) => match identity_is_database_member(&client, database_id).await {
+                Ok(is_member) => {
+                    if is_member {
+                        identity_client = Some(client);
+                    }
+                    Some(is_member)
+                }
+                Err(error) => {
+                    eprintln!(
+                        "warning: failed to check selected identity membership for public database; falling back to anonymous read: {error}"
+                    );
+                    None
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "warning: failed to load selected identity for public database membership check; falling back to anonymous read: {error}"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -100,7 +108,7 @@ async fn main() -> Result<()> {
 async fn new_identity_client(
     connection: &vfs_cli::connection::ResolvedConnection,
 ) -> Result<CanisterVfsClient> {
-    let identity = load_default_identity().await?;
+    let identity = load_default_identity(&connection.canister_id).await?;
     CanisterVfsClient::new_with_boxed_identity(
         &connection.replica_host,
         &connection.canister_id,

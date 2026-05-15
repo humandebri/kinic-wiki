@@ -8,6 +8,7 @@ import {
   CLI_DELEGATION_TTL_NS,
   authClientCreateOptions,
   decodeBase64UrlToBytes,
+  derivationOriginForLocation,
   identityProviderUrlForLocation,
   parseCliLoginHash
 } from "../../../shared/ii-auth/index.js";
@@ -37,7 +38,7 @@ button.addEventListener("click", async () => {
   status.textContent = "Waiting for Internet Identity.";
   await authClient.login({
     identityProvider: identityProviderUrlForLocation(location),
-    derivationOrigin: location.origin,
+    derivationOrigin: derivationOriginForLocation(location),
     maxTimeToLive: CLI_DELEGATION_TTL_NS,
     onSuccess: () => void postDelegation(authClient, request),
     onError: (cause) => fail(errorMessage(cause))

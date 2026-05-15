@@ -30,6 +30,14 @@ export function identityProviderUrlForLocation(locationLike) {
   return MAINNET_II_PROVIDER_URL;
 }
 
+export function derivationOriginForLocation(locationLike) {
+  const hostname = locationLike?.hostname ?? "";
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".localhost")) {
+    return locationLike.origin;
+  }
+  return WIKI_CANISTER_DERIVATION_ORIGIN;
+}
+
 export function parseCliLoginHash(hash) {
   const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
   const publicKey = params.get("public_key") ?? "";

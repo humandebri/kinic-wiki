@@ -100,7 +100,9 @@ fn http_request_serves_icp_cli_login_page() {
         .collect::<String>();
     assert!(body.contains("<h1>CLI login</h1>"));
     assert!(body.contains("http://id.ai.localhost:"));
-    assert!(compact_body.contains("derivationOrigin:location.origin"));
+    assert!(body.contains("https://xis3j-paaaa-aaaai-axumq-cai.icp0.io"));
+    assert!(compact_body.contains("endsWith(\".localhost\")?"));
+    assert!(compact_body.contains("derivationOrigin:"));
     assert!(compact_body.contains(r#"method:"POST""#));
     assert!(compact_body.contains(r#""content-type":"application/json""#));
     assert!(compact_body.contains("redirect:\"error\""));

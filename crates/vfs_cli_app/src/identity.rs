@@ -12,7 +12,7 @@ use ic_agent::identity::{DelegatedIdentity, Delegation, SignedDelegation};
 use serde::Deserialize;
 use tokio::process::Command;
 
-pub async fn load_default_identity() -> Result<Box<dyn ic_agent::Identity>> {
+pub async fn load_default_identity(canister_id: &str) -> Result<Box<dyn ic_agent::Identity>> {
     let identity_name = command_stdout("icp", &["identity", "default"])
         .await
         .context("failed to read active icp-cli identity")?;
@@ -25,7 +25,7 @@ pub async fn load_default_identity() -> Result<Box<dyn ic_agent::Identity>> {
     match metadata.kind.as_str() {
         "internet-identity" => {
             let session_pem = export_identity_pem(identity_name).await?;
-            load_internet_identity(&identity_dir, identity_name, &session_pem)
+            load_internet_identity(&identity_dir, identity_name, &session_pem, canister_id)
         }
         "pending-delegation" => Err(refresh_required(identity_name)),
         "anonymous" => bail!("active icp-cli identity `{identity_name}` is anonymous"),
@@ -46,6 +46,7 @@ fn load_internet_identity(
     identity_dir: &Path,
     identity_name: &str,
     session_pem: &[u8],
+    canister_id: &str,
 ) -> Result<Box<dyn ic_agent::Identity>> {
     let session_identity = vfs_client::identity_from_pem(session_pem)
         .with_context(|| format!("failed to parse session key for `{identity_name}`"))?;
@@ -62,6 +63,9 @@ fn load_internet_identity(
     let now_nanos = now_nanos()?;
     let delegations = parse_signed_delegations(&stored, now_nanos, identity_name)?;
     ensure_delegation_matches_session_key(&*session_identity, &delegations, identity_name)?;
+    let target_canister = Principal::from_text(canister_id)
+        .with_context(|| format!("invalid target canister id `{canister_id}`"))?;
+    ensure_delegation_targets_canister(&delegations, &target_canister, identity_name)?;
     let identity = DelegatedIdentity::new_unchecked(public_key, session_identity, delegations);
     Ok(Box::new(identity))
 }
@@ -127,6 +131,26 @@ fn ensure_delegation_matches_session_key(
     if delegated_public_key != session_public_key.as_slice() {
         bail!(
             "icp-cli Internet Identity delegation for `{identity_name}` does not match the exported session key; run `icp identity login {identity_name}`"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_delegation_targets_canister(
+    delegations: &[SignedDelegation],
+    target_canister: &Principal,
+    identity_name: &str,
+) -> Result<()> {
+    for (index, signed) in delegations.iter().enumerate() {
+        let Some(targets) = &signed.delegation.targets else {
+            continue;
+        };
+        if targets.iter().any(|target| target == target_canister) {
+            continue;
+        }
+        let target_canister = target_canister.to_text();
+        bail!(
+            "icp-cli Internet Identity delegation for `{identity_name}` is target-limited and does not include canister `{target_canister}` at delegation index {index}"
         );
     }
     Ok(())
@@ -364,6 +388,37 @@ mod tests {
     }
 
     #[test]
+    fn accepts_delegation_without_targets_for_any_canister() {
+        let stored = stored_delegation_with_targets(None);
+        let chain = parse_signed_delegations(&stored, 1, "kinic-ii").unwrap();
+        let target = Principal::from_text("aaaaa-aa").unwrap();
+
+        ensure_delegation_targets_canister(&chain, &target, "kinic-ii").unwrap();
+    }
+
+    #[test]
+    fn accepts_delegation_targeted_to_connection_canister() {
+        let stored = stored_delegation_with_targets(Some(vec!["aaaaa-aa".to_string()]));
+        let chain = parse_signed_delegations(&stored, 1, "kinic-ii").unwrap();
+        let target = Principal::from_text("aaaaa-aa").unwrap();
+
+        ensure_delegation_targets_canister(&chain, &target, "kinic-ii").unwrap();
+    }
+
+    #[test]
+    fn rejects_delegation_targeted_to_other_canister() {
+        let stored =
+            stored_delegation_with_targets(Some(vec!["ryjl3-tyaaa-aaaaa-aaaba-cai".to_string()]));
+        let chain = parse_signed_delegations(&stored, 1, "kinic-ii").unwrap();
+        let target = Principal::from_text("aaaaa-aa").unwrap();
+        let error = ensure_delegation_targets_canister(&chain, &target, "kinic-ii")
+            .expect_err("wrong target canister should be rejected");
+
+        assert!(error.to_string().contains("does not include canister"));
+        assert!(error.to_string().contains("aaaaa-aa"));
+    }
+
+    #[test]
     fn mismatched_delegation_requests_icp_identity_login() {
         let session = vfs_client::identity_from_pem(SESSION_PRIME256V1_PEM.as_bytes()).unwrap();
         let stored = StoredDelegationChain {
@@ -400,5 +455,19 @@ mod tests {
         let error = parse_signed_delegations(&stored, 2, "kinic-ii").unwrap_err();
 
         assert!(error.to_string().contains("icp identity login kinic-ii"));
+    }
+
+    fn stored_delegation_with_targets(targets: Option<Vec<String>>) -> StoredDelegationChain {
+        StoredDelegationChain {
+            public_key: CANISTER_SIGNATURE_ROOT_PUBLIC_KEY_HEX.to_string(),
+            delegations: vec![StoredSignedDelegation {
+                signature: "d9d9f7a2".to_string(),
+                delegation: StoredDelegation {
+                    pubkey: SESSION_PUBLIC_KEY_HEX.to_string(),
+                    expiration: "38fef81a76b80000".to_string(),
+                    targets,
+                },
+            }],
+        }
     }
 }

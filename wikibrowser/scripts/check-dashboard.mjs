@@ -146,7 +146,7 @@ assert.match(dashboardAccessControl, /LLM_WRITER_LABEL = "LLM writer"/);
 assert.match(dashboardAccessControl, /principalDisplayName/);
 assert.match(dashboardActionButton, /Loader2/);
 assert.match(dashboardActionButton, /aria-busy/);
-assert.match(dashboardActionButton, /active:scale-\[0\.98\]/);
+assert.match(dashboardActionButton, /hover:-translate-y-\[3px\]/);
 assert.match(dashboardClient, /busyAction/);
 assert.match(dashboardClient, /Access updated\./);
 

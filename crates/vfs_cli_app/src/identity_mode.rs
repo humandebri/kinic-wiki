@@ -37,9 +37,7 @@ pub fn resolve_client_identity_mode(
                     Some(true) => match identity_is_database_member {
                         Some(true) => Ok(ClientIdentityMode::Identity),
                         Some(false) => Ok(ClientIdentityMode::Anonymous),
-                        None => Err(anyhow!(
-                            "selected identity database membership was not checked; pass --identity-mode identity or --identity-mode anonymous"
-                        )),
+                        None => Ok(ClientIdentityMode::Anonymous),
                     },
                     Some(false) => Ok(ClientIdentityMode::Identity),
                     None => Err(anyhow!(
@@ -101,6 +99,11 @@ mod tests {
         );
         assert_eq!(
             resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(true), Some(false))
+                .unwrap(),
+            ClientIdentityMode::Anonymous
+        );
+        assert_eq!(
+            resolve_client_identity_mode(&command, IdentityModeArg::Auto, Some(true), None)
                 .unwrap(),
             ClientIdentityMode::Anonymous
         );

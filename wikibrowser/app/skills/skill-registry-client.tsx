@@ -212,7 +212,7 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
                 Logout
               </button>
             ) : (
-              <button className="rounded-lg border border-accent bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" disabled={!authClient} type="button" onClick={() => void login()}>
+              <button className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:translate-y-0 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" disabled={!authClient} type="button" onClick={() => void login()}>
                 Login
               </button>
             )}
@@ -238,7 +238,7 @@ export function SkillRegistryClient({ databaseId }: { databaseId: string }) {
               </label>
               <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-line bg-white text-sm">
                 {(["active", "all", "deprecated"] as const).map((value) => (
-                  <button key={value} className={`px-3 py-2 capitalize hover:bg-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${statusFilter === value ? "bg-accent text-white hover:bg-blue-700" : "text-ink"}`} type="button" onClick={() => setStatusFilter(value)}>
+                  <button key={value} className={`px-3 py-2 capitalize hover:bg-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${statusFilter === value ? "bg-accent text-white hover:bg-accentHover" : "text-ink"}`} type="button" onClick={() => setStatusFilter(value)}>
                     {value}
                   </button>
                 ))}

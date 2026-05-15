@@ -5,12 +5,24 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        paper: "#fffdf8",
-        canvas: "#f6f1e8",
-        ink: "#1f2933",
-        muted: "#667085",
-        line: "#ded7cb",
-        accent: "#1f6feb"
+        paper: "#f8f8f8",
+        canvas: "#ffffff",
+        ink: "#000000",
+        muted: "#636161",
+        line: "#e6e6e6",
+        midLine: "#d0d0d0",
+        accent: "#ff2686",
+        accentHover: "#ff2686",
+        accentSoft: "#ff81be26",
+        accentLine: "#ffcde5",
+        accentText: "#ff2686",
+        action: "#000000",
+        actionHover: "#ff2686",
+        kinicMagenta: "#ff2686",
+        kinicCyan: "#2d68ff",
+        infoSoft: "#eaf4ff",
+        infoLine: "#8fc3ff",
+        infoText: "#086cd9"
       },
       fontFamily: {
         sans: ["Aptos", "ui-sans-serif", "system-ui", "sans-serif"],
