@@ -153,7 +153,7 @@ jobs:
       - name: Install WASI sysroot
         run: sudo apt-get update && sudo apt-get install -y wasi-libc
       - name: Install wasm tooling
-        run: cargo install wasi2ic ic-wasm --locked
+        run: cargo install ic-wasm --locked
       - name: Build canister artifact
         env:
           ICP_WASM_OUTPUT_PATH: /tmp/vfs_canister.wasm
