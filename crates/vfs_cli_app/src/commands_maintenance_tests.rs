@@ -1,7 +1,7 @@
 use clap::Parser;
 use vfs_types::{Node, NodeKind};
 
-use crate::cli::{Cli, Command, ConnectionArgs};
+use crate::cli::{Cli, Command, ConnectionArgs, IdentityModeArg};
 use crate::commands::run_command;
 use crate::commands_fs_tests::MockClient;
 use crate::maintenance::{rebuild_index, rebuild_scope_index};
@@ -24,6 +24,8 @@ fn test_cli(command: Command) -> Cli {
         connection: ConnectionArgs {
             database_id: Some("default".to_string()),
             local: false,
+            replica_host: None,
+            identity_mode: IdentityModeArg::Auto,
             canister_id: Some("aaaaa-aa".to_string()),
         },
         command,

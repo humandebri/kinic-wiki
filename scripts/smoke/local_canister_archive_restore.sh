@@ -34,6 +34,16 @@ resolve_canister_id() {
   return 1
 }
 
+canister_has_module() {
+  local canister_id="$1"
+  icp canister status "$canister_id" -e local-wiki --json \
+    | node -e '
+      const fs = require("fs");
+      const status = JSON.parse(fs.readFileSync(0, "utf8"));
+      process.exit(status.module_hash ? 0 : 1);
+    '
+}
+
 cd "${REPO_ROOT}"
 
 if ! CANISTER_ID="$(resolve_canister_id)"; then
@@ -41,22 +51,39 @@ if ! CANISTER_ID="$(resolve_canister_id)"; then
   icp deploy -e local-wiki
   CANISTER_ID="$(resolve_canister_id)"
 fi
+if canister_has_module "$CANISTER_ID" >/dev/null 2>&1; then
+  echo "deploying current wiki canister to local-wiki environment" >&2
+else
+  echo "local wiki canister ${CANISTER_ID} missing installed module; deploying wiki to local-wiki environment" >&2
+fi
+icp deploy -e local-wiki
+CANISTER_ID="$(resolve_canister_id)"
 
 export CANISTER_ID
 export REPLICA_HOST
 
 echo "running local canister archive/restore smoke against ${CANISTER_ID} at ${REPLICA_HOST}" >&2
-cargo run -p kinic-vfs-cli --bin local_canister_archive_restore_smoke
-
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+STATE_FILE="${TMP_DIR}/local_canister_archive_restore_state.json"
+cargo run -p kinic-vfs-cli --bin local_canister_archive_restore_smoke -- --state-output "$STATE_FILE"
+
+echo "upgrading local wiki canister before persistence verification" >&2
+icp deploy -e local-wiki --mode upgrade
+cargo run -p kinic-vfs-cli --bin local_canister_archive_restore_smoke -- --verify-state "$STATE_FILE"
+
 INPUT_FILE="${TMP_DIR}/smoke.md"
 ARCHIVE_FILE="${TMP_DIR}/archive.sqlite"
+CLI_WORKSPACE="${TMP_DIR}/cli-workspace"
+mkdir -p "${CLI_WORKSPACE}"
 printf '# CLI Archive Smoke\n\nalpha archive restore smoke\n' > "$INPUT_FILE"
 
-VFS=(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --local --canister-id "$CANISTER_ID")
-CLI_DB="$("${VFS[@]}" database create)"
-"${VFS[@]}" --database-id "$CLI_DB" write-node --path /Wiki/smoke.md --input "$INPUT_FILE"
-"${VFS[@]}" database archive-export "$CLI_DB" --output "$ARCHIVE_FILE" --chunk-size 65536 --json
-"${VFS[@]}" database archive-restore "$CLI_DB" --input "$ARCHIVE_FILE" --chunk-size 65536 --json
-"${VFS[@]}" --database-id "$CLI_DB" read-node --path /Wiki/smoke.md --fields path,etag --json
+VFS=(cargo run --manifest-path "${REPO_ROOT}/Cargo.toml" -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID")
+CLI_DB="$(cd "$CLI_WORKSPACE" && "${VFS[@]}" database create)"
+(
+  cd "$CLI_WORKSPACE"
+  "${VFS[@]}" --database-id "$CLI_DB" write-node --path /Wiki/smoke.md --input "$INPUT_FILE"
+  "${VFS[@]}" database archive-export "$CLI_DB" --output "$ARCHIVE_FILE" --chunk-size 65536 --json
+  "${VFS[@]}" database archive-restore "$CLI_DB" --input "$ARCHIVE_FILE" --chunk-size 65536 --json
+  "${VFS[@]}" --identity-mode identity --database-id "$CLI_DB" read-node --path /Wiki/smoke.md --fields path,etag --json
+)

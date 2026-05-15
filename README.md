@@ -65,7 +65,7 @@ icp network start -d -e local-wiki
 icp deploy -e local-wiki
 ```
 
-If you need to install the Rust target manually first, use `rustup target add wasm32-wasip1`.
+If you need to install the Rust target manually first, use `rustup target add wasm32-unknown-unknown`.
 
 Resolve the target canister with one of:
 
@@ -80,7 +80,9 @@ Minimal config:
 canister_id = "aaaaa-aa"
 ```
 
-Use `--local` to target the local replica. Otherwise the default host is `https://icp0.io`.
+Use `--local` to target `http://127.0.0.1:8000`, or `--replica-host http://127.0.0.1:8001` for a project-local network on another port. Otherwise the default host is `https://icp0.io`.
+
+Authenticated CLI commands require `icp-cli` on `PATH` and use `icp identity default`. `--identity-mode auto` is the default: private reads and member public reads use the selected identity, while public non-member reads stay anonymous.
 
 ### Skill Knowledge Base
 

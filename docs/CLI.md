@@ -21,6 +21,9 @@ target/release/kinic-vfs-cli --canister-id <canister-id> database current
 
 GitHub Actions also produces unsigned `kinic-vfs-cli` artifacts with SHA-256 checksums. See [`RELEASE.md`](RELEASE.md).
 
+Authenticated commands require `icp-cli` on `PATH`. The CLI signs with the identity selected by `icp identity default`.
+Internet Identity-backed identities are accepted when the session key is stored as plaintext; default keyring storage is rejected with an explicit re-link message.
+
 ## Connection
 
 Use `--canister-id` to select a canister explicitly. DB-backed VFS commands require an explicit database selection from `--database-id`, `VFS_DATABASE_ID`, `.kinic/config.toml`, or user config. No production `default` database is created implicitly.
@@ -30,13 +33,14 @@ This is a breaking change for older single-DB clients that omitted `database_id`
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> --database-id <database-id> status
 ```
 
-Use `--local` for the local replica host.
+Use `--local` for the default local replica host, or `--replica-host` for a project-local network on a custom port.
 
 ```bash
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --local --database-id <database-id> status
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host http://127.0.0.1:8001 --database-id <database-id> status
 ```
 
-`--database-id` takes precedence over `VFS_DATABASE_ID`.
+`--replica-host` takes precedence over configured hosts. `--database-id` takes precedence over `VFS_DATABASE_ID`.
 
 List, search, recent, and graph commands default to the VFS root `/`.
 Pass `--prefix /Wiki` or `--path /Wiki` when the human-facing wiki tree is the intended scope.
@@ -57,6 +61,17 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- status
 ```
 
 Resolution priority is CLI flag, env, `.kinic/config.toml`, user config, then host default. Use `database unlink` to remove the workspace DB link.
+
+## Identity Mode
+
+`--identity-mode auto` is the default. Mutating and owner commands always use the selected `icp identity`. Read-only DB commands first check anonymous access; if the selected identity is a DB member, the command still uses identity. Public DB reads use anonymous only when the selected identity is not a member.
+
+```bash
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode identity --database-id <database-id> read-node --path /Wiki/index.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode anonymous --database-id <public-database-id> read-node --path /Wiki/index.md
+```
+
+`--identity-mode anonymous` rejects write, owner, archive, and restore commands.
 
 Create a database before reading or writing:
 

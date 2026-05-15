@@ -10,11 +10,12 @@ use anyhow::{Result, anyhow};
 use sha2::{Digest, Sha256};
 use vfs_client::VfsApi;
 use vfs_types::{
-    AppendNodeRequest, DatabaseRestoreChunkRequest, DeleteNodeRequest, EditNodeRequest,
-    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
-    MultiEditNodeRequest, NodeContextRequest, OutgoingLinksRequest, RecentNodesRequest,
-    SearchNodePathsRequest, SearchNodesRequest, WriteNodeRequest,
+    AppendNodeRequest, DatabaseRestoreChunkRequest, DeleteNodeRequest, DeleteNodeResult,
+    EditNodeRequest, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
+    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MkdirNodeRequest,
+    MoveNodeRequest, MultiEdit, MultiEditNodeRequest, NodeContextRequest, NodeEntryKind, NodeKind,
+    OutgoingLinksRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
+    WriteNodeRequest,
 };
 use wiki_domain::validate_source_path_for_kind;
 
@@ -187,16 +188,18 @@ pub async fn run_vfs_command(
         VfsCommand::DeleteNode {
             path,
             expected_etag,
+            expected_folder_index_etag,
             json,
         } => {
-            let result = client
-                .delete_node(DeleteNodeRequest {
-                    database_id: database_id.to_string(),
-                    path,
-                    expected_etag,
-                    expected_folder_index_etag: None,
-                })
-                .await?;
+            let result = delete_node_with_folder_index(
+                client,
+                database_id,
+                path,
+                expected_etag,
+                expected_folder_index_etag,
+                None,
+            )
+            .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -458,6 +461,59 @@ fn print_links(links: Vec<LinkEdge>, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) async fn delete_node_with_folder_index(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: String,
+    expected_etag: Option<String>,
+    expected_folder_index_etag: Option<String>,
+    kind_hint: Option<NodeEntryKind>,
+) -> Result<DeleteNodeResult> {
+    let expected_folder_index_etag = match expected_folder_index_etag {
+        Some(etag) => Some(etag),
+        None if should_probe_folder_index(client, database_id, &path, kind_hint).await? => {
+            read_folder_index_etag(client, database_id, &path).await?
+        }
+        None => None,
+    };
+    client
+        .delete_node(DeleteNodeRequest {
+            database_id: database_id.to_string(),
+            path,
+            expected_etag,
+            expected_folder_index_etag,
+        })
+        .await
+}
+
+async fn should_probe_folder_index(
+    client: &impl VfsApi,
+    database_id: &str,
+    path: &str,
+    kind_hint: Option<NodeEntryKind>,
+) -> Result<bool> {
+    match kind_hint {
+        Some(NodeEntryKind::Folder) => Ok(true),
+        Some(_) => Ok(false),
+        None => Ok(client
+            .read_node(database_id, path)
+            .await?
+            .is_some_and(|node| node.kind == NodeKind::Folder)),
+    }
+}
+
+async fn read_folder_index_etag(
+    client: &impl VfsApi,
+    database_id: &str,
+    folder_path: &str,
+) -> Result<Option<String>> {
+    let index_path = format!("{}/index.md", folder_path.trim_end_matches('/'));
+    Ok(client
+        .read_node(database_id, &index_path)
+        .await?
+        .and_then(|node| (node.kind == NodeKind::File).then_some(node.etag)))
 }
 
 fn node_field_view(
@@ -915,14 +971,15 @@ async fn delete_tree(client: &impl VfsApi, database_id: &str, path: &str) -> Res
     });
     let mut deleted_paths = Vec::with_capacity(entries.len());
     for entry in entries {
-        let result = client
-            .delete_node(DeleteNodeRequest {
-                database_id: database_id.to_string(),
-                path: entry.path,
-                expected_etag: Some(entry.etag),
-                expected_folder_index_etag: None,
-            })
-            .await?;
+        let result = delete_node_with_folder_index(
+            client,
+            database_id,
+            entry.path,
+            Some(entry.etag),
+            None,
+            Some(entry.kind),
+        )
+        .await?;
         deleted_paths.push(result.path);
     }
     Ok(deleted_paths)
@@ -954,9 +1011,12 @@ mod tests {
 
     #[derive(Default)]
     struct MockClient {
+        nodes: Vec<Node>,
+        entries: Vec<NodeEntry>,
         created: Mutex<u32>,
         database_lists: Mutex<u32>,
         writes: Mutex<Vec<WriteNodeRequest>>,
+        deletes: Mutex<Vec<DeleteNodeRequest>>,
         child_lists: Mutex<Vec<ListChildrenRequest>>,
         contexts: Mutex<Vec<NodeContextRequest>>,
         neighborhoods: Mutex<Vec<GraphNeighborhoodRequest>>,
@@ -993,6 +1053,29 @@ mod tests {
             replica_host_source: "test".to_string(),
             canister_id_source: "test".to_string(),
             database_id_source: Some("test".to_string()),
+        }
+    }
+
+    fn node(path: &str, kind: NodeKind, etag: &str) -> Node {
+        Node {
+            path: path.to_string(),
+            kind,
+            content: String::new(),
+            created_at: 1,
+            updated_at: 2,
+            etag: etag.to_string(),
+            metadata_json: "{}".to_string(),
+        }
+    }
+
+    fn entry(path: &str, kind: NodeEntryKind, etag: &str) -> NodeEntry {
+        let has_children = kind == NodeEntryKind::Folder;
+        NodeEntry {
+            path: path.to_string(),
+            kind,
+            updated_at: 2,
+            etag: etag.to_string(),
+            has_children,
         }
     }
 
@@ -1103,8 +1186,8 @@ mod tests {
                 .push(database_id.to_string());
             Ok(())
         }
-        async fn read_node(&self, _database_id: &str, _path: &str) -> Result<Option<Node>> {
-            Ok(None)
+        async fn read_node(&self, _database_id: &str, path: &str) -> Result<Option<Node>> {
+            Ok(self.nodes.iter().find(|node| node.path == path).cloned())
         }
         async fn read_node_context(
             &self,
@@ -1126,7 +1209,7 @@ mod tests {
             }))
         }
         async fn list_nodes(&self, _request: ListNodesRequest) -> Result<Vec<NodeEntry>> {
-            Ok(Vec::new())
+            Ok(self.entries.clone())
         }
         async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>> {
             self.child_lists.lock().unwrap().push(request);
@@ -1159,8 +1242,9 @@ mod tests {
         async fn edit_node(&self, _request: EditNodeRequest) -> Result<EditNodeResult> {
             unreachable!()
         }
-        async fn delete_node(&self, _request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
-            unreachable!()
+        async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult> {
+            self.deletes.lock().unwrap().push(request.clone());
+            Ok(DeleteNodeResult { path: request.path })
         }
         async fn move_node(&self, _request: MoveNodeRequest) -> Result<MoveNodeResult> {
             unreachable!()
@@ -1247,6 +1331,103 @@ mod tests {
         .await
         .expect("list children should succeed");
         assert_eq!(client.child_lists.lock().unwrap()[0].path, "/Wiki");
+    }
+
+    #[tokio::test]
+    async fn delete_node_autofills_folder_index_etag() {
+        let client = MockClient {
+            nodes: vec![
+                node("/Wiki/topic", NodeKind::Folder, "etag-folder"),
+                node("/Wiki/topic/index.md", NodeKind::File, "etag-index"),
+            ],
+            ..MockClient::default()
+        };
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::DeleteNode {
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some("etag-folder".to_string()),
+                expected_folder_index_etag: None,
+                json: true,
+            },
+        )
+        .await
+        .expect("folder delete should succeed");
+
+        let deletes = client.deletes.lock().unwrap();
+        assert_eq!(deletes[0].path, "/Wiki/topic");
+        assert_eq!(deletes[0].expected_etag.as_deref(), Some("etag-folder"));
+        assert_eq!(
+            deletes[0].expected_folder_index_etag.as_deref(),
+            Some("etag-index")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_node_keeps_explicit_folder_index_etag() {
+        let client = MockClient {
+            nodes: vec![
+                node("/Wiki/topic", NodeKind::Folder, "etag-folder"),
+                node("/Wiki/topic/index.md", NodeKind::File, "etag-index"),
+            ],
+            ..MockClient::default()
+        };
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::DeleteNode {
+                path: "/Wiki/topic".to_string(),
+                expected_etag: Some("etag-folder".to_string()),
+                expected_folder_index_etag: Some("stale".to_string()),
+                json: true,
+            },
+        )
+        .await
+        .expect("folder delete should dispatch");
+
+        let deletes = client.deletes.lock().unwrap();
+        assert_eq!(
+            deletes[0].expected_folder_index_etag.as_deref(),
+            Some("stale")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_tree_autofills_folder_index_etag_for_folder_entries() {
+        let client = MockClient {
+            nodes: vec![node("/Wiki/topic/index.md", NodeKind::File, "etag-index")],
+            entries: vec![
+                entry("/Wiki/topic/index.md", NodeEntryKind::File, "etag-index"),
+                entry("/Wiki/topic", NodeEntryKind::Folder, "etag-folder"),
+            ],
+            ..MockClient::default()
+        };
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::DeleteTree {
+                path: "/Wiki/topic".to_string(),
+                json: true,
+            },
+        )
+        .await
+        .expect("tree delete should succeed");
+
+        let deletes = client.deletes.lock().unwrap();
+        let index_delete = deletes
+            .iter()
+            .find(|request| request.path == "/Wiki/topic/index.md")
+            .expect("index delete should dispatch");
+        assert!(index_delete.expected_folder_index_etag.is_none());
+        let folder_delete = deletes
+            .iter()
+            .find(|request| request.path == "/Wiki/topic")
+            .expect("folder delete should dispatch");
+        assert_eq!(
+            folder_delete.expected_folder_index_etag.as_deref(),
+            Some("etag-index")
+        );
     }
 
     #[tokio::test]

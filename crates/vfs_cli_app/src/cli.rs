@@ -5,7 +5,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use vfs_cli::cli::VfsCommand;
 pub use vfs_cli::cli::{
-    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, NodeKindArg, SearchPreviewModeArg,
+    ConnectionArgs, DatabaseCommand, GlobNodeTypeArg, IdentityModeArg, NodeKindArg,
+    SearchPreviewModeArg,
 };
 use wiki_domain::WIKI_ROOT_PATH;
 
@@ -118,6 +119,8 @@ pub enum Command {
         path: String,
         #[arg(long)]
         expected_etag: Option<String>,
+        #[arg(long)]
+        expected_folder_index_etag: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -460,6 +463,28 @@ impl Command {
         }
     }
 
+    pub fn uses_target_database_read(&self) -> bool {
+        !self.requires_identity()
+            && !matches!(
+                self,
+                Self::Database {
+                    command: DatabaseCommand::List { .. }
+                        | DatabaseCommand::Link { .. }
+                        | DatabaseCommand::Current { .. }
+                        | DatabaseCommand::Unlink
+                }
+            )
+    }
+
+    pub fn auto_uses_identity_without_target_database(&self) -> bool {
+        matches!(
+            self,
+            Self::Database {
+                command: DatabaseCommand::List { .. }
+            }
+        )
+    }
+
     pub fn as_vfs_command(&self) -> Option<VfsCommand> {
         match self {
             Self::Database { command } => Some(VfsCommand::Database {
@@ -539,10 +564,12 @@ impl Command {
             Self::DeleteNode {
                 path,
                 expected_etag,
+                expected_folder_index_etag,
                 json,
             } => Some(VfsCommand::DeleteNode {
                 path: path.clone(),
                 expected_etag: expected_etag.clone(),
+                expected_folder_index_etag: expected_folder_index_etag.clone(),
                 json: *json,
             }),
             Self::DeleteTree { path, json } => Some(VfsCommand::DeleteTree {
@@ -667,8 +694,8 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Command, DatabaseCommand, NodeKindArg, SkillCommand, SkillImportCommand,
-        SkillStatusArg,
+        Cli, Command, DatabaseCommand, IdentityModeArg, NodeKindArg, SkillCommand,
+        SkillImportCommand, SkillStatusArg,
     };
     use clap::{CommandFactory, Parser};
 
@@ -781,9 +808,11 @@ mod tests {
     fn command_identity_requirement_keeps_reads_anonymous() {
         let read = Cli::parse_from(["kinic-vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
         assert!(!read.command.requires_identity());
+        assert!(read.command.uses_target_database_read());
 
         let status = Cli::parse_from(["kinic-vfs-cli", "status"]);
         assert!(!status.command.requires_identity());
+        assert!(status.command.uses_target_database_read());
 
         let private_install = Cli::parse_from([
             "kinic-vfs-cli",
@@ -815,6 +844,31 @@ mod tests {
             "index.md",
         ]);
         assert!(write.command.requires_identity());
+    }
+
+    #[test]
+    fn main_cli_parses_identity_mode() {
+        let cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "--identity-mode",
+            "identity",
+            "read-node",
+            "--path",
+            "/Wiki/index.md",
+        ]);
+        assert_eq!(cli.connection.identity_mode, IdentityModeArg::Identity);
+    }
+
+    #[test]
+    fn main_cli_rejects_local_and_replica_host_together() {
+        let parsed = Cli::try_parse_from([
+            "kinic-vfs-cli",
+            "--local",
+            "--replica-host",
+            "http://127.0.0.1:8001",
+            "status",
+        ]);
+        assert!(parsed.is_err());
     }
 
     #[test]

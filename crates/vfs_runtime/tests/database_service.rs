@@ -80,6 +80,18 @@ fn database_updated_at_ms(root: &std::path::Path, database_id: &str) -> i64 {
     .expect("database updated_at_ms should load")
 }
 
+fn set_database_logical_size(root: &std::path::Path, database_id: &str, size: u64) {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.execute(
+        "UPDATE databases SET logical_size_bytes = ?2 WHERE database_id = ?1",
+        params![
+            database_id,
+            i64::try_from(size).expect("test size fits i64")
+        ],
+    )
+    .expect("database logical size should update");
+}
+
 fn database_member_count(root: &std::path::Path, database_id: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -1145,6 +1157,48 @@ fn begin_database_archive_updates_updated_at_ms() {
 }
 
 #[test]
+fn archive_chunks_use_stored_archiving_size() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("alpha should create");
+    service
+        .write_node(
+            "owner",
+            WriteNodeRequest {
+                database_id: "alpha".to_string(),
+                path: "/Wiki/a.md".to_string(),
+                kind: NodeKind::File,
+                content: "alpha body".to_string(),
+                metadata_json: "{}".to_string(),
+                expected_etag: None,
+            },
+            2,
+        )
+        .expect("write should succeed");
+
+    let archive = service
+        .begin_database_archive("alpha", "owner", 3)
+        .expect("archive should begin");
+    assert_eq!(database_index_row(&root, "alpha").2, archive.size_bytes);
+
+    set_database_logical_size(&root, "alpha", 1);
+    assert_eq!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 0, 17)
+            .expect("stored-size bounded archive chunk should read")
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .read_database_archive_chunk("alpha", "owner", 1, 17)
+            .expect("stored-size tail should read")
+            .is_empty()
+    );
+}
+
+#[test]
 fn archives_and_restores_database_bytes() {
     let (service, root) = service_with_root();
     service
@@ -1350,9 +1404,13 @@ fn archives_and_restores_database_bytes() {
     service
         .write_database_restore_chunk("alpha", "owner", 0, &bytes)
         .expect("restore chunk should write");
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 1);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 1);
     service
         .finalize_database_restore("alpha", "owner", 5)
         .expect("restore should finalize");
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 0);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 0);
 
     let node = service
         .read_node("alpha", "owner", "/Wiki/a.md")
@@ -1703,7 +1761,7 @@ fn restore_finalize_rejects_size_mismatch_until_missing_bytes_arrive() {
 
 #[test]
 fn archive_and_restore_reject_snapshot_hash_mismatch() {
-    let (service, _root) = service_with_root();
+    let (service, root) = service_with_root();
     service
         .create_database("alpha", "owner", 1)
         .expect("alpha should create");
@@ -1734,7 +1792,7 @@ fn archive_and_restore_reject_snapshot_hash_mismatch() {
         .finalize_database_archive("alpha", "owner", wrong_hash, 3)
         .expect_err("wrong archive hash should fail");
     assert!(error.contains("snapshot_hash does not match archived"));
-    assert_eq!(database_index_row(&_root, "alpha").0, "archiving");
+    assert_eq!(database_index_row(&root, "alpha").0, "archiving");
 
     let snapshot_hash = sha256_bytes(&bytes);
     service
@@ -1753,6 +1811,8 @@ fn archive_and_restore_reject_snapshot_hash_mismatch() {
         .finalize_database_restore("alpha", "owner", 6)
         .expect_err("wrong restored bytes should fail");
     assert!(error.contains("snapshot_hash does not match restored"));
+    assert_eq!(database_restore_chunk_count(&root, "alpha"), 1);
+    assert_eq!(database_restore_session_count(&root, "alpha"), 1);
 }
 
 #[test]
@@ -1864,9 +1924,13 @@ fn restore_accepts_in_range_chunks_written_out_of_order() {
     service
         .write_database_restore_chunk("alpha", "owner", 0, &bytes[..split_at])
         .expect("first half should write second");
+    assert_eq!(database_restore_chunk_count(&_root, "alpha"), 2);
+    assert_eq!(database_restore_session_count(&_root, "alpha"), 1);
     service
         .finalize_database_restore("alpha", "owner", 5)
         .expect("out-of-order restore should finalize");
+    assert_eq!(database_restore_chunk_count(&_root, "alpha"), 0);
+    assert_eq!(database_restore_session_count(&_root, "alpha"), 0);
 
     let node = service
         .read_node("alpha", "owner", "/Wiki/a.md")
@@ -1922,7 +1986,7 @@ fn cancel_database_restore_returns_archived_database_and_removes_partial_state()
     assert_eq!(database_restore_chunk_count(&root, "alpha"), 1);
     assert_eq!(database_restore_session_count(&root, "alpha"), 1);
     let restoring_file = database_file_path(&root, "alpha");
-    assert!(restoring_file.exists());
+    assert!(!restoring_file.exists());
 
     service
         .cancel_database_restore("alpha", "owner", 6)
@@ -1982,7 +2046,7 @@ fn cancel_database_restore_returns_deleted_database_and_removes_partial_state() 
         .write_database_restore_chunk("alpha", "owner", 0, &bytes)
         .expect("restore chunk should write");
     let restoring_file = database_file_path(&root, "alpha");
-    assert!(restoring_file.exists());
+    assert!(!restoring_file.exists());
 
     service
         .cancel_database_restore("alpha", "owner", 7)

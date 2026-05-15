@@ -57,6 +57,22 @@ fn write_mkdir_and_move_require_existing_folder_parent() {
         .expect_err("write without parent folder should fail");
     assert_eq!(write_error, "parent folder does not exist: /Wiki/missing");
 
+    let append_error = store
+        .append_node(
+            AppendNodeRequest {
+                database_id: "default".to_string(),
+                path: "/Wiki/missing/appended.md".to_string(),
+                content: "orphan append".to_string(),
+                expected_etag: None,
+                separator: None,
+                metadata_json: None,
+                kind: None,
+            },
+            10,
+        )
+        .expect_err("append without parent folder should fail");
+    assert_eq!(append_error, "parent folder does not exist: /Wiki/missing");
+
     let mkdir_error = store
         .mkdir_node(
             MkdirNodeRequest {
@@ -1117,11 +1133,7 @@ fn move_node_renames_and_updates_search() {
             preview_mode: Some(SearchPreviewMode::None),
         })
         .expect("search should succeed");
-    #[cfg(feature = "bench-disable-fts")]
-    assert!(hits.is_empty());
-    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(hits.len(), 1);
-    #[cfg(not(feature = "bench-disable-fts"))]
     assert_eq!(hits[0].path, "/Wiki/to.md");
 
     let path_hits = store

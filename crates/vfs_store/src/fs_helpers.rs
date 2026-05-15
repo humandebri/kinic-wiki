@@ -3,7 +3,7 @@
 // Why: FsStore behavior must stay deterministic across CRUD, list, search, and sync flows.
 use std::collections::BTreeMap;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use crate::sqlite::{Connection, OptionalExtension, params};
 use vfs_types::{Node, NodeEntry, NodeEntryKind, NodeKind, NodeMutationAck};
 
 use crate::hashing::sha256_hex;
@@ -116,12 +116,11 @@ pub(crate) fn load_scoped_entry_rows(
     }
     sql.push_str(" ORDER BY path ASC");
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    stmt.query_map(
-        rusqlite::params_from_iter(values.iter()),
+    crate::sqlite::query_map(
+        &mut stmt,
+        crate::sqlite::params_from_iter(values.iter()),
         map_scoped_entry_row,
     )
-    .map_err(|error| error.to_string())?
-    .collect::<Result<Vec<_>, _>>()
     .map_err(|error| error.to_string())
 }
 
@@ -205,7 +204,7 @@ pub(crate) fn file_search_title(path: &str) -> String {
 pub(crate) fn prefix_filter_sql(
     prefix: &str,
     start_index: usize,
-) -> (String, Vec<rusqlite::types::Value>) {
+) -> (String, Vec<crate::sqlite::types::Value>) {
     prefix_filter_sql_for_column("path", prefix, start_index)
 }
 
@@ -213,7 +212,7 @@ pub(crate) fn prefix_filter_sql_for_column(
     column_name: &str,
     prefix: &str,
     start_index: usize,
-) -> (String, Vec<rusqlite::types::Value>) {
+) -> (String, Vec<crate::sqlite::types::Value>) {
     let equal_index = start_index;
     let like_index = start_index + 1;
     (
@@ -221,8 +220,8 @@ pub(crate) fn prefix_filter_sql_for_column(
             " AND ({column_name} = ?{equal_index} OR {column_name} LIKE ?{like_index} ESCAPE '\\')"
         ),
         vec![
-            rusqlite::types::Value::from(prefix.to_string()),
-            rusqlite::types::Value::from(format!("{}/%", escape_like_pattern(prefix))),
+            crate::sqlite::types::Value::from(prefix.to_string()),
+            crate::sqlite::types::Value::from(format!("{}/%", escape_like_pattern(prefix))),
         ],
     )
 }
@@ -246,40 +245,40 @@ pub(crate) fn node_kind_to_db(kind: &NodeKind) -> &'static str {
     }
 }
 
-pub(crate) fn node_kind_from_db(value: &str) -> Result<NodeKind, rusqlite::Error> {
+pub(crate) fn node_kind_from_db(value: &str) -> Result<NodeKind, crate::sqlite::Error> {
     match value {
         "file" => Ok(NodeKind::File),
         "source" => Ok(NodeKind::Source),
         "folder" => Ok(NodeKind::Folder),
-        _ => Err(rusqlite::Error::InvalidColumnType(
+        _ => Err(crate::sqlite::invalid_column_type(
             1,
             "kind".to_string(),
-            rusqlite::types::Type::Text,
+            crate::sqlite::types::Type::Text,
         )),
     }
 }
 
-fn map_stored_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {
+fn map_stored_node(row: &crate::sqlite::Row<'_>) -> crate::sqlite::Result<StoredNode> {
     Ok(StoredNode {
-        row_id: row.get(0)?,
+        row_id: crate::sqlite::row_get::<i64>(row, 0)?,
         node: Node {
-            path: row.get(1)?,
-            kind: node_kind_from_db(&row.get::<_, String>(2)?)?,
-            content: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-            etag: row.get(6)?,
-            metadata_json: row.get(7)?,
+            path: crate::sqlite::row_get::<String>(row, 1)?,
+            kind: node_kind_from_db(&crate::sqlite::row_get::<String>(row, 2)?)?,
+            content: crate::sqlite::row_get::<String>(row, 3)?,
+            created_at: crate::sqlite::row_get::<i64>(row, 4)?,
+            updated_at: crate::sqlite::row_get::<i64>(row, 5)?,
+            etag: crate::sqlite::row_get::<String>(row, 6)?,
+            metadata_json: crate::sqlite::row_get::<String>(row, 7)?,
         },
     })
 }
 
-fn map_scoped_entry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScopedEntryRow> {
+fn map_scoped_entry_row(row: &crate::sqlite::Row<'_>) -> crate::sqlite::Result<ScopedEntryRow> {
     Ok(ScopedEntryRow {
-        path: row.get(0)?,
-        kind: node_kind_from_db(&row.get::<_, String>(1)?)?,
-        updated_at: row.get(2)?,
-        etag: row.get(3)?,
+        path: crate::sqlite::row_get::<String>(row, 0)?,
+        kind: node_kind_from_db(&crate::sqlite::row_get::<String>(row, 1)?)?,
+        updated_at: crate::sqlite::row_get::<i64>(row, 2)?,
+        etag: crate::sqlite::row_get::<String>(row, 3)?,
     })
 }
 

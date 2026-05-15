@@ -14,7 +14,7 @@ sqlite-precompiled = ["ic-sqlite-vfs/sqlite-precompiled"]
 [dependencies]
 candid = "0.10.26"
 ic-cdk = "0.20.1"
-ic-sqlite-vfs = { version = "0.2.0", default-features = false }
+ic-sqlite-vfs = { version = "0.2.1", default-features = false }
 ic-stable-structures = "0.7.2"
 
 [dev-dependencies]

@@ -1221,6 +1221,55 @@ fn fs_migrations_reject_old_fs_schema_shape_even_with_current_version() {
 }
 
 #[test]
+fn fs_migrations_reject_current_schema_missing_parent_index() {
+    let (_dir, store) = new_store();
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute("DROP INDEX fs_nodes_parent_idx", [])
+        .expect("parent index should drop");
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("current schema missing parent index should be rejected");
+    assert!(error.contains("legacy wiki_store schema is unsupported"));
+}
+
+#[test]
+fn fs_migrations_reject_current_schema_missing_parent_columns() {
+    let dir = tempdir().expect("temp dir should exist");
+    let store = FsStore::new(dir.path().join("wiki.sqlite3"));
+    let conn = Connection::open(store.database_path()).expect("db should open");
+    conn.execute_batch(include_str!("../migrations/000_schema_migrations.sql"))
+        .expect("schema migrations table should create");
+    conn.execute_batch(include_str!("../migrations/000_fs_schema.sql"))
+        .expect("base schema should create");
+    conn.execute_batch(include_str!("../migrations/001_fs_links.sql"))
+        .expect("links schema should create");
+    conn.execute_batch(
+        "ALTER TABLE fs_nodes ADD COLUMN parent_id INTEGER;
+         CREATE UNIQUE INDEX fs_nodes_parent_name_idx
+         ON fs_nodes (COALESCE(parent_id, 0), path);
+         CREATE INDEX fs_nodes_parent_idx ON fs_nodes(parent_id);",
+    )
+    .expect("partial parent schema should create");
+    for version in [
+        "wiki_store:000_fs_schema",
+        "wiki_store:001_fs_links",
+        "wiki_store:002_fs_folders",
+    ] {
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+            [version],
+        )
+        .expect("version should insert");
+    }
+
+    let error = store
+        .run_fs_migrations()
+        .expect_err("current schema missing name column should be rejected");
+    assert!(error.contains("legacy wiki_store schema is unsupported"));
+}
+
+#[test]
 fn search_nodes_returns_error_for_invalid_stored_kind() {
     let (_dir, store) = new_store();
     let conn = Connection::open(store.database_path()).expect("db should open");

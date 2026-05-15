@@ -2,10 +2,11 @@
 // What: ICP canister entrypoints backed by VfsService with an FS-first public API.
 // Why: The canister now exposes node-oriented operations directly and keeps the runtime boundary thin.
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::create_dir_all;
-use std::ops::Range;
-#[cfg(not(test))]
-use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 use candid::{CandidType, Deserialize, Principal, export_service};
@@ -15,7 +16,11 @@ use ic_http_certification::{
     HttpCertification, HttpCertificationPath, HttpCertificationTree, HttpCertificationTreeEntry,
     HttpResponse as CertifiedHttpResponse, utils::add_v2_certificate_header,
 };
+#[cfg(target_arch = "wasm32")]
+use ic_sqlite_vfs::{Db, DbHandle};
+#[cfg(target_arch = "wasm32")]
 use ic_stable_structures::DefaultMemoryImpl;
+#[cfg(target_arch = "wasm32")]
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
@@ -34,13 +39,13 @@ use vfs_types::{
     UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 const INDEX_DB_PATH: &str = "./DB/index.sqlite3";
+#[cfg(not(target_arch = "wasm32"))]
 const DATABASES_DIR: &str = "./DB/databases";
 const II_ALTERNATIVE_ORIGINS_PATH: &str = "/.well-known/ii-alternative-origins";
 const II_ALTERNATIVE_ORIGINS_BODY: &str = r#"{"alternativeOrigins":["https://wiki.kinic.xyz","https://kinic.xyz","chrome-extension://jcfniiflikojmbfnaoamlbbddlikchaj","chrome-extension://hbnicbmdodpmihmcnfgejcdgbfmemoci"]}"#;
-// WASI filesystem memory is for tmp files and directory metadata, not DB slots.
-// SQLite DB files are mounted separately with dedicated MemoryId values.
-const WASI_FS_MEMORY_RANGE: Range<u16> = 0..10;
+#[cfg(target_arch = "wasm32")]
 const INDEX_DB_MEMORY_ID: u16 = 10;
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
@@ -61,9 +66,12 @@ struct HttpResponse {
 }
 
 thread_local! {
+    #[cfg(target_arch = "wasm32")]
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
     static SERVICE: RefCell<Option<VfsService>> = const { RefCell::new(None) };
+    #[cfg(target_arch = "wasm32")]
+    static DATABASE_HANDLES: RefCell<BTreeMap<u16, DbHandle>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 #[init]
@@ -523,8 +531,11 @@ fn initialize_or_trap() {
 }
 
 fn initialize_service() -> Result<(), String> {
-    initialize_wasi_storage()?;
+    initialize_sqlite_storage()?;
+    #[cfg(not(target_arch = "wasm32"))]
     let service = VfsService::new(PathBuf::from(INDEX_DB_PATH), PathBuf::from(DATABASES_DIR));
+    #[cfg(target_arch = "wasm32")]
+    let service = VfsService::stable(database_handle);
     service.run_index_migrations()?;
     for meta in service.list_databases()? {
         mount_database_file(&meta)?;
@@ -533,73 +544,49 @@ fn initialize_service() -> Result<(), String> {
     Ok(())
 }
 
-fn initialize_wasi_storage() -> Result<(), String> {
+#[cfg(not(target_arch = "wasm32"))]
+fn initialize_sqlite_storage() -> Result<(), String> {
+    create_dir_all(DATABASES_DIR).map_err(|error| error.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initialize_sqlite_storage() -> Result<(), String> {
     MEMORY_MANAGER.with(|manager| {
         let manager = manager.borrow();
-        ic_wasi_polyfill::init_with_memory_manager(
-            &[0u8; 32],
-            &[("SQLITE_TMPDIR", "tmp")],
-            &manager,
-            WASI_FS_MEMORY_RANGE.clone(),
-        );
-
-        create_dir_all("tmp").map_err(|error| error.to_string())?;
-        create_dir_all(DATABASES_DIR).map_err(|error| error.to_string())?;
-
-        ic_wasi_polyfill::unmount_memory_file(INDEX_DB_PATH);
         let memory = manager.get(MemoryId::new(INDEX_DB_MEMORY_ID));
-        let mount_result = ic_wasi_polyfill::mount_memory_file(
-            INDEX_DB_PATH,
-            Box::new(memory),
-            ic_wasi_polyfill::MountedFileSizePolicy::MemoryPages,
-        );
-        if mount_result > 0 {
-            return Err(format!(
-                "failed to mount index database file: {mount_result}"
-            ));
-        }
-        Ok(())
+        Db::init(memory).map_err(|error| error.to_string())
     })
 }
 
-#[cfg(not(test))]
+#[cfg(target_arch = "wasm32")]
+fn database_handle(mount_id: u16) -> Result<DbHandle, String> {
+    DATABASE_HANDLES.with(|handles| {
+        if let Some(handle) = handles.borrow().get(&mount_id).copied() {
+            return Ok(handle);
+        }
+        let handle = MEMORY_MANAGER.with(|manager| {
+            let memory = manager.borrow().get(MemoryId::new(mount_id));
+            DbHandle::init(memory).map_err(|error| error.to_string())
+        })?;
+        handles.borrow_mut().insert(mount_id, handle);
+        Ok(handle)
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
 fn mount_database_file(meta: &DatabaseMeta) -> Result<(), String> {
-    MEMORY_MANAGER.with(|manager| {
-        let manager = manager.borrow();
-        if let Some(parent) = Path::new(&meta.db_file_name).parent() {
-            create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        ic_wasi_polyfill::unmount_memory_file(&meta.db_file_name);
-        let memory = manager.get(MemoryId::new(meta.mount_id));
-        let mount_result = ic_wasi_polyfill::mount_memory_file(
-            &meta.db_file_name,
-            Box::new(memory),
-            ic_wasi_polyfill::MountedFileSizePolicy::MemoryPages,
-        );
-        if mount_result > 0 {
-            return Err(format!(
-                "failed to mount database file {}: {}",
-                meta.database_id, mount_result
-            ));
-        }
-        Ok(())
-    })
+    database_handle(meta.mount_id).map(|_| ())
 }
 
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 fn mount_database_file(_meta: &DatabaseMeta) -> Result<(), String> {
+    #[cfg(test)]
     if TEST_MOUNT_DATABASE_FILE_FAIL_ONCE.with(|flag| flag.replace(false)) {
         return Err("test mount failure".to_string());
     }
     Ok(())
 }
 
-#[cfg(not(test))]
-fn unmount_database_file(db_file_name: &str) {
-    ic_wasi_polyfill::unmount_memory_file(db_file_name);
-}
-
-#[cfg(test)]
 fn unmount_database_file(_db_file_name: &str) {}
 
 #[cfg(test)]

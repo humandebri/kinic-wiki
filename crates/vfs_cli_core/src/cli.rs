@@ -20,14 +20,31 @@ pub struct VfsCli {
 
 #[derive(Args, Debug, Clone)]
 pub struct ConnectionArgs {
-    #[arg(long, help = "Use the local replica host http://127.0.0.1:8000")]
+    #[arg(
+        long,
+        conflicts_with = "replica_host",
+        help = "Use the local replica host http://127.0.0.1:8000"
+    )]
     pub local: bool,
+
+    #[arg(long, help = "Override replica host from config")]
+    pub replica_host: Option<String>,
 
     #[arg(long, help = "Override VFS_CANISTER_ID or user config")]
     pub canister_id: Option<String>,
 
     #[arg(long, help = "Target database id for DB-backed VFS operations")]
     pub database_id: Option<String>,
+
+    #[arg(long, value_enum, default_value_t = IdentityModeArg::Auto)]
+    pub identity_mode: IdentityModeArg,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityModeArg {
+    Auto,
+    Anonymous,
+    Identity,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -109,6 +126,8 @@ pub enum VfsCommand {
         path: String,
         #[arg(long)]
         expected_etag: Option<String>,
+        #[arg(long)]
+        expected_folder_index_etag: Option<String>,
         #[arg(long)]
         json: bool,
     },

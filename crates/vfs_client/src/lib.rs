@@ -7,7 +7,7 @@ use candid::{Decode, Encode};
 use ic_agent::{
     Agent,
     export::Principal,
-    identity::{BasicIdentity, Secp256k1Identity},
+    identity::{BasicIdentity, Identity, Secp256k1Identity},
 };
 use k256::{SecretKey, pkcs8::DecodePrivateKey};
 use vfs_types::{
@@ -191,6 +191,14 @@ impl CanisterVfsClient {
         identity_pem: &[u8],
     ) -> Result<Self> {
         let identity = identity_from_pem(identity_pem)?;
+        Self::new_with_boxed_identity(replica_host, canister_id, identity).await
+    }
+
+    pub async fn new_with_boxed_identity(
+        replica_host: &str,
+        canister_id: &str,
+        identity: Box<dyn Identity>,
+    ) -> Result<Self> {
         let agent = Agent::builder()
             .with_url(replica_host)
             .with_boxed_identity(identity)
@@ -316,7 +324,7 @@ impl CanisterVfsClient {
     }
 }
 
-fn identity_from_pem(identity_pem: &[u8]) -> Result<Box<dyn ic_agent::Identity>> {
+pub fn identity_from_pem(identity_pem: &[u8]) -> Result<Box<dyn ic_agent::Identity>> {
     if let Ok(identity) = Secp256k1Identity::from_pem(identity_pem) {
         return Ok(Box::new(identity));
     }

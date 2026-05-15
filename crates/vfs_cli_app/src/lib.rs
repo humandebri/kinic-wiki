@@ -5,6 +5,7 @@
 mod agent_tools_tests;
 pub mod beam_bench;
 pub mod cli;
+pub mod client_mode;
 pub mod commands;
 #[cfg(test)]
 mod commands_fs_tests;

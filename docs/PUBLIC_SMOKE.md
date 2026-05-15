@@ -17,11 +17,12 @@ Create a database, write one file, and grant anonymous reader access for Browser
 
 ```bash
 CANISTER_ID=<local-wiki-canister-id>
-DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --local --canister-id "$CANISTER_ID" database create)"
+REPLICA_HOST=http://127.0.0.1:8001
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" database create)"
 printf '# Public Smoke\n\nalpha browser smoke\n' > /tmp/llm-wiki-smoke.md
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --local --canister-id "$CANISTER_ID" --database-id "$DB_ID" \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" --database-id "$DB_ID" \
   write-node --path /Wiki/smoke.md --input /tmp/llm-wiki-smoke.md
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --local --canister-id "$CANISTER_ID" \
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" \
   database grant "$DB_ID" 2vxsx-fae reader
 ```
 
@@ -54,6 +55,8 @@ That script runs the dedicated Rust archive/restore smoke and then verifies the 
 - `database archive-export`
 - `database archive-restore`
 - `read-node`
+
+The Rust smoke also verifies the deployed local canister path for archive/restore, upgrade persistence, FTS search, outgoing links, and isolation between two databases. The script targets the project-local replica with `--replica-host http://127.0.0.1:8001`.
 
 ## Public Deployment Smoke
 

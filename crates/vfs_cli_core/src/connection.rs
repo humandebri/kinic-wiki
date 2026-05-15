@@ -55,6 +55,7 @@ struct UserConfig {
 
 pub fn resolve_connection(
     local: bool,
+    replica_host_arg: Option<String>,
     canister_id_arg: Option<String>,
     database_id_arg: Option<String>,
 ) -> Result<ResolvedConnection> {
@@ -62,6 +63,7 @@ pub fn resolve_connection(
     let workspace = load_workspace_config()?;
     resolve_connection_from_sources(
         local,
+        replica_host_arg,
         canister_id_arg,
         database_id_arg,
         env::var(CANISTER_ID_ENV).ok(),
@@ -73,6 +75,7 @@ pub fn resolve_connection(
 
 pub fn resolve_connection_optional_canister(
     local: bool,
+    replica_host_arg: Option<String>,
     canister_id_arg: Option<String>,
     database_id_arg: Option<String>,
 ) -> Result<ResolvedConnectionPreview> {
@@ -80,6 +83,7 @@ pub fn resolve_connection_optional_canister(
     let workspace = load_workspace_config()?;
     Ok(resolve_connection_preview_from_sources(
         local,
+        replica_host_arg,
         canister_id_arg,
         database_id_arg,
         env::var(CANISTER_ID_ENV).ok(),
@@ -91,6 +95,7 @@ pub fn resolve_connection_optional_canister(
 
 fn resolve_connection_from_sources(
     local: bool,
+    replica_host_arg: Option<String>,
     canister_id_arg: Option<String>,
     database_id_arg: Option<String>,
     canister_id_env: Option<String>,
@@ -100,6 +105,7 @@ fn resolve_connection_from_sources(
 ) -> Result<ResolvedConnection> {
     let preview = resolve_connection_preview_from_sources(
         local,
+        replica_host_arg,
         canister_id_arg,
         database_id_arg,
         canister_id_env,
@@ -125,6 +131,7 @@ fn resolve_connection_from_sources(
 
 fn resolve_connection_preview_from_sources(
     local: bool,
+    replica_host_arg: Option<String>,
     canister_id_arg: Option<String>,
     database_id_arg: Option<String>,
     canister_id_env: Option<String>,
@@ -134,6 +141,8 @@ fn resolve_connection_preview_from_sources(
 ) -> ResolvedConnectionPreview {
     let (replica_host, replica_host_source) = if local {
         (LOCAL_REPLICA_HOST.to_string(), "--local".to_string())
+    } else if let Some(value) = replica_host_arg {
+        (value, "--replica-host".to_string())
     } else {
         workspace
             .as_ref()
@@ -326,6 +335,7 @@ mod tests {
     fn args_override_env_and_config() {
         let resolved = resolve_connection_from_sources(
             true,
+            None,
             Some("arg-canister".to_string()),
             Some("arg-db".to_string()),
             Some("env-canister".to_string()),
@@ -359,6 +369,7 @@ mod tests {
     fn env_and_workspace_override_user_config_for_database() {
         let resolved = resolve_connection_from_sources(
             false,
+            None,
             None,
             None,
             None,
@@ -403,8 +414,9 @@ mod tests {
 
     #[test]
     fn missing_canister_id_returns_actionable_error() {
-        let error = resolve_connection_from_sources(false, None, None, None, None, None, None)
-            .expect_err("missing canister id should fail");
+        let error =
+            resolve_connection_from_sources(false, None, None, None, None, None, None, None)
+                .expect_err("missing canister id should fail");
         let message = error.to_string();
         assert!(message.contains("canister_id"));
         assert!(message.contains(CANISTER_ID_ENV));
@@ -412,8 +424,9 @@ mod tests {
 
     #[test]
     fn preview_allows_missing_canister_id() {
-        let resolved =
-            resolve_connection_preview_from_sources(false, None, None, None, None, None, None);
+        let resolved = resolve_connection_preview_from_sources(
+            false, None, None, None, None, None, None, None,
+        );
         assert_eq!(
             resolved,
             ResolvedConnectionPreview {
@@ -435,6 +448,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(UserConfig {
                 replica_host: None,
                 canister_id: None,
@@ -448,6 +462,31 @@ mod tests {
             resolved.database_id_source.as_deref(),
             Some(".kinic/config.toml")
         );
+    }
+
+    #[test]
+    fn replica_host_arg_overrides_config() {
+        let resolved = resolve_connection_from_sources(
+            false,
+            Some("http://arg-host".to_string()),
+            Some("arg-canister".to_string()),
+            None,
+            None,
+            None,
+            Some(UserConfig {
+                replica_host: Some("http://workspace-host".to_string()),
+                canister_id: Some("workspace-canister".to_string()),
+                database_id: None,
+            }),
+            Some(UserConfig {
+                replica_host: Some("http://config-host".to_string()),
+                canister_id: Some("config-canister".to_string()),
+                database_id: None,
+            }),
+        )
+        .expect("arg host should win");
+        assert_eq!(resolved.replica_host, "http://arg-host");
+        assert_eq!(resolved.replica_host_source, "--replica-host");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 // Why: Backlinks should be cheap to query, so writes maintain a small edge table.
 use std::collections::{BTreeSet, VecDeque};
 
-use rusqlite::{Connection, Transaction, params};
+use crate::sqlite::{Connection, Transaction, params};
 use vfs_types::{LinkEdge, Node};
 
 use crate::fs_helpers::{normalize_node_path, prefix_filter_sql_for_column};
@@ -33,17 +33,15 @@ pub(crate) fn backfill_node_links(tx: &Transaction<'_>) -> Result<(), String> {
     let mut stmt = tx
         .prepare("SELECT path, content, updated_at FROM fs_nodes ORDER BY path ASC")
         .map_err(|error| error.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|error| error.to_string())?;
-    for row in rows {
-        let (source_path, content, updated_at) = row.map_err(|error| error.to_string())?;
+    let rows = crate::sqlite::query_map(&mut stmt, params![], |row| {
+        Ok((
+            crate::sqlite::row_get::<String>(row, 0)?,
+            crate::sqlite::row_get::<String>(row, 1)?,
+            crate::sqlite::row_get::<i64>(row, 2)?,
+        ))
+    })
+    .map_err(|error| error.to_string())?;
+    for (source_path, content, updated_at) in rows {
         for edge in extract_link_edges(&source_path, &content, updated_at) {
             tx.execute(
                 "INSERT OR REPLACE INTO fs_links
@@ -122,12 +120,14 @@ pub(crate) fn load_graph_links(
         values.extend(scope_values);
     }
     sql.push_str(" ORDER BY source_path ASC, target_path ASC, raw_href ASC LIMIT ?");
-    values.push(rusqlite::types::Value::from(limit));
+    values.push(crate::sqlite::types::Value::from(limit));
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
-    stmt.query_map(rusqlite::params_from_iter(values.iter()), edge_from_row)
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    crate::sqlite::query_map(
+        &mut stmt,
+        crate::sqlite::params_from_iter(values.iter()),
+        edge_from_row,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) fn load_graph_neighborhood(
@@ -186,24 +186,20 @@ fn load_adjacent_links(conn: &Connection, path: &str, limit: i64) -> Result<Vec<
 
 fn load_links<P>(conn: &Connection, sql: &str, params: P) -> Result<Vec<LinkEdge>, String>
 where
-    P: rusqlite::Params,
+    P: crate::sqlite::Params,
 {
-    conn.prepare(sql)
-        .map_err(|error| error.to_string())?
-        .query_map(params, edge_from_row)
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    let mut stmt = conn.prepare(sql).map_err(|error| error.to_string())?;
+    crate::sqlite::query_map(&mut stmt, params, edge_from_row).map_err(|error| error.to_string())
 }
 
-fn edge_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkEdge> {
+fn edge_from_row(row: &crate::sqlite::Row<'_>) -> crate::sqlite::Result<LinkEdge> {
     Ok(LinkEdge {
-        source_path: row.get(0)?,
-        target_path: row.get(1)?,
-        raw_href: row.get(2)?,
-        link_text: row.get(3)?,
-        link_kind: row.get(4)?,
-        updated_at: row.get(5)?,
+        source_path: crate::sqlite::row_get::<String>(row, 0)?,
+        target_path: crate::sqlite::row_get::<String>(row, 1)?,
+        raw_href: crate::sqlite::row_get::<String>(row, 2)?,
+        link_text: crate::sqlite::row_get::<String>(row, 3)?,
+        link_kind: crate::sqlite::row_get::<String>(row, 4)?,
+        updated_at: crate::sqlite::row_get::<i64>(row, 5)?,
     })
 }
 

@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Command, ConnectionArgs, NodeKindArg};
+use crate::cli::{Cli, Command, ConnectionArgs, IdentityModeArg, NodeKindArg};
 use crate::commands::run_command;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -297,6 +297,8 @@ async fn write_node_accepts_canonical_source_paths_only() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
+                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
                 },
                 command: Command::WriteNode {
@@ -338,6 +340,8 @@ async fn write_node_rejects_non_canonical_source_paths() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
+                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
                 },
                 command: Command::WriteNode {
@@ -373,6 +377,8 @@ async fn purge_url_ingest_dry_run_does_not_delete() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -405,6 +411,8 @@ async fn purge_url_ingest_requires_force_for_wide_target_delete() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -438,6 +446,8 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -486,6 +496,8 @@ async fn purge_url_ingest_rejects_unsafe_target_paths() {
                 connection: ConnectionArgs {
                     database_id: Some("default".to_string()),
                     local: false,
+                    replica_host: None,
+                    identity_mode: IdentityModeArg::Auto,
                     canister_id: None,
                 },
                 command: Command::PurgeUrlIngest {
@@ -534,6 +546,8 @@ async fn purge_url_ingest_rejects_prefix_bleed_from_list_nodes() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -567,6 +581,8 @@ async fn purge_url_ingest_rejects_request_paths_outside_ingest_prefix() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -611,6 +627,8 @@ async fn purge_url_ingest_rejects_noncanonical_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -643,6 +661,8 @@ async fn purge_url_ingest_returns_error_when_delete_fails() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -688,6 +708,8 @@ async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -737,6 +759,8 @@ async fn purge_url_ingest_source_path_requires_matching_request() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -781,6 +805,8 @@ async fn purge_url_ingest_source_path_requires_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -826,6 +852,8 @@ async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -858,6 +886,8 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
@@ -930,6 +960,8 @@ async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
             connection: ConnectionArgs {
                 database_id: Some("default".to_string()),
                 local: false,
+                replica_host: None,
+                identity_mode: IdentityModeArg::Auto,
                 canister_id: None,
             },
             command: Command::PurgeUrlIngest {
