@@ -29,6 +29,7 @@ For each queued request it:
 
 The worker identity in `KINIC_WIKI_WORKER_IDENTITY_PEM` must have writer access to the target database.
 Use the exact PEM output from `icp identity export <identity-name>`.
+New databases include the default LLM writer service principal as a `writer` member. That automatic grant is part of the URL ingest permission model: if an owner revokes the service principal, URL ingest session authorization and checks fail until writer access is restored.
 
 ## Cloudflare Setup
 

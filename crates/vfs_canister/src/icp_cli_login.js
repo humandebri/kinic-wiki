@@ -16,12 +16,17 @@ import {
 const status = document.querySelector("#status");
 const error = document.querySelector("#error");
 const button = document.querySelector("#login");
+const requestDetails = document.querySelector("#request-details");
+const callbackHostPort = document.querySelector("#callback-host-port");
+const derivationOrigin = document.querySelector("#derivation-origin");
+const delegationTtl = document.querySelector("#delegation-ttl");
 const request = parseCliLoginHash(location.hash);
 let authClient = null;
 
 if (!request) {
   fail("Invalid CLI login request.");
 } else {
+  renderRequestDetails(request);
   history.replaceState(null, "", location.pathname);
   AuthClient.create(authClientCreateOptions(CLI_DELEGATION_TTL_MS))
     .then((client) => {
@@ -44,6 +49,24 @@ button.addEventListener("click", async () => {
     onError: (cause) => fail(errorMessage(cause))
   });
 });
+
+function renderRequestDetails(nextRequest) {
+  const callback = new URL(nextRequest.callback);
+  callbackHostPort.textContent = callback.port
+    ? `${callback.hostname}:${callback.port}`
+    : callback.hostname;
+  derivationOrigin.textContent = derivationOriginForLocation(location);
+  delegationTtl.textContent = formatDuration(CLI_DELEGATION_TTL_MS);
+  requestDetails.hidden = false;
+}
+
+function formatDuration(milliseconds) {
+  const hours = milliseconds / (60 * 60 * 1000);
+  if (Number.isInteger(hours)) {
+    return `${hours} hours`;
+  }
+  return `${Math.round(milliseconds / 60_000)} minutes`;
+}
 
 async function postDelegation(client, nextRequest) {
   try {

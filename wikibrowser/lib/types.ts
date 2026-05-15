@@ -70,17 +70,17 @@ export type UrlIngestTriggerSessionCheckRequest = {
   sessionNonce: string;
 };
 
-export type OpsAnswerSessionRequest = {
+export type QueryAnswerSessionRequest = {
   databaseId: string;
   sessionNonce: string;
 };
 
-export type OpsAnswerSessionCheckRequest = {
+export type QueryAnswerSessionCheckRequest = {
   databaseId: string;
   sessionNonce: string;
 };
 
-export type OpsAnswerSessionCheckResult = {
+export type QueryAnswerSessionCheckResult = {
   principal: string;
 };
 
@@ -138,6 +138,15 @@ export type NodeContext = {
   node: WikiNode;
   incomingLinks: LinkEdge[];
   outgoingLinks: LinkEdge[];
+};
+
+export type QueryContext = {
+  namespace: string;
+  task: string;
+  searchHits: SearchNodeHit[];
+  nodes: NodeContext[];
+  graphLinks: LinkEdge[];
+  truncated: boolean;
 };
 
 export type SearchPreviewField = "path" | "content";

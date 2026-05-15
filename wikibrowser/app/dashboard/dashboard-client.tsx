@@ -3,12 +3,13 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AuthControls, OwnerPanel, StatusPanel, SummaryPanel } from "./dashboard-ui";
+import { AuthControls, OwnerPanel, ReadonlyMembersPanel, StatusPanel, SummaryPanel } from "./dashboard-ui";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseMember, DatabaseRole, DatabaseSummary } from "@/lib/types";
 import {
   grantDatabaseAccessAuthenticated,
   listDatabaseMembersAuthenticated,
+  listDatabaseMembersPublic,
   listDatabasesAuthenticated,
   listDatabasesPublic,
   revokeDatabaseAccessAuthenticated
@@ -89,6 +90,15 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
         if (identity && nextDatabase?.role === "owner") {
           try {
             const nextMembers = await listDatabaseMembersAuthenticated(canisterId, identity, nextDatabaseId);
+            if (!isCurrentRefresh()) return;
+            setMembers(nextMembers);
+          } catch (cause) {
+            if (!isCurrentRefresh()) return;
+            setMemberError(errorMessage(cause));
+          }
+        } else if (nextDatabase?.publicReadable) {
+          try {
+            const nextMembers = await listDatabaseMembersPublic(canisterId, nextDatabaseId);
             if (!isCurrentRefresh()) return;
             setMembers(nextMembers);
           } catch (cause) {
@@ -220,22 +230,20 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
 
         {database ? <SummaryPanel database={database} databaseId={databaseId} principal={principal ?? "anonymous"} publicReadable={database.publicReadable} /> : null}
 
-        {principal ? (
-          database ? (
-            canManage ? (
-              <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal} onGrant={grantAccess} onRevoke={revokeAccess} />
-            ) : (
-              <StatusPanel tone="info" message={memberError ?? "No management permission for this database."} />
-            )
+        {database ? (
+          canManage ? (
+            <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal ?? "anonymous"} onGrant={grantAccess} onRevoke={revokeAccess} />
+          ) : database.publicReadable ? (
+            <ReadonlyMembersPanel memberError={memberError} members={members} principal={principal ?? "anonymous"} />
+          ) : principal ? (
+            <StatusPanel tone="info" message={memberError ?? "No management permission for this database."} />
           ) : (
-            <StatusPanel tone="error" message="Database is not linked to this principal or public anonymous reads." />
+            <StatusPanel tone="info" message="Login with Internet Identity to manage database access." />
           )
-        ) : database ? (
-          <StatusPanel tone="info" message="Login with Internet Identity to manage database access." />
         ) : !databaseId ? (
           <section className="rounded-lg border border-line bg-paper p-8 shadow-sm">
             <h2 className="text-lg font-semibold text-ink">Select a database to manage</h2>
-            <p className="mt-2 text-sm leading-6 text-muted">Open the Database dashboard, then choose Manage on a database row.</p>
+            <p className="mt-2 text-sm leading-6 text-muted">Open the Database dashboard, then choose Access on a database row.</p>
             <Link className="mt-5 inline-flex rounded-2xl border border-action bg-action px-4 py-2 text-sm font-bold text-white no-underline hover:-translate-y-[3px] hover:border-accent hover:bg-accent" href="/">
               Open Database dashboard
             </Link>

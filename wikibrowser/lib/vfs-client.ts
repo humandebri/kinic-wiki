@@ -21,9 +21,10 @@ import type {
   NodeContext,
   NodeEntryKind,
   NodeKind,
-  OpsAnswerSessionCheckRequest,
-  OpsAnswerSessionCheckResult,
-  OpsAnswerSessionRequest,
+  QueryContext,
+  QueryAnswerSessionCheckRequest,
+  QueryAnswerSessionCheckResult,
+  QueryAnswerSessionRequest,
   RecentNode,
   SearchNodeHit,
   UrlIngestTriggerSessionCheckRequest,
@@ -143,17 +144,17 @@ type RawUrlIngestTriggerSessionCheckRequest = {
   session_nonce: string;
 };
 
-type RawOpsAnswerSessionRequest = {
+type RawQueryAnswerSessionRequest = {
   database_id: string;
   session_nonce: string;
 };
 
-type RawOpsAnswerSessionCheckRequest = {
+type RawQueryAnswerSessionCheckRequest = {
   database_id: string;
   session_nonce: string;
 };
 
-type RawOpsAnswerSessionCheckResult = {
+type RawQueryAnswerSessionCheckResult = {
   principal: string;
 };
 
@@ -172,11 +173,21 @@ type RawNodeContext = {
   outgoing_links: RawLinkEdge[];
 };
 
+type RawQueryContext = {
+  namespace: string;
+  task: string;
+  search_hits: RawSearchHit[];
+  nodes: RawNodeContext[];
+  graph_links: RawLinkEdge[];
+  truncated: boolean;
+};
+
 type VfsActor = {
-  authorize_ops_answer_session: (request: RawOpsAnswerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
+  // Query answer wrappers keep the public browser naming while the current canister Candid surface still exposes ops_* session methods.
+  authorize_ops_answer_session: (request: RawQueryAnswerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   authorize_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionRequest) => Promise<{ Ok: null } | { Err: string }>;
   canister_health: () => Promise<RawCanisterHealth>;
-  check_ops_answer_session: (request: RawOpsAnswerSessionCheckRequest) => Promise<{ Ok: RawOpsAnswerSessionCheckResult } | { Err: string }>;
+  check_ops_answer_session: (request: RawQueryAnswerSessionCheckRequest) => Promise<{ Ok: RawQueryAnswerSessionCheckResult } | { Err: string }>;
   check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
   create_database: () => Promise<{ Ok: string } | { Err: string }>;
   delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
@@ -196,6 +207,15 @@ type VfsActor = {
   graph_links: (request: { database_id: string; prefix: string; limit: number }) => Promise<{ Ok: RawLinkEdge[] } | { Err: string }>;
   graph_neighborhood: (request: { database_id: string; center_path: string; depth: number; limit: number }) => Promise<{ Ok: RawLinkEdge[] } | { Err: string }>;
   read_node_context: (request: { database_id: string; path: string; link_limit: number }) => Promise<{ Ok: [] | [RawNodeContext] } | { Err: string }>;
+  query_context: (request: {
+    database_id: string;
+    task: string;
+    entities: string[];
+    namespace: [] | [string];
+    budget_tokens: number;
+    include_evidence: boolean;
+    depth: number;
+  }) => Promise<{ Ok: RawQueryContext } | { Err: string }>;
   search_node_paths: (request: {
     database_id: string;
     query_text: string;
@@ -445,24 +465,26 @@ export async function checkUrlIngestTriggerSession(canisterId: string, request: 
   });
 }
 
-export async function authorizeOpsAnswerSession(
+export async function authorizeQueryAnswerSession(
   canisterId: string,
   identity: Identity,
-  request: OpsAnswerSessionRequest
+  request: QueryAnswerSessionRequest
 ): Promise<void> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
-    const result = await actor.authorize_ops_answer_session(rawOpsAnswerSessionRequest(request));
+    // Compatibility note: the canister method is still ops_*; callers should use the query answer wrapper names above.
+    const result = await actor.authorize_ops_answer_session(rawQueryAnswerSessionRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }
   });
 }
 
-export async function checkOpsAnswerSession(canisterId: string, request: OpsAnswerSessionCheckRequest): Promise<OpsAnswerSessionCheckResult> {
+export async function checkQueryAnswerSession(canisterId: string, request: QueryAnswerSessionCheckRequest): Promise<QueryAnswerSessionCheckResult> {
   return callVfs(async () => {
     const actor = await createVfsActor(canisterId);
-    const result = await actor.check_ops_answer_session(rawOpsAnswerSessionCheckRequest(request));
+    // Compatibility note: the canister method is still ops_*; callers should use the query answer wrapper names above.
+    const result = await actor.check_ops_answer_session(rawQueryAnswerSessionCheckRequest(request));
     if ("Err" in result) {
       throwCanisterError(result.Err);
     }
@@ -475,6 +497,17 @@ export async function checkOpsAnswerSession(canisterId: string, request: OpsAnsw
 export async function listDatabaseMembersAuthenticated(canisterId: string, identity: Identity, databaseId: string): Promise<DatabaseMember[]> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.list_database_members(databaseId);
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
+    return result.Ok.map(normalizeDatabaseMember);
+  });
+}
+
+export async function listDatabaseMembersPublic(canisterId: string, databaseId: string): Promise<DatabaseMember[]> {
+  return callVfs(async () => {
+    const actor = await createVfsActor(canisterId);
     const result = await actor.list_database_members(databaseId);
     if ("Err" in result) {
       throw new Error(result.Err);
@@ -591,6 +624,32 @@ export async function graphNeighborhood(canisterId: string, databaseId: string, 
       throwCanisterError(result.Err);
     }
     return result.Ok.map(normalizeLinkEdge);
+  });
+}
+
+export async function queryContext(
+  canisterId: string,
+  databaseId: string,
+  task: string,
+  budgetTokens: number,
+  identity?: Identity,
+  namespace = "/Wiki"
+): Promise<QueryContext> {
+  return callVfs(async () => {
+    const actor = await createReadActor(canisterId, identity);
+    const result = await actor.query_context({
+      database_id: databaseId,
+      task,
+      entities: [],
+      namespace: [namespace],
+      budget_tokens: budgetTokens,
+      include_evidence: false,
+      depth: 1
+    });
+    if ("Err" in result) {
+      throwCanisterError(result.Err);
+    }
+    return normalizeQueryContext(result.Ok);
   });
 }
 
@@ -721,6 +780,17 @@ function normalizeNodeContext(raw: RawNodeContext): NodeContext {
   };
 }
 
+function normalizeQueryContext(raw: RawQueryContext): QueryContext {
+  return {
+    namespace: raw.namespace,
+    task: raw.task,
+    searchHits: raw.search_hits.map(normalizeSearchHit),
+    nodes: raw.nodes.map(normalizeNodeContext),
+    graphLinks: raw.graph_links.map(normalizeLinkEdge),
+    truncated: raw.truncated
+  };
+}
+
 function normalizeNodeKind(kind: Variant): NodeKind {
   if ("Folder" in kind) return "folder";
   return "Source" in kind ? "source" : "file";
@@ -777,14 +847,14 @@ function rawUrlIngestTriggerSessionCheckRequest(request: UrlIngestTriggerSession
   };
 }
 
-function rawOpsAnswerSessionRequest(request: OpsAnswerSessionRequest): RawOpsAnswerSessionRequest {
+function rawQueryAnswerSessionRequest(request: QueryAnswerSessionRequest): RawQueryAnswerSessionRequest {
   return {
     database_id: request.databaseId,
     session_nonce: request.sessionNonce
   };
 }
 
-function rawOpsAnswerSessionCheckRequest(request: OpsAnswerSessionCheckRequest): RawOpsAnswerSessionCheckRequest {
+function rawQueryAnswerSessionCheckRequest(request: QueryAnswerSessionCheckRequest): RawQueryAnswerSessionCheckRequest {
   return {
     database_id: request.databaseId,
     session_nonce: request.sessionNonce

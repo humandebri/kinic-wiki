@@ -7,7 +7,7 @@ const wikiBrowser = readFileSync(new URL("../components/wiki-browser.tsx", impor
 const documentPane = readFileSync(new URL("../components/document-pane.tsx", import.meta.url), "utf8");
 const routeModule = await importTs("../app/api/sources/extract/route.ts");
 const triggerRouteModule = await importTs("../app/api/url-ingest/trigger/route.ts");
-const opsAnswerRouteModule = await importTs("../app/api/ops/answer/route.ts");
+const queryAnswerRouteModule = await importTs("../app/api/query/answer/route.ts");
 
 assert.match(sourceExtractRoute, /redirect: "manual"/);
 assert.match(sourceExtractRoute, /MAX_REDIRECTS = 5/);
@@ -123,40 +123,40 @@ await withEnv(
 );
 
 await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa" }, async () => {
-  const missingKey = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz"));
+  const missingKey = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz"));
   assert.equal(missingKey.status, 503);
   assert.match(await missingKey.text(), /DEEPSEEK_API_KEY is not configured/);
 });
 
 await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY: "deepseek-key" }, async () => {
-  const forbidden = await opsAnswerRouteModule.POST(opsAnswerRequest("https://evil.example"));
+  const forbidden = await queryAnswerRouteModule.POST(queryAnswerRequest("https://evil.example"));
   assert.equal(forbidden.status, 403);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async () => ({ principal: "principal-1" }),
     rateLimitStore: rateLimitStore()
   });
 
-  const missingSession = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz", { sessionNonce: "" }));
+  const missingSession = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz", { sessionNonce: "" }));
   assert.equal(missingSession.status, 403);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async () => {
       throw new Error("denied");
     },
     rateLimitStore: rateLimitStore()
   });
-  const deniedSession = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz"));
+  const deniedSession = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz"));
   assert.equal(deniedSession.status, 403);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async () => ({ principal: "principal-1" }),
     rateLimitStore: rateLimitStore(10)
   });
-  const limited = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz"));
+  const limited = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz"));
   assert.equal(limited.status, 429);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async (canisterId, input) => {
       assert.equal(canisterId, "aaaaa-aa");
       assert.deepEqual(input, { databaseId: "db_1", sessionNonce: "session-1" });
@@ -165,17 +165,17 @@ await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY
     rateLimitStore: rateLimitStore()
   });
 
-  const emptyContext = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz", { context: [] }));
+  const emptyContext = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz", { context: [] }));
   assert.equal(emptyContext.status, 200);
   assert.equal((await emptyContext.json()).abstained, true);
 
-  const invalidPath = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz", { selectedPath: "/Private/demo.md" }));
+  const invalidPath = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz", { selectedPath: "/Private/demo.md" }));
   assert.equal(invalidPath.status, 400);
 
-  const oversizedQuestion = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz", { question: "x".repeat(1001) }));
+  const oversizedQuestion = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz", { question: "x".repeat(1001) }));
   assert.equal(oversizedQuestion.status, 400);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async () => ({ principal: "principal-1" }),
     rateLimitStore: rateLimitStore(),
     fetchImpl: async (_input, init) =>
@@ -184,16 +184,22 @@ await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY
       }),
     timeoutMs: 1
   });
-  const timeout = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz"));
+  const timeout = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz"));
   assert.equal(timeout.status, 504);
 
-  opsAnswerRouteModule.setOpsAnswerDepsForTest({
+  queryAnswerRouteModule.setQueryAnswerDepsForTest({
     checkSession: async () => ({ principal: "principal-1" }),
     rateLimitStore: rateLimitStore(),
     fetchImpl: async (input, init) => {
       assert.equal(inputUrl(input), "https://api.deepseek.com/chat/completions");
       const body = JSON.parse(init?.body);
       assert.deepEqual(body.response_format, { type: "json_object" });
+      assert.deepEqual(body.thinking, { type: "disabled" });
+      const systemPrompt = body.messages.at(0).content;
+      assert.match(systemPrompt, /Answer in the user's language/);
+      assert.match(systemPrompt, /links are navigation hints, not evidence/);
+      assert.match(systemPrompt, /missing or conflicting/);
+      assert.match(systemPrompt, /Example JSON/);
       const promptInput = JSON.parse(body.messages.at(-1).content);
       assert.equal(promptInput.question, "What does the wiki say?");
       assert.equal(promptInput.selectedPath, "/Wiki/demo.md");
@@ -214,12 +220,12 @@ await withEnv({ NEXT_PUBLIC_KINIC_WIKI_CANISTER_ID: "aaaaa-aa", DEEPSEEK_API_KEY
       });
     }
   });
-  const response = await opsAnswerRouteModule.POST(opsAnswerRequest("https://wiki.kinic.xyz"));
+  const response = await queryAnswerRouteModule.POST(queryAnswerRequest("https://wiki.kinic.xyz"));
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.deepEqual(body.citations, ["/Wiki/demo.md"]);
   assert.equal(body.abstained, false);
-  opsAnswerRouteModule.setOpsAnswerDepsForTest();
+  queryAnswerRouteModule.setQueryAnswerDepsForTest();
 });
 
 console.log("URL security checks OK");
@@ -284,8 +290,8 @@ function triggerRequest(origin, overrides = {}) {
   });
 }
 
-function opsAnswerRequest(origin, overrides = {}) {
-  return new Request("https://local.test/api/ops/answer", {
+function queryAnswerRequest(origin, overrides = {}) {
+  return new Request("https://local.test/api/query/answer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({

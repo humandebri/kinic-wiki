@@ -21,6 +21,7 @@ use vfs_types::{
     NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
     RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
     SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
+    WriteNodesRequest,
 };
 
 #[async_trait]
@@ -127,6 +128,9 @@ pub trait VfsApi: Sync {
     async fn list_nodes(&self, request: ListNodesRequest) -> Result<Vec<NodeEntry>>;
     async fn list_children(&self, request: ListChildrenRequest) -> Result<Vec<ChildNode>>;
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult>;
+    async fn write_nodes(&self, _request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>> {
+        Err(anyhow!("write_nodes is not implemented by this client"))
+    }
     async fn append_node(&self, request: AppendNodeRequest) -> Result<WriteNodeResult>;
     async fn edit_node(&self, request: EditNodeRequest) -> Result<EditNodeResult>;
     async fn delete_node(&self, request: DeleteNodeRequest) -> Result<DeleteNodeResult>;
@@ -519,6 +523,12 @@ impl VfsApi for CanisterVfsClient {
 
     async fn write_node(&self, request: WriteNodeRequest) -> Result<WriteNodeResult> {
         let result: Result<WriteNodeResult, String> = self.update("write_node", &request).await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn write_nodes(&self, request: WriteNodesRequest) -> Result<Vec<WriteNodeResult>> {
+        let result: Result<Vec<WriteNodeResult>, String> =
+            self.update("write_nodes", &request).await?;
         result.map_err(|error| anyhow!(error))
     }
 
