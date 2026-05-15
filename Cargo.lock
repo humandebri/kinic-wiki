@@ -1219,13 +1219,13 @@ dependencies = [
 
 [[package]]
 name = "ic-cdk"
-version = "0.20.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "057912339f889013f42b36cc0623585949ed278457efb32aef041bdc48acb111"
+checksum = "a64dfa64757e7bfdd3bd6048c35e1edd74b69325deeed6bcaafedbc864c645fc"
 dependencies = [
  "candid",
  "ic-cdk-executor",
- "ic-cdk-macros 0.20.0",
+ "ic-cdk-macros 0.20.1",
  "ic-error-types",
  "ic0",
  "pin-project-lite",
@@ -1259,9 +1259,9 @@ dependencies = [
 
 [[package]]
 name = "ic-cdk-macros"
-version = "0.20.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b140627c01710ac185fbc984ab1fda1781ffef4abbd952e07383350899b0952b"
+checksum = "fd0794365edf9997b1114b4ea10358c6af1317e39fc6611b4fc67053a44ec8f1"
 dependencies = [
  "candid",
  "darling 0.23.0",
@@ -1332,6 +1332,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-sqlite-vfs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2d2f3029ee47f0d75a2dffa6b27e9be3958fbaafbbb7598c45756f659f54c08"
+dependencies = [
+ "candid",
+ "cc",
+ "ic-cdk 0.20.1",
+ "ic-stable-structures",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ic-sqlite-vfs-probe"
+version = "0.1.0"
+dependencies = [
+ "ic-sqlite-vfs",
+ "ic-stable-structures",
+]
+
+[[package]]
 name = "ic-stable-structures"
 version = "0.7.2"
 source = "git+https://github.com/humandebri/stable-structures?rev=a24a7d7572e36eda104abd8280946aeb7ac4e060#a24a7d7572e36eda104abd8280946aeb7ac4e060"
@@ -1377,7 +1399,7 @@ version = "0.13.0"
 source = "git+https://github.com/humandebri/ic-wasi-polyfill?rev=4a9b462e2e382bec6505f9c98bb4daa145317093#4a9b462e2e382bec6505f9c98bb4daa145317093"
 dependencies = [
  "anyhow",
- "ic-cdk 0.20.0",
+ "ic-cdk 0.20.1",
  "ic-stable-structures",
  "rand 0.10.1",
  "stable-fs",
@@ -1385,9 +1407,9 @@ dependencies = [
 
 [[package]]
 name = "ic0"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1499d08fd5be8f790d477e1865d63bab6a8d748300e141270c4296e6d5fdd6bc"
+checksum = "c77c8932bff1f09502d0d8c079d5a206a06afe523e35e816162cf4d30b5bf80d"
 
 [[package]]
 name = "ic_bls12_381"
@@ -3012,7 +3034,7 @@ version = "0.1.0"
 dependencies = [
  "canbench-rs",
  "candid",
- "ic-cdk 0.20.0",
+ "ic-cdk 0.20.1",
  "ic-http-certification",
  "ic-stable-structures",
  "ic-wasi-polyfill",

@@ -6,6 +6,7 @@ members = [
     "crates/vfs_runtime",
     "crates/vfs_types",
     "crates/wiki_domain",
+    "crates/ic_sqlite_vfs_probe",
     "crates/vfs_canister",
     "crates/vfs_store",
 ]
