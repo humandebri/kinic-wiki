@@ -51,17 +51,30 @@ function readDatabaseId() {
 
 function wikiLayoutProbe(route) {
   const expectsTallDocument = route.startsWith("/Wiki?");
-  const expectsInspector = route.startsWith("/Wiki?");
-  return `() => {
+  return `async () => {
     const failures = [];
     const documentPanel = document.querySelector('[data-tid="wiki-document-panel"]');
+    const documentHeader = documentPanel?.firstElementChild;
     const explorerPanel = document.querySelector('[data-tid="wiki-explorer-panel"]');
     const inspectorPanel = document.querySelector('[data-tid="wiki-inspector-panel"]');
+    const mobileMenuButton = document.querySelector('[data-tid="mobile-sidebar-toggle"]');
+    const brandLink = document.querySelector('[aria-label="Back to database dashboard"]');
+    const graphLink = document.querySelector('a[aria-label="Graph"]');
+    const graphLabel = graphLink?.querySelector("span");
     const searchForm = document.querySelector('form[aria-label], form');
     if (!documentPanel) failures.push("missing document panel");
+    if (${JSON.stringify(expectsTallDocument)} && /node|directory|\\/Wiki|skill-categories/i.test(documentHeader?.textContent ?? "")) failures.push("document header shows node path metadata");
     if (!explorerPanel) failures.push("missing explorer panel");
-    if (${JSON.stringify(expectsInspector)} && !inspectorPanel) failures.push("missing inspector panel");
-    if (documentPanel && explorerPanel && documentPanel.getBoundingClientRect().top > explorerPanel.getBoundingClientRect().top) {
+    if (!mobileMenuButton) failures.push("missing mobile sidebar toggle");
+    if (!isVisible(brandLink)) failures.push("brand link is not visible before mobile menu opens");
+    if (!graphLink) failures.push("missing graph link");
+    if (isVisible(graphLabel)) failures.push("graph text is visible on mobile");
+    if (mobileMenuButton?.querySelector("svg")?.getAttribute("width") !== graphLink?.querySelector("svg")?.getAttribute("width")) {
+      failures.push("menu and graph icon sizes differ");
+    }
+    if (isVisible(explorerPanel)) failures.push("explorer panel is visible before mobile menu opens");
+    if (isVisible(inspectorPanel)) failures.push("inspector panel is visible on mobile");
+    if (documentPanel && explorerPanel && isVisible(explorerPanel) && documentPanel.getBoundingClientRect().top > explorerPanel.getBoundingClientRect().top) {
       failures.push("document panel is not first on mobile");
     }
     if (${JSON.stringify(expectsTallDocument)} && documentPanel && documentPanel.getBoundingClientRect().height < 220) {
@@ -84,8 +97,31 @@ function wikiLayoutProbe(route) {
     } else {
       failures.push("missing search form");
     }
+    mobileMenuButton?.click();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (!isVisible(explorerPanel)) failures.push("explorer panel does not open from mobile menu");
+    if (!isVisible(brandLink)) failures.push("brand link disappears after mobile menu opens");
+    if (mobileMenuButton?.getAttribute("aria-expanded") !== "true") failures.push("mobile menu button is not expanded after click");
+    const visibleTabs = Array.from(document.querySelectorAll('[aria-label="Left sidebar mode"] a')).filter((link) => isVisible(link)).map((link) => link.textContent?.trim()).join(",");
+    if (visibleTabs !== "explorer,query,ingest,sources") failures.push("mobile sidebar tabs are not visible");
+    const sourcesLink = Array.from(document.querySelectorAll('[aria-label="Left sidebar mode"] a')).find((link) => link.textContent?.trim() === "sources");
+    sourcesLink?.click();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (!isVisible(explorerPanel)) failures.push("explorer panel closes after mobile sidebar navigation");
+    if (mobileMenuButton?.getAttribute("aria-expanded") !== "true") failures.push("mobile menu button collapses after sidebar navigation");
+    if (isVisible(inspectorPanel)) failures.push("inspector panel becomes visible after mobile menu opens");
+    if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1) {
+      failures.push("page overflows horizontally after mobile menu opens");
+    }
     if (failures.length > 0) throw new Error(failures.join("; "));
     return true;
+
+    function isVisible(element) {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    }
   }`;
 }
 

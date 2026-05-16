@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Check, FilePlus, FolderPlus, GitBranch, MoveRight, Network, PanelRight, Pencil, Search, Share2, Trash2, X } from "lucide-react";
+import { Check, FilePlus, FolderPlus, GitBranch, Menu, MoveRight, Network, PanelRight, Pencil, Search, Share2, Trash2, X } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -83,6 +83,7 @@ export function WikiBrowser() {
   const [publicDatabaseIds, setPublicDatabaseIds] = useState<Set<string>>(() => new Set());
   const [memberDatabasesLoaded, setMemberDatabasesLoaded] = useState(false);
   const [databaseListError, setDatabaseListError] = useState<string | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const currentDatabaseRole = useMemo(
     () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
     [databaseId, memberDatabases, readIdentity]
@@ -599,12 +600,18 @@ export function WikiBrowser() {
         databaseListError={databaseListError}
         selectedPath={selectedPath}
         authReady={Boolean(authClient)}
+        mobileSidebarOpen={mobileSidebarOpen}
         onLogin={login}
         onLogout={guardedLogout}
+        onMobileSidebarToggle={() => setMobileSidebarOpen((open) => !open)}
         canLeaveDirtyEdit={canLeaveDirtyEdit}
       />
       <section className={`grid min-h-0 grid-cols-1 gap-3 p-3 lg:flex-1 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
-        <aside data-tid="wiki-explorer-panel" className="order-2 flex min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:order-1 lg:overflow-hidden">
+        <aside
+          id="wiki-mobile-sidebar"
+          data-tid="wiki-explorer-panel"
+          className={`${mobileSidebarOpen ? "order-1 flex" : "hidden"} min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:order-1 lg:flex lg:overflow-hidden`}
+        >
           <PanelHeader
             icon={<GitBranch size={15} />}
             title={tabTitle(tab)}
@@ -699,7 +706,7 @@ export function WikiBrowser() {
             onSelectedExplorerNode={rememberSelectedExplorerNode}
           />
         </aside>
-        <section data-tid="wiki-document-panel" className="order-1 flex min-h-0 flex-col rounded-2xl border border-line bg-white shadow-sm lg:order-2 lg:overflow-hidden">
+        <section data-tid="wiki-document-panel" className={`${mobileSidebarOpen ? "order-2" : "order-1"} flex min-h-0 flex-col rounded-2xl border border-line bg-white shadow-sm lg:order-2 lg:overflow-hidden`}>
           {isGraphPage ? (
             <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} readIdentity={effectiveReadIdentity} readMode={readMode} />
           ) : isSearchPage ? (
@@ -746,7 +753,7 @@ export function WikiBrowser() {
           )}
         </section>
         {!isSearchPage && !isGraphPage ? (
-          <aside data-tid="wiki-inspector-panel" className="order-3 flex min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:overflow-hidden">
+          <aside data-tid="wiki-inspector-panel" className="order-3 hidden min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:flex lg:overflow-hidden">
             <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
             <Inspector
               canisterId={canisterId}
@@ -1196,8 +1203,10 @@ function TopBar({
   databaseListError,
   selectedPath,
   authReady,
+  mobileSidebarOpen,
   onLogin,
   onLogout,
+  onMobileSidebarToggle,
   canLeaveDirtyEdit
 }: {
   canisterId: string;
@@ -1217,8 +1226,10 @@ function TopBar({
   databaseListError: string | null;
   selectedPath: string;
   authReady: boolean;
+  mobileSidebarOpen: boolean;
   onLogin: () => void;
   onLogout: () => void;
+  onMobileSidebarToggle: () => void;
   canLeaveDirtyEdit: () => boolean;
 }) {
   const router = useRouter();
@@ -1244,7 +1255,22 @@ function TopBar({
   return (
     <header className="grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur lg:grid-cols-[auto_minmax(280px,720px)_auto] lg:items-center lg:gap-4">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
+        <button
+          type="button"
+          className={`inline-flex items-center justify-center rounded-lg border p-2 lg:hidden ${mobileSidebarOpen ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
+          aria-controls="wiki-mobile-sidebar"
+          aria-expanded={mobileSidebarOpen}
+          aria-label="Toggle Explorer tabs"
+          data-tid="mobile-sidebar-toggle"
+          onClick={onMobileSidebarToggle}
+        >
+          <Menu size={18} aria-hidden />
+        </button>
+        <Link
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent"
+          href="/"
+          aria-label="Back to database dashboard"
+        >
           <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} unoptimized />
           Kinic Wiki
         </Link>
@@ -1261,7 +1287,7 @@ function TopBar({
           >
             {databaseOptions.map((database) => (
               <option key={database.databaseId} value={database.databaseId}>
-                {database.name} ({database.databaseId})
+                {database.name}
               </option>
             ))}
           </select>
@@ -1286,11 +1312,13 @@ function TopBar({
           </a>
         ) : null}
         <Link
-          className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm no-underline ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg border p-2 text-sm no-underline sm:px-3 sm:py-2 ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
           href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
+          aria-label="Graph"
+          title="Graph"
         >
-          <Network size={15} />
-          Graph
+          <Network size={18} aria-hidden />
+          <span className="sr-only sm:not-sr-only">Graph</span>
         </Link>
         <CycleBattery canisterId={canisterId} />
         {principal ? (

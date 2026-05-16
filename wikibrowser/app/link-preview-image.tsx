@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { ImageResponse } from "next/og";
 
 export const LINK_PREVIEW_ALT = "Kinic Wiki Database Dashboard";
@@ -17,7 +16,6 @@ export type LinkPreviewImageInput = {
 };
 
 export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) {
-  const logoSrc = await kinicLogoDataUrl();
   const eyebrow = input.eyebrow ?? "Kinic Wiki";
   const accent = input.accent ?? "Canister database dashboard";
   const title = input.title ?? "Browse, search, edit, and manage wiki databases.";
@@ -30,8 +28,8 @@ export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) 
           width: "100%",
           height: "100%",
           display: "flex",
-          background: "#f8f8f8",
-          color: "#161616",
+          background: "#161616",
+          color: "#ffffff",
           fontFamily: "Arial, Helvetica, sans-serif"
         }}
       >
@@ -41,7 +39,7 @@ export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) 
             height: "100%",
             display: "flex",
             padding: 72,
-            border: "1px solid #d8d8d8"
+            border: "1px solid #ff2686"
           }}
         >
           <div
@@ -66,20 +64,10 @@ export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) 
                   overflow: "hidden"
                 }}
               >
-                <img
-                  alt=""
-                  height={72}
-                  src={logoSrc}
-                  style={{
-                    width: 72,
-                    height: 72,
-                    objectFit: "cover"
-                  }}
-                  width={72}
-                />
+                <KinicPreviewMark />
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <div style={{ color: "#5c5c5c", fontSize: 24, fontWeight: 700 }}>{eyebrow}</div>
+                <div style={{ color: "#d8d8d8", fontSize: 24, fontWeight: 700 }}>{eyebrow}</div>
                 <div style={{ color: "#ff2686", fontSize: 20, fontWeight: 700 }}>{accent}</div>
               </div>
             </div>
@@ -87,11 +75,11 @@ export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) 
               <div style={{ display: "flex", fontSize: 74, fontWeight: 800, lineHeight: 1.02, maxWidth: 900 }}>
                 {shortenPreviewText(title, 78)}
               </div>
-              <div style={{ display: "flex", color: "#4b4b4b", fontSize: 30, lineHeight: 1.35, maxWidth: 820 }}>
+              <div style={{ display: "flex", color: "#e6e6e6", fontSize: 30, lineHeight: 1.35, maxWidth: 820 }}>
                 {shortenPreviewText(description, 110)}
               </div>
             </div>
-            <div style={{ display: "flex", gap: 12, color: "#5c5c5c", fontSize: 22, fontWeight: 700 }}>
+            <div style={{ display: "flex", gap: 12, color: "#ff81be", fontSize: 22, fontWeight: 700 }}>
               {tags.slice(0, 4).map((tag) => (
                 <span key={tag}>{shortenPreviewText(tag, 32)}</span>
               ))}
@@ -104,9 +92,34 @@ export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) 
   );
 }
 
-async function kinicLogoDataUrl(): Promise<string> {
-  const logo = await readFile(new URL("./icon.png", import.meta.url));
-  return `data:image/png;base64,${logo.toString("base64")}`;
+function KinicPreviewMark() {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 72,
+        height: 72,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: 12,
+        background: "#161616"
+      }}
+    >
+      <div style={{ display: "flex", flex: 1, gap: 6 }}>
+        <div style={{ width: 12, background: "#ffffff", borderRadius: 4 }} />
+        <div style={{ flex: 1, background: "#ff2686", borderRadius: 4 }} />
+      </div>
+      <div style={{ display: "flex", flex: 1, gap: 6 }}>
+        <div style={{ flex: 1, background: "#ff81be", borderRadius: 4 }} />
+        <div style={{ width: 12, background: "#ffffff", borderRadius: 4 }} />
+      </div>
+      <div style={{ display: "flex", flex: 1, gap: 6 }}>
+        <div style={{ width: 30, background: "#ffffff", borderRadius: 4 }} />
+        <div style={{ flex: 1, background: "#ff2686", borderRadius: 4 }} />
+      </div>
+    </div>
+  );
 }
 
 function shortenPreviewText(value: string, maxLength: number): string {
