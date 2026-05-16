@@ -72,6 +72,12 @@ function wikiLayoutProbe(route) {
     if (mobileMenuButton?.querySelector("svg")?.getAttribute("width") !== graphLink?.querySelector("svg")?.getAttribute("width")) {
       failures.push("menu and graph icon sizes differ");
     }
+    if (graphLink?.getBoundingClientRect().height !== document.querySelector('a[title="Share on X"]')?.getBoundingClientRect().height) {
+      failures.push("graph and share button heights differ");
+    }
+    if (location.pathname.endsWith("/graph") && !graphLink?.getAttribute("href")?.includes("/Wiki")) {
+      failures.push("graph link does not close graph view");
+    }
     if (isVisible(explorerPanel)) failures.push("explorer panel is visible before mobile menu opens");
     if (isVisible(inspectorPanel)) failures.push("inspector panel is visible on mobile");
     if (documentPanel && explorerPanel && isVisible(explorerPanel) && documentPanel.getBoundingClientRect().top > explorerPanel.getBoundingClientRect().top) {

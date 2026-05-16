@@ -40,6 +40,7 @@ import {
 } from "@/lib/wiki-helpers";
 
 const SIDEBAR_TABS: ModeTab[] = ["explorer", "query", "ingest", "sources"];
+const HEADER_ICON_LINK_CLASS = "inline-flex h-9 items-center justify-center gap-1 rounded-lg border px-3 text-sm no-underline";
 const EMPTY_EDIT_STATE: DocumentEditState = { dirty: false, saveState: "idle" };
 const UNSAVED_MARKDOWN_MESSAGE = "You have unsaved Markdown changes. Leave edit mode?";
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
@@ -371,7 +372,8 @@ export function WikiBrowser() {
     : undefined;
   const explorerDeleteTarget = explorerMutationTarget && isDeletableWikiExplorerNode(explorerMutationTarget, selectedExplorerChildren) ? explorerMutationTarget : null;
   useEffect(() => {
-    setExplorerMoveTargets(loadedWikiFolders(childNodesCache.current, explorerMutationTarget));
+    const nextTargets = loadedWikiFolders(childNodesCache.current, explorerMutationTarget);
+    setExplorerMoveTargets((currentTargets) => sameStringList(currentTargets, nextTargets) ? currentTargets : nextTargets);
   }, [explorerMutationTarget, explorerRevision]);
   const rememberSelectedExplorerNode = useCallback((nextNode: ChildNode) => {
     const key = nodeRequestKey(canisterId, databaseId, nextNode.path, readPrincipal);
@@ -1121,6 +1123,10 @@ function loadedWikiFolders(cache: Map<string, ChildNode[]>, excludedNode: ChildN
   return [...paths].sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
 }
 
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function isExcludedMoveFolder(path: string, node: ChildNode | null): boolean {
   if (!node) return false;
   if (node.kind !== "folder") return false;
@@ -1234,6 +1240,9 @@ function TopBar({
 }) {
   const router = useRouter();
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
+  const graphHref = isGraphPage
+    ? hrefForPath(canisterId, databaseId, graphLinkCenter ?? "/Wiki", undefined, undefined, undefined, undefined, readMode)
+    : hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode);
   const visibleError = authError ?? databaseListError;
 
   function switchDatabase(event: ChangeEvent<HTMLSelectElement>) {
@@ -1301,21 +1310,21 @@ function TopBar({
         {publicReadable ? (
           <a
             aria-label={`Share ${currentDatabaseName} on X`}
-            className="inline-flex items-center gap-1 rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink no-underline hover:border-accent hover:bg-accentSoft"
+            className={`${HEADER_ICON_LINK_CLASS} border-line bg-white text-ink hover:border-accent hover:bg-accentSoft`}
             href={xShareDatabaseHref({ databaseId, databaseName: currentDatabaseName })}
             rel="noreferrer"
             target="_blank"
             title="Share on X"
           >
-            <Share2 aria-hidden size={15} />
+            <Share2 aria-hidden size={18} />
             <span className="hidden sm:inline">Share</span>
           </a>
         ) : null}
         <Link
-          className={`inline-flex items-center justify-center gap-1 rounded-lg border p-2 text-sm no-underline sm:px-3 sm:py-2 ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
-          href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
+          className={`${HEADER_ICON_LINK_CLASS} ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
+          href={graphHref}
           aria-label="Graph"
-          title="Graph"
+          title={isGraphPage ? "Close graph" : "Graph"}
         >
           <Network size={18} aria-hidden />
           <span className="sr-only sm:not-sr-only">Graph</span>
