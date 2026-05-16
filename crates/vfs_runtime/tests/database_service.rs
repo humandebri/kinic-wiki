@@ -70,6 +70,16 @@ fn database_index_row(
     .expect("database index row should exist")
 }
 
+fn database_name(root: &std::path::Path, database_id: &str) -> String {
+    let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
+    conn.query_row(
+        "SELECT name FROM databases WHERE database_id = ?1",
+        params![database_id],
+        |row| row.get(0),
+    )
+    .expect("database name should load")
+}
+
 fn database_updated_at_ms(root: &std::path::Path, database_id: &str) -> i64 {
     let conn = Connection::open(root.join("index.sqlite3")).expect("index should open");
     conn.query_row(
@@ -779,7 +789,7 @@ fn database_create_returns_generated_id_and_name() {
 }
 
 #[test]
-fn old_index_schema_requires_recreate_after_database_name_change() {
+fn old_index_schema_migrates_database_name_from_id() {
     let dir = tempdir().expect("tempdir should create");
     let root = dir.keep();
     let index_path = root.join("index.sqlite3");
@@ -903,11 +913,53 @@ fn old_index_schema_requires_recreate_after_database_name_change() {
     .expect("old schema should create");
 
     let service = VfsService::new(index_path, root.join("databases"));
+    service
+        .run_index_migrations()
+        .expect("old index schema should migrate");
+
+    assert_eq!(
+        schema_migration_count(&root, "database_index:010_database_name_breaking"),
+        1
+    );
+    assert_eq!(database_name(&root, "alpha"), "alpha");
+    let databases = service
+        .list_database_infos()
+        .expect("database infos should load after migration");
+    assert_eq!(databases[0].database_id, "alpha");
+    assert_eq!(databases[0].name, "alpha");
+
+    service
+        .run_index_migrations()
+        .expect("database name migration should be idempotent");
+    assert_eq!(
+        schema_migration_count(&root, "database_index:010_database_name_breaking"),
+        1
+    );
+}
+
+#[test]
+fn old_index_schema_without_schema_migrations_stays_unsupported() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let index_path = root.join("index.sqlite3");
+    let conn = Connection::open(&index_path).expect("index should open");
+    conn.execute_batch(
+        "CREATE TABLE databases (
+           database_id TEXT PRIMARY KEY,
+           db_file_name TEXT NOT NULL,
+           mount_id INTEGER NOT NULL,
+           schema_version TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           updated_at_ms INTEGER NOT NULL
+         );",
+    )
+    .expect("old schema should create");
+
+    let service = VfsService::new(index_path, root.join("databases"));
     let error = service
         .run_index_migrations()
-        .expect_err("old index schema should be unsupported");
-    assert!(error.contains("unsupported old index schema"));
-    assert!(error.contains("recreate the index database"));
+        .expect_err("schema without migrations should be unsupported");
+    assert!(error.contains("exists without supported schema_migrations"));
 }
 
 #[test]

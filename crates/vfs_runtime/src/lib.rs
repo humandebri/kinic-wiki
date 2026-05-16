@@ -46,8 +46,6 @@ const INDEX_SCHEMA_VERSION_RESTORE_SESSIONS: &str = "database_index:008_restore_
 const INDEX_SCHEMA_VERSION_RESTORE_CHUNK_BYTES: &str = "database_index:009_restore_chunk_bytes";
 const INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING: &str =
     "database_index:010_database_name_breaking";
-const UNSUPPORTED_OLD_INDEX_SCHEMA_MESSAGE: &str =
-    "unsupported old index schema after database name change; recreate the index database";
 const DATABASE_SCHEMA_VERSION: &str = "vfs_store:current";
 const MIN_DATABASE_MOUNT_ID: u16 = 11;
 const MAX_DATABASE_MOUNT_ID: u16 = 32767;
@@ -1642,11 +1640,6 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
          );",
     )
     .map_err(|error| error.to_string())?;
-    if schema_migration_count(conn)? > 0
-        && !migration_applied(conn, INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING)?
-    {
-        return Err(UNSUPPORTED_OLD_INDEX_SCHEMA_MESSAGE.to_string());
-    }
     for table in INDEX_SCHEMA_TABLES_WITHOUT_MIGRATIONS {
         if schema_migration_count(conn)? == 0 && sqlite_master_entry_exists(conn, "table", table)? {
             return Err(format!(
@@ -1870,7 +1863,9 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
         tx.commit().map_err(|error| error.to_string())?;
     }
     if !migration_applied(conn, INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING)? {
-        insert_schema_migration(conn, INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING)?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        apply_database_name_index_migration(&tx)?;
+        tx.commit().map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -1879,7 +1874,7 @@ fn run_index_migrations(conn: &mut Connection) -> Result<(), String> {
 fn run_index_migrations_in_tx(conn: &Transaction<'_>) -> Result<(), String> {
     if wasm_index_table_exists(conn, "schema_migrations")? {
         if !wasm_index_migration_exists(conn, INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING)? {
-            return Err(UNSUPPORTED_OLD_INDEX_SCHEMA_MESSAGE.to_string());
+            apply_database_name_index_migration(conn)?;
         }
         validate_wasm_index_schema(conn)?;
         for &version in INDEX_SCHEMA_VERSIONS {
@@ -2010,6 +2005,26 @@ fn run_index_migrations_in_tx(conn: &Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn apply_database_name_index_migration(conn: &Transaction<'_>) -> Result<(), String> {
+    if !index_column_exists(conn, "databases", "name")? {
+        conn.execute_batch("ALTER TABLE databases ADD COLUMN name TEXT NOT NULL DEFAULT '';")
+            .map_err(|error| error.to_string())?;
+    }
+    conn.execute(
+        "UPDATE databases
+         SET name = database_id
+         WHERE name = ''",
+        params![],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
+        params![INDEX_SCHEMA_VERSION_DATABASE_NAME_BREAKING],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[cfg(target_arch = "wasm32")]
 const INDEX_SCHEMA_VERSIONS: &[&str] = &[
     INDEX_SCHEMA_VERSION_INITIAL,
@@ -2088,7 +2103,7 @@ fn validate_wasm_index_schema(conn: &Transaction<'_>) -> Result<(), String> {
         ),
     ] {
         for column in columns {
-            if !wasm_index_column_exists(conn, table, column)? {
+            if !index_column_exists(conn, table, column)? {
                 return Err(format!(
                     "unsupported index schema: missing column {table}.{column}"
                 ));
@@ -2144,12 +2159,7 @@ fn sqlite_master_entry_exists(
     .map_err(|error| error.to_string())
 }
 
-#[cfg(target_arch = "wasm32")]
-fn wasm_index_column_exists(
-    conn: &Transaction<'_>,
-    table: &str,
-    column: &str,
-) -> Result<bool, String> {
+fn index_column_exists(conn: &Transaction<'_>, table: &str, column: &str) -> Result<bool, String> {
     let sql = format!("PRAGMA table_info({table})");
     let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let columns = crate::sqlite::query_map(&mut stmt, params![], |row| {
@@ -2177,16 +2187,6 @@ fn schema_migration_count(conn: &Connection) -> Result<i64, String> {
         crate::sqlite::row_get(row, 0)
     })
     .map_err(|error| error.to_string())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn insert_schema_migration(conn: &mut Connection, version: &str) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, strftime('%s','now'))",
-        params![version],
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
