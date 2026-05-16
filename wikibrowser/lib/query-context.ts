@@ -1,6 +1,7 @@
 import type { Identity } from "@icp-sdk/core/agent";
 import type { NodeContext, WikiNode } from "@/lib/types";
-import { queryContext } from "@/lib/vfs-client";
+import { queryAnswerSearchTerms } from "@/lib/query-actions";
+import { queryContext, readNodeContext, searchNodes } from "@/lib/vfs-client";
 
 export type QueryAnswerContext = {
   path: string;
@@ -30,6 +31,16 @@ export async function collectQueryAnswerContext(input: {
     if (nodes.size >= MAX_CONTEXT_ITEMS) break;
     const node = nodeContext.node;
     if (isAnswerContextNode(node) && !nodes.has(node.path)) nodes.set(node.path, node);
+  }
+  for (const term of queryAnswerSearchTerms(input.question)) {
+    if (nodes.size >= MAX_CONTEXT_ITEMS) break;
+    const hits = await searchNodes(input.canisterId, input.databaseId, term, 4, "/Wiki", input.readIdentity ?? undefined);
+    for (const hit of hits) {
+      if (nodes.size >= MAX_CONTEXT_ITEMS) break;
+      if (nodes.has(hit.path)) continue;
+      const nodeContext = await readNodeContext(input.canisterId, input.databaseId, hit.path, 5, input.readIdentity ?? undefined);
+      if (nodeContext && isAnswerContextNode(nodeContext.node)) nodes.set(nodeContext.node.path, nodeContext.node);
+    }
   }
   return trimContext([...nodes.values()].map((node) => contextFromNode(node, context.nodes.find((item) => item.node.path === node.path) ?? null)));
 }
@@ -71,5 +82,5 @@ function isContextPath(path: string): boolean {
 }
 
 function isAnswerContextNode(node: WikiNode): boolean {
-  return node.kind === "file" && isContextPath(node.path) && node.content.trim().length > 0;
+  return (node.kind === "file" || node.kind === "source") && isContextPath(node.path) && node.content.trim().length > 0;
 }

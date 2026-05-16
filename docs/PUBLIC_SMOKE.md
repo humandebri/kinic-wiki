@@ -18,8 +18,8 @@ Create a database, write one file, and grant anonymous reader access for Browser
 ```bash
 CANISTER_ID=<local-wiki-canister-id>
 REPLICA_HOST=http://127.0.0.1:8001
-DB_ID="${DB_ID:-public-smoke}"
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" database create "$DB_ID"
+DB_NAME="${DB_NAME:-Public Smoke}"
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" database create "$DB_NAME")"
 printf '# Public Smoke\n\nalpha browser smoke\n' > /tmp/llm-wiki-smoke.md
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID" --database-id "$DB_ID" \
   write-node --path /Wiki/smoke.md --input /tmp/llm-wiki-smoke.md

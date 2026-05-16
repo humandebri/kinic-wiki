@@ -94,6 +94,7 @@ export type DatabaseStatus = "hot" | "restoring" | "archiving" | "archived" | "d
 
 export type DatabaseSummary = {
   databaseId: string;
+  name: string;
   role: DatabaseRole;
   status: DatabaseStatus;
   logicalSizeBytes: string;

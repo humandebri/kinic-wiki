@@ -8,8 +8,21 @@ export const LINK_PREVIEW_SIZE = {
 };
 export const LINK_PREVIEW_CONTENT_TYPE = "image/png";
 
-export async function renderLinkPreviewImage() {
+export type LinkPreviewImageInput = {
+  eyebrow?: string;
+  accent?: string;
+  title?: string;
+  description?: string;
+  tags?: string[];
+};
+
+export async function renderLinkPreviewImage(input: LinkPreviewImageInput = {}) {
   const logoSrc = await kinicLogoDataUrl();
+  const eyebrow = input.eyebrow ?? "Kinic Wiki";
+  const accent = input.accent ?? "Canister database dashboard";
+  const title = input.title ?? "Browse, search, edit, and manage wiki databases.";
+  const description = input.description ?? "A focused browser and operator UI for Kinic Wiki canisters.";
+  const tags = input.tags ?? ["/Wiki", "/Sources", "Access", "Query"];
   return new ImageResponse(
     (
       <div
@@ -66,23 +79,22 @@ export async function renderLinkPreviewImage() {
                 />
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <div style={{ color: "#5c5c5c", fontSize: 24, fontWeight: 700 }}>Kinic Wiki</div>
-                <div style={{ color: "#ff2686", fontSize: 20, fontWeight: 700 }}>Canister database dashboard</div>
+                <div style={{ color: "#5c5c5c", fontSize: 24, fontWeight: 700 }}>{eyebrow}</div>
+                <div style={{ color: "#ff2686", fontSize: 20, fontWeight: 700 }}>{accent}</div>
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
               <div style={{ display: "flex", fontSize: 74, fontWeight: 800, lineHeight: 1.02, maxWidth: 900 }}>
-                Browse, search, edit, and manage wiki databases.
+                {shortenPreviewText(title, 78)}
               </div>
               <div style={{ display: "flex", color: "#4b4b4b", fontSize: 30, lineHeight: 1.35, maxWidth: 820 }}>
-                A focused browser and operator UI for Kinic Wiki canisters.
+                {shortenPreviewText(description, 110)}
               </div>
             </div>
             <div style={{ display: "flex", gap: 12, color: "#5c5c5c", fontSize: 22, fontWeight: 700 }}>
-              <span>/Wiki</span>
-              <span>/Sources</span>
-              <span>Access</span>
-              <span>Query</span>
+              {tags.slice(0, 4).map((tag) => (
+                <span key={tag}>{shortenPreviewText(tag, 32)}</span>
+              ))}
             </div>
           </div>
         </div>
@@ -95,4 +107,10 @@ export async function renderLinkPreviewImage() {
 async function kinicLogoDataUrl(): Promise<string> {
   const logo = await readFile(new URL("./icon.png", import.meta.url));
   return `data:image/png;base64,${logo.toString("base64")}`;
+}
+
+function shortenPreviewText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }

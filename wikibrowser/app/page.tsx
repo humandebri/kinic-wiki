@@ -23,9 +23,9 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [publicError, setPublicError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [createdDatabaseId, setCreatedDatabaseId] = useState<string | null>(null);
+  const [createdDatabase, setCreatedDatabase] = useState<{ databaseId: string; name: string } | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newDatabaseId, setNewDatabaseId] = useState("");
+  const [newDatabaseName, setNewDatabaseName] = useState("");
   const [creating, setCreating] = useState(false);
 
   const refreshDatabases = useCallback(
@@ -111,9 +111,9 @@ export default function HomePage() {
     if (!authClient) return;
     await authClient.logout();
     setPrincipal(null);
-    setCreatedDatabaseId(null);
+    setCreatedDatabase(null);
     setCreateDialogOpen(false);
-    setNewDatabaseId("");
+    setNewDatabaseName("");
     setError(null);
     setPublicError(null);
     await refreshDatabases(null);
@@ -121,8 +121,8 @@ export default function HomePage() {
 
   async function createDatabase() {
     if (!authClient || !canisterId) return;
-    const databaseIdInput = newDatabaseId.trim();
-    const validationError = databaseIdError(databaseIdInput);
+    const databaseNameInput = newDatabaseName.trim();
+    const validationError = databaseNameError(databaseNameInput);
     if (validationError) {
       setError(validationError);
       setLoadState("error");
@@ -131,10 +131,10 @@ export default function HomePage() {
     setCreating(true);
     setError(null);
     try {
-      const databaseId = await createDatabaseAuthenticated(canisterId, authClient.getIdentity(), databaseIdInput);
-      setCreatedDatabaseId(databaseId);
+      const result = await createDatabaseAuthenticated(canisterId, authClient.getIdentity(), databaseNameInput);
+      setCreatedDatabase({ databaseId: result.database_id, name: result.name });
       setCreateDialogOpen(false);
-      setNewDatabaseId("");
+      setNewDatabaseName("");
       await refreshDatabases(authClient);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -146,9 +146,9 @@ export default function HomePage() {
 
   const myDatabases = databases.filter((database) => database.member);
   const publicDatabases = databases.filter((database) => !database.member && database.publicReadable);
-  const trimmedDatabaseId = newDatabaseId.trim();
-  const databaseIdValidationError = databaseIdError(trimmedDatabaseId);
-  const createDisabled = creating || loadState === "loading" || databaseIdValidationError !== null;
+  const trimmedDatabaseName = newDatabaseName.trim();
+  const databaseNameValidationError = databaseNameError(trimmedDatabaseName);
+  const createDisabled = creating || loadState === "loading" || databaseNameValidationError !== null;
 
   return (
     <main className="min-h-screen px-6 py-8">
@@ -175,19 +175,19 @@ export default function HomePage() {
 
         {error ? <StatusPanel tone="error" message={error} /> : null}
         {warning ? <StatusPanel tone="info" message={warning} /> : null}
-        {createdDatabaseId ? <CreatedDatabasePanel databaseId={createdDatabaseId} /> : null}
+        {createdDatabase ? <CreatedDatabasePanel databaseId={createdDatabase.databaseId} name={createdDatabase.name} /> : null}
         <CreateDatabaseDialog
           createDisabled={createDisabled}
           creating={creating}
-          databaseId={newDatabaseId}
+          databaseName={newDatabaseName}
           open={createDialogOpen}
-          validationError={databaseIdValidationError}
+          validationError={databaseNameValidationError}
           onCancel={() => {
             if (creating) return;
             setCreateDialogOpen(false);
-            setNewDatabaseId("");
+            setNewDatabaseName("");
           }}
-          onChange={setNewDatabaseId}
+          onChange={setNewDatabaseName}
           onSubmit={() => void createDatabase()}
         />
 
@@ -242,8 +242,8 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Unexpected error";
 }
 
-function databaseIdError(databaseId: string): string | null {
-  if (databaseId.length === 0) return "Database ID is required.";
-  if (databaseId.length > 64) return "Database ID must be 1..64 characters.";
-  return /^[A-Za-z0-9_-]+$/.test(databaseId) ? null : "Database ID may only contain ASCII letters, digits, '-' and '_'.";
+function databaseNameError(databaseName: string): string | null {
+  if (databaseName.length === 0) return "Database name is required.";
+  if ([...databaseName].length > 80) return "Database name must be 1..80 characters.";
+  return /[\u0000-\u001f\u007f]/.test(databaseName) ? "Database name may not contain control characters." : null;
 }

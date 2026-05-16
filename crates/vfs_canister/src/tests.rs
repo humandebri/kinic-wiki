@@ -5,13 +5,14 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use vfs_runtime::VfsService;
 use vfs_types::{
-    AppendNodeRequest, DatabaseRestoreChunkRequest, DatabaseRole, DatabaseStatus,
-    DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest, GlobNodeType,
-    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest,
-    ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest, MultiEdit,
-    MultiEditNodeRequest, NodeContextRequest, NodeEntryKind, NodeKind, OutgoingLinksRequest,
-    QueryContextRequest, RecentNodesRequest, SearchNodePathsRequest, SearchNodesRequest,
-    SearchPreviewMode, SourceEvidenceRequest, WriteNodeItem, WriteNodeRequest, WriteNodesRequest,
+    AppendNodeRequest, CreateDatabaseRequest, DatabaseRestoreChunkRequest, DatabaseRole,
+    DatabaseStatus, DeleteNodeRequest, EditNodeRequest, ExportSnapshotRequest, FetchUpdatesRequest,
+    GlobNodeType, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
+    IncomingLinksRequest, ListChildrenRequest, ListNodesRequest, MkdirNodeRequest, MoveNodeRequest,
+    MultiEdit, MultiEditNodeRequest, NodeContextRequest, NodeEntryKind, NodeKind,
+    OutgoingLinksRequest, QueryContextRequest, RecentNodesRequest, RenameDatabaseRequest,
+    SearchNodePathsRequest, SearchNodesRequest, SearchPreviewMode, SourceEvidenceRequest,
+    WriteNodeItem, WriteNodeRequest, WriteNodesRequest,
 };
 
 use super::{
@@ -21,7 +22,7 @@ use super::{
     finalize_database_restore, glob_nodes, grant_database_access, graph_links, graph_neighborhood,
     incoming_links, list_children, list_database_members, list_databases, list_nodes,
     memory_manifest, mkdir_node, move_node, multi_edit_node, outgoing_links, query_context,
-    read_database_archive_chunk, read_node, read_node_context, recent_nodes,
+    read_database_archive_chunk, read_node, read_node_context, recent_nodes, rename_database,
     revoke_database_access, search_node_paths, search_nodes, source_evidence, status,
     write_database_restore_chunk, write_node, write_nodes,
 };
@@ -56,6 +57,16 @@ fn usage_event_count() -> u64 {
             .expect("service should be installed")
             .usage_event_count()
             .expect("usage count should load")
+    })
+}
+
+fn usage_event_database_ids() -> Vec<Option<String>> {
+    SERVICE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("service should be installed")
+            .usage_event_database_ids()
+            .expect("usage database ids should load")
     })
 }
 
@@ -131,11 +142,14 @@ fn canister_list_databases_returns_caller_membership_summaries() {
 fn update_entrypoints_record_usage_events() {
     install_empty_test_service();
 
-    let database_id = create_database("usage-events".to_string()).expect("database should create");
+    let database = create_database(CreateDatabaseRequest {
+        name: "Usage events".to_string(),
+    })
+    .expect("database should create");
     assert_eq!(usage_event_count(), 1);
 
     let failed = write_node(WriteNodeRequest {
-        database_id,
+        database_id: database.database_id,
         path: "/Sources/not-raw.md".to_string(),
         kind: NodeKind::Source,
         content: "invalid source path".to_string(),
@@ -232,21 +246,45 @@ fn write_nodes_rejects_invalid_source_path() {
 }
 
 #[test]
-fn canister_create_database_returns_requested_id_for_followup_reads() {
+fn create_database_records_usage_and_returns_result() {
     install_empty_test_service();
 
-    let database_id = create_database("team-skills".to_string()).expect("database should create");
-    assert_eq!(database_id, "team-skills");
+    let result = create_database(CreateDatabaseRequest {
+        name: " Team skills ".to_string(),
+    })
+    .expect("database should create");
+    assert!(result.database_id.starts_with("db_"));
+    assert_eq!(result.database_id.len(), 15);
+    assert_eq!(result.name, "Team skills");
+    assert_eq!(usage_event_count(), 1);
+    assert_eq!(
+        usage_event_database_ids(),
+        vec![Some(result.database_id.clone())]
+    );
 
-    let status = status(database_id.clone());
+    let status = status(result.database_id.clone());
     assert_eq!(status.file_count, 0);
     assert_eq!(status.source_count, 0);
     let children = list_children(ListChildrenRequest {
-        database_id,
+        database_id: result.database_id,
         path: "/Wiki".to_string(),
     })
-    .expect("requested database should list");
+    .expect("generated database should list");
     assert!(children.is_empty());
+}
+
+#[test]
+fn canister_rename_database_requires_owner() {
+    install_test_service();
+
+    rename_database(RenameDatabaseRequest {
+        database_id: "default".to_string(),
+        name: "Renamed default".to_string(),
+    })
+    .expect("owner should rename database");
+
+    let summaries = list_databases().expect("database summaries should load");
+    assert_eq!(summaries[0].name, "Renamed default");
 }
 
 #[test]

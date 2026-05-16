@@ -566,9 +566,12 @@ async fn run_database_command(
     command: DatabaseCommand,
 ) -> Result<()> {
     match command {
-        DatabaseCommand::Create { database_id } => {
-            let database_id = client.create_database(&database_id).await?;
-            println!("{database_id}");
+        DatabaseCommand::Create { name } => {
+            let result = client.create_database(&name).await?;
+            println!("{}", result.database_id);
+        }
+        DatabaseCommand::Rename { database_id, name } => {
+            client.rename_database(&database_id, &name).await?;
         }
         DatabaseCommand::List { json } => {
             let databases = client.list_databases().await?;
@@ -577,8 +580,9 @@ async fn run_database_command(
             } else {
                 for database in databases {
                     println!(
-                        "{}\t{:?}\t{:?}\t{}",
+                        "{}\t{}\t{:?}\t{:?}\t{}",
                         database.database_id,
+                        database.name,
                         database.role,
                         database.status,
                         database.logical_size_bytes
@@ -1084,16 +1088,23 @@ mod tests {
         async fn status(&self, _database_id: &str) -> Result<Status> {
             unreachable!()
         }
-        async fn create_database(&self, database_id: &str) -> Result<String> {
+        async fn create_database(&self, name: &str) -> Result<CreateDatabaseResult> {
             let mut created = self.created.lock().unwrap();
             *created += 1;
-            Ok(database_id.to_string())
+            Ok(CreateDatabaseResult {
+                database_id: "db_testgenerated".to_string(),
+                name: name.to_string(),
+            })
+        }
+        async fn rename_database(&self, _database_id: &str, _name: &str) -> Result<()> {
+            Ok(())
         }
         async fn list_databases(&self) -> Result<Vec<DatabaseSummary>> {
             let mut lists = self.database_lists.lock().unwrap();
             *lists += 1;
             Ok(vec![DatabaseSummary {
                 database_id: "alpha".to_string(),
+                name: "Alpha".to_string(),
                 status: DatabaseStatus::Hot,
                 role: DatabaseRole::Owner,
                 logical_size_bytes: 42,
@@ -1431,20 +1442,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_create_uses_requested_id_command() {
+    async fn database_create_uses_name_and_prints_generated_id() {
         let client = MockClient::default();
         run_vfs_command(
             &client,
             &test_connection(),
             VfsCommand::Database {
                 command: super::DatabaseCommand::Create {
-                    database_id: "team-skills".to_string(),
+                    name: "Team skills".to_string(),
                 },
             },
         )
         .await
         .expect("database create should succeed");
         assert_eq!(*client.created.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn database_rename_parses_and_calls_client() {
+        let client = MockClient::default();
+        run_vfs_command(
+            &client,
+            &test_connection(),
+            VfsCommand::Database {
+                command: super::DatabaseCommand::Rename {
+                    database_id: "db_alpha".to_string(),
+                    name: "Alpha renamed".to_string(),
+                },
+            },
+        )
+        .await
+        .expect("database rename should succeed");
     }
 
     #[tokio::test]

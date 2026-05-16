@@ -24,18 +24,19 @@ use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use vfs_runtime::{DatabaseMeta, UsageEvent, VfsService};
 use vfs_types::{
-    AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, DatabaseArchiveChunk,
-    DatabaseArchiveInfo, DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole,
-    DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest, EditNodeResult,
-    ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse,
-    GlobNodeHit, GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest,
-    IncomingLinksRequest, LinkEdge, ListChildrenRequest, ListNodesRequest, MemoryCapability,
-    MemoryManifest, MemoryRoot, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult,
-    MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
+    AppendNodeRequest, CanisterHealth, CanonicalRole, ChildNode, CreateDatabaseRequest,
+    CreateDatabaseResult, DatabaseArchiveChunk, DatabaseArchiveInfo, DatabaseMember,
+    DatabaseRestoreChunkRequest, DatabaseRole, DatabaseSummary, DeleteNodeRequest,
+    DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
+    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
+    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
+    ListChildrenRequest, ListNodesRequest, MemoryCapability, MemoryManifest, MemoryRoot,
+    MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest,
+    MultiEditNodeResult, Node, NodeContext, NodeContextRequest, NodeEntry,
     OpsAnswerSessionCheckRequest, OpsAnswerSessionCheckResult, OpsAnswerSessionRequest,
     OutgoingLinksRequest, QueryContext, QueryContextRequest, RecentNodeHit, RecentNodesRequest,
-    SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest, SourceEvidence,
-    SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
+    RenameDatabaseRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
+    SourceEvidence, SourceEvidenceRequest, Status, UrlIngestTriggerSessionCheckRequest,
     UrlIngestTriggerSessionRequest, WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 
@@ -171,12 +172,12 @@ fn list_children(request: ListChildrenRequest) -> Result<Vec<ChildNode>, String>
 }
 
 #[update]
-fn create_database(database_id: String) -> Result<String, String> {
-    with_usage(
+fn create_database(request: CreateDatabaseRequest) -> Result<CreateDatabaseResult, String> {
+    with_usage_derived_database_id(
         "create_database",
-        Some(database_id.clone()),
+        None,
         |service, caller, now| {
-            let meta = service.reserve_database(&database_id, caller, now)?;
+            let meta = service.reserve_generated_database(&request.name, caller, now)?;
             if let Err(error) = mount_database_file(&meta) {
                 let cleanup_error = service
                     .discard_database_reservation(&meta.database_id)
@@ -190,7 +191,23 @@ fn create_database(database_id: String) -> Result<String, String> {
                     .err();
                 return Err(database_create_error(error, cleanup_error));
             }
-            Ok(meta.database_id)
+            Ok(CreateDatabaseResult {
+                database_id: meta.database_id,
+                name: meta.name,
+            })
+        },
+        |result| Some(result.database_id.clone()),
+    )
+}
+
+#[update]
+fn rename_database(request: RenameDatabaseRequest) -> Result<(), String> {
+    let database_id = request.database_id.clone();
+    with_usage(
+        "rename_database",
+        Some(database_id),
+        |service, caller, now| {
+            service.rename_database(&request.database_id, caller, &request.name, now)
         },
     )
 }
@@ -660,6 +677,19 @@ fn with_usage<T, F>(method: &str, database_id: Option<String>, f: F) -> Result<T
 where
     F: FnOnce(&VfsService, &str, i64) -> Result<T, String>,
 {
+    with_usage_derived_database_id(method, database_id, f, |_| None)
+}
+
+fn with_usage_derived_database_id<T, F, D>(
+    method: &str,
+    database_id: Option<String>,
+    f: F,
+    database_id_from_success: D,
+) -> Result<T, String>
+where
+    F: FnOnce(&VfsService, &str, i64) -> Result<T, String>,
+    D: FnOnce(&T) -> Option<String>,
+{
     let caller = caller_text();
     let now = now_millis();
     let before_cycles = cycle_balance();
@@ -672,9 +702,11 @@ where
         let after_cycles = cycle_balance();
         let cycles_delta = before_cycles.saturating_sub(after_cycles);
         let error = result.as_ref().err().map(String::as_str);
+        let derived_database_id = result.as_ref().ok().and_then(database_id_from_success);
+        let usage_database_id = database_id.as_deref().or(derived_database_id.as_deref());
         let _ = service.record_usage_event(UsageEvent {
             method,
-            database_id: database_id.as_deref(),
+            database_id: usage_database_id,
             caller: &caller,
             success: result.is_ok(),
             cycles_delta,
@@ -936,7 +968,13 @@ fn normalize_candid_interface(interface: String) -> String {
         "IncomingLinksRequest",
         "OutgoingLinksRequest",
     );
-    ensure_outgoing_links_request(normalized)
+    let normalized = normalize_candid_method_input(
+        &normalized,
+        "rename_database",
+        "CreateDatabaseResult",
+        "RenameDatabaseRequest",
+    );
+    ensure_rename_database_request(ensure_outgoing_links_request(normalized))
 }
 
 fn normalize_candid_method_input(
@@ -949,7 +987,7 @@ fn normalize_candid_method_input(
         .lines()
         .map(|line| {
             let prefix = format!("  {method} : ({exported_input}) -> (");
-            if line.starts_with(&prefix) && line.ends_with(" query;") {
+            if line.starts_with(&prefix) {
                 line.replacen(
                     &format!("{method} : ({exported_input})"),
                     &format!("{method} : ({public_input})"),
@@ -974,6 +1012,16 @@ fn ensure_outgoing_links_request(interface: String) -> String {
     interface.replace(
         "type LinkEdge = record {",
         "type OutgoingLinksRequest = record { path : text; limit : nat32; database_id : text };\ntype LinkEdge = record {",
+    )
+}
+
+fn ensure_rename_database_request(interface: String) -> String {
+    if interface.contains("type RenameDatabaseRequest = record {") {
+        return interface;
+    }
+    interface.replace(
+        "type DatabaseArchiveChunk = record {",
+        "type RenameDatabaseRequest = record { name : text; database_id : text };\ntype DatabaseArchiveChunk = record {",
     )
 }
 

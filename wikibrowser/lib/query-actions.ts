@@ -26,6 +26,15 @@ export function classifyQueryInput(value: string, selectedPath: string, identity
   return { kind: "ask", targetPath: "/Wiki", sideEffect: "none", identityMode, question: text };
 }
 
+export function queryAnswerSearchTerms(value: string): string[] {
+  const terms = new Set<string>();
+  for (const token of value.match(/[A-Za-z0-9][A-Za-z0-9._+-]{1,}/g) ?? []) {
+    const normalized = token.toLowerCase();
+    if (!QUERY_ANSWER_STOP_WORDS.has(normalized)) terms.add(token);
+  }
+  return [...terms].slice(0, 4);
+}
+
 function firstHttpUrl(value: string): string | null {
   const match = value.match(/https?:\/\/[^\s]+/i);
   return match?.[0] ?? null;
@@ -48,3 +57,28 @@ function looksLikeKeywordSearch(value: string): boolean {
   const tokens = value.split(/\s+/).filter(Boolean);
   return tokens.length <= 6;
 }
+
+const QUERY_ANSWER_STOP_WORDS = new Set([
+  "about",
+  "ask",
+  "can",
+  "could",
+  "does",
+  "explain",
+  "for",
+  "from",
+  "how",
+  "is",
+  "please",
+  "say",
+  "should",
+  "tell",
+  "the",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "wiki"
+]);

@@ -18,9 +18,13 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     role: DatabaseRole,
     logical_size_bytes: idl.Nat64,
     database_id: idl.Text,
+    name: idl.Text,
     archived_at_ms: idl.Opt(idl.Int64),
     deleted_at_ms: idl.Opt(idl.Int64)
   });
+  const CreateDatabaseRequest = idl.Record({ name: idl.Text });
+  const CreateDatabaseResult = idl.Record({ name: idl.Text, database_id: idl.Text });
+  const RenameDatabaseRequest = idl.Record({ name: idl.Text, database_id: idl.Text });
   const DatabaseMember = idl.Record({
     principal: idl.Text,
     role: DatabaseRole,
@@ -211,7 +215,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
   const ResultSearch = idl.Variant({ Ok: idl.Vec(SearchNodeHit), Err: idl.Text });
   const ResultQueryContext = idl.Variant({ Ok: QueryContext, Err: idl.Text });
   const ResultSourceEvidence = idl.Variant({ Ok: SourceEvidence, Err: idl.Text });
-  const ResultCreateDatabase = idl.Variant({ Ok: idl.Text, Err: idl.Text });
+  const ResultCreateDatabase = idl.Variant({ Ok: CreateDatabaseResult, Err: idl.Text });
   const ResultDatabases = idl.Variant({ Ok: idl.Vec(DatabaseSummary), Err: idl.Text });
   const ResultMembers = idl.Variant({ Ok: idl.Vec(DatabaseMember), Err: idl.Text });
   const WriteNodeResult = idl.Record({ created: idl.Bool, node: RecentNodeHit });
@@ -232,7 +236,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     canister_health: idl.Func([], [CanisterHealth], ["query"]),
     check_ops_answer_session: idl.Func([OpsAnswerSessionCheckRequest], [ResultOpsAnswerSessionCheck], ["query"]),
     check_url_ingest_trigger_session: idl.Func([UrlIngestTriggerSessionCheckRequest], [ResultUnit], ["query"]),
-    create_database: idl.Func([idl.Text], [ResultCreateDatabase], []),
+    create_database: idl.Func([CreateDatabaseRequest], [ResultCreateDatabase], []),
     delete_node: idl.Func([DeleteNodeRequest], [ResultDeleteNode], []),
     grant_database_access: idl.Func([idl.Text, idl.Text, DatabaseRole], [ResultUnit], []),
     graph_links: idl.Func([GraphLinksRequest], [ResultLinks], ["query"]),
@@ -250,6 +254,7 @@ export const idlFactory: ActorInterfaceFactory = ({ IDL: idl }) => {
     outgoing_links: idl.Func([OutgoingLinksRequest], [ResultLinks], ["query"]),
     recent_nodes: idl.Func([RecentNodesRequest], [ResultRecent], ["query"]),
     revoke_database_access: idl.Func([idl.Text, idl.Text], [ResultUnit], []),
+    rename_database: idl.Func([RenameDatabaseRequest], [ResultUnit], []),
     search_node_paths: idl.Func([SearchNodePathsRequest], [ResultSearch], ["query"]),
     search_nodes: idl.Func([SearchNodesRequest], [ResultSearch], ["query"]),
     source_evidence: idl.Func([SourceEvidenceRequest], [ResultSourceEvidence], ["query"]),

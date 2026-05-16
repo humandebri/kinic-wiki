@@ -300,6 +300,7 @@ async fn write_node_accepts_canonical_source_paths_only() {
                     replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
+                    allow_non_ii_identity: false,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -343,6 +344,7 @@ async fn write_node_rejects_non_canonical_source_paths() {
                     replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
+                    allow_non_ii_identity: false,
                 },
                 command: Command::WriteNode {
                     path: path.to_string(),
@@ -399,6 +401,7 @@ async fn delete_node_autofills_folder_index_etag() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::DeleteNode {
                 path: "/Wiki/topic".to_string(),
@@ -438,6 +441,7 @@ async fn purge_url_ingest_dry_run_does_not_delete() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page#fragment".to_string()),
@@ -472,6 +476,7 @@ async fn purge_url_ingest_requires_force_for_wide_target_delete() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -507,6 +512,7 @@ async fn purge_url_ingest_deletes_request_source_and_generated_tree_with_etags()
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -568,6 +574,7 @@ async fn purge_url_ingest_deletes_index_only_folder_with_folder_index_etag() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -623,6 +630,7 @@ async fn purge_url_ingest_rejects_unsafe_target_paths() {
                     replica_host: None,
                     canister_id: None,
                     identity_mode: IdentityModeArg::Auto,
+                    allow_non_ii_identity: false,
                 },
                 command: Command::PurgeUrlIngest {
                     url: Some("https://example.com/page".to_string()),
@@ -673,6 +681,7 @@ async fn purge_url_ingest_rejects_prefix_bleed_from_list_nodes() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -708,6 +717,7 @@ async fn purge_url_ingest_rejects_request_paths_outside_ingest_prefix() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -754,6 +764,7 @@ async fn purge_url_ingest_rejects_noncanonical_request_source_path() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: Some("https://example.com/page".to_string()),
@@ -788,6 +799,7 @@ async fn purge_url_ingest_returns_error_when_delete_fails() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -835,6 +847,7 @@ async fn purge_url_ingest_source_path_rejects_non_source_nodes() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -886,6 +899,7 @@ async fn purge_url_ingest_source_path_requires_matching_request() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -932,6 +946,7 @@ async fn purge_url_ingest_source_path_requires_request_source_path() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -979,6 +994,7 @@ async fn purge_url_ingest_source_path_requires_matching_request_source_path() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -1013,6 +1029,7 @@ async fn purge_url_ingest_source_path_uses_request_side_source_path() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,
@@ -1095,6 +1112,7 @@ async fn purge_url_ingest_source_path_deletes_all_matching_requests() {
                 replica_host: None,
                 canister_id: None,
                 identity_mode: IdentityModeArg::Auto,
+                allow_non_ii_identity: false,
             },
             command: Command::PurgeUrlIngest {
                 url: None,

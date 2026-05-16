@@ -377,6 +377,10 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
         schema_migration_count(&root, "database_index:008_restore_sessions"),
         1
     );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:010_database_name_breaking"),
+        1
+    );
 
     service
         .run_index_migrations()
@@ -399,6 +403,10 @@ fn index_migrations_create_usage_events_and_mount_history_once() {
     );
     assert_eq!(
         schema_migration_count(&root, "database_index:008_restore_sessions"),
+        1
+    );
+    assert_eq!(
+        schema_migration_count(&root, "database_index:010_database_name_breaking"),
         1
     );
 }
@@ -747,17 +755,23 @@ fn ops_answer_session_rejects_invalid_and_expired_nonce() {
 }
 
 #[test]
-fn database_create_returns_requested_id_and_owner_member() {
+fn database_create_returns_generated_id_and_name() {
     let (service, root) = service_with_root();
 
-    let meta = service
-        .create_database("team-skills", "owner", 1)
+    assert_eq!(
+        schema_migration_count(&root, "database_index:010_database_name_breaking"),
+        1
+    );
+
+    let result = service
+        .create_generated_database(" Team skills ", "owner", 1)
         .expect("database should create");
 
-    assert_eq!(meta.database_id, "team-skills");
-    assert_eq!(meta.mount_id, 11);
-    assert_eq!(database_member_count(&root, &meta.database_id), 2);
-    let row = database_index_row(&root, &meta.database_id);
+    assert!(result.database_id.starts_with("db_"));
+    assert_eq!(result.database_id.len(), 15);
+    assert_eq!(result.name, "Team skills");
+    assert_eq!(database_member_count(&root, &result.database_id), 2);
+    let row = database_index_row(&root, &result.database_id);
     assert_eq!(row.0, "hot");
     assert_eq!(row.1, Some(11));
     assert!(row.2 > 0);
@@ -765,7 +779,139 @@ fn database_create_returns_requested_id_and_owner_member() {
 }
 
 #[test]
-fn database_create_rejects_duplicate_requested_id() {
+fn old_index_schema_requires_recreate_after_database_name_change() {
+    let dir = tempdir().expect("tempdir should create");
+    let root = dir.keep();
+    let index_path = root.join("index.sqlite3");
+    let conn = Connection::open(&index_path).expect("index should open");
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (
+           version TEXT PRIMARY KEY,
+           applied_at INTEGER NOT NULL
+         );
+         CREATE TABLE databases (
+           database_id TEXT PRIMARY KEY,
+           db_file_name TEXT NOT NULL,
+           mount_id INTEGER NOT NULL,
+           active_mount_id INTEGER,
+           status TEXT NOT NULL DEFAULT 'hot',
+           schema_version TEXT NOT NULL,
+           logical_size_bytes INTEGER NOT NULL DEFAULT 0,
+           snapshot_hash BLOB,
+           archived_at_ms INTEGER,
+           deleted_at_ms INTEGER,
+           restore_size_bytes INTEGER,
+           created_at_ms INTEGER NOT NULL,
+           updated_at_ms INTEGER NOT NULL
+         );
+         CREATE UNIQUE INDEX databases_active_mount_id_idx
+           ON databases(active_mount_id)
+           WHERE active_mount_id IS NOT NULL;
+         CREATE TABLE database_members (
+           database_id TEXT NOT NULL,
+           principal TEXT NOT NULL,
+           role TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (database_id, principal),
+           FOREIGN KEY (database_id) REFERENCES databases(database_id)
+         );
+         CREATE TABLE database_restore_chunks (
+           database_id TEXT NOT NULL,
+           offset_bytes INTEGER NOT NULL,
+           end_bytes INTEGER NOT NULL,
+           bytes BLOB,
+           PRIMARY KEY (database_id, offset_bytes, end_bytes),
+           FOREIGN KEY (database_id) REFERENCES databases(database_id)
+         );
+         CREATE INDEX database_restore_chunks_database_id_idx
+           ON database_restore_chunks(database_id, offset_bytes);
+         CREATE TABLE usage_events (
+           event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+           method TEXT NOT NULL,
+           database_id TEXT,
+           caller TEXT NOT NULL,
+           success INTEGER NOT NULL,
+           cycles_delta INTEGER NOT NULL,
+           error TEXT,
+           created_at_ms INTEGER NOT NULL
+         );
+         CREATE INDEX usage_events_database_id_created_at_idx
+           ON usage_events(database_id, created_at_ms);
+         CREATE INDEX usage_events_caller_created_at_idx
+           ON usage_events(caller, created_at_ms);
+         CREATE TABLE database_mount_history (
+           database_id TEXT NOT NULL,
+           mount_id INTEGER NOT NULL,
+           reason TEXT NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (mount_id)
+         );
+         CREATE TABLE url_ingest_trigger_sessions (
+           database_id TEXT NOT NULL,
+           session_nonce TEXT NOT NULL,
+           principal TEXT NOT NULL,
+           expires_at_ms INTEGER NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           refreshed_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (database_id, session_nonce),
+           FOREIGN KEY (database_id) REFERENCES databases(database_id)
+         );
+         CREATE INDEX url_ingest_trigger_sessions_expiry_idx
+           ON url_ingest_trigger_sessions(expires_at_ms);
+         CREATE TABLE ops_answer_sessions (
+           database_id TEXT NOT NULL,
+           session_nonce TEXT NOT NULL,
+           principal TEXT NOT NULL,
+           expires_at_ms INTEGER NOT NULL,
+           created_at_ms INTEGER NOT NULL,
+           refreshed_at_ms INTEGER NOT NULL,
+           PRIMARY KEY (database_id, session_nonce),
+           FOREIGN KEY (database_id) REFERENCES databases(database_id)
+         );
+         CREATE INDEX ops_answer_sessions_expiry_idx
+           ON ops_answer_sessions(expires_at_ms);
+         CREATE TABLE database_restore_sessions (
+           database_id TEXT PRIMARY KEY,
+           status TEXT NOT NULL,
+           active_mount_id INTEGER,
+           snapshot_hash BLOB,
+           archived_at_ms INTEGER,
+           deleted_at_ms INTEGER,
+           restore_size_bytes INTEGER,
+           created_at_ms INTEGER NOT NULL,
+           FOREIGN KEY (database_id) REFERENCES databases(database_id)
+         );
+         INSERT INTO schema_migrations (version, applied_at)
+         VALUES
+           ('database_index:000_initial', 0),
+           ('database_index:001_lifecycle', 0),
+           ('database_index:002_restore_size', 0),
+           ('database_index:003_restore_chunks', 0),
+           ('database_index:004_usage_events', 0),
+           ('database_index:005_mount_history', 0),
+           ('database_index:006_url_ingest_trigger_sessions', 0),
+           ('database_index:007_ops_answer_sessions', 0),
+           ('database_index:008_restore_sessions', 0),
+           ('database_index:009_restore_chunk_bytes', 0);
+         INSERT INTO databases
+           (database_id, db_file_name, mount_id, active_mount_id, status, schema_version,
+            logical_size_bytes, created_at_ms, updated_at_ms)
+         VALUES ('alpha', 'alpha.sqlite3', 11, 11, 'hot', 'vfs_store:current', 0, 1, 1);
+         INSERT INTO database_members (database_id, principal, role, created_at_ms)
+         VALUES ('alpha', 'owner', 'owner', 1);",
+    )
+    .expect("old schema should create");
+
+    let service = VfsService::new(index_path, root.join("databases"));
+    let error = service
+        .run_index_migrations()
+        .expect_err("old index schema should be unsupported");
+    assert!(error.contains("unsupported old index schema"));
+    assert!(error.contains("recreate the index database"));
+}
+
+#[test]
+fn database_create_rejects_duplicate_requested_id_for_internal_setup() {
     let service = service();
 
     service
@@ -776,6 +922,32 @@ fn database_create_rejects_duplicate_requested_id() {
         .expect_err("duplicate database id should fail");
 
     assert!(error.contains("database already exists"));
+}
+
+#[test]
+fn database_rename_requires_owner() {
+    let (service, root) = service_with_root();
+    service
+        .create_database("alpha", "owner", 1)
+        .expect("database should create");
+    service
+        .grant_database_access("alpha", "owner", "writer", DatabaseRole::Writer, 2)
+        .expect("writer should grant");
+
+    let error = service
+        .rename_database("alpha", "writer", "Writer rename", 3)
+        .expect_err("writer should not rename");
+    assert!(error.contains("required database role"));
+
+    service
+        .rename_database("alpha", "owner", " Owner rename ", 4)
+        .expect("owner should rename");
+    let summaries = service
+        .list_database_summaries_for_caller("owner")
+        .expect("summaries should load");
+    assert_eq!(summaries[0].name, "Owner rename");
+    let row = database_index_row(&root, "alpha");
+    assert_eq!(row.0, "hot");
 }
 
 #[test]
@@ -952,7 +1124,7 @@ fn lists_database_summaries_for_caller_memberships_only() {
 fn discards_failed_database_reservation_for_retry() {
     let (service, root) = service_with_root();
     service
-        .reserve_database("retryable", "owner", 1)
+        .reserve_database("retryable", "Retryable", "owner", 1)
         .expect("reservation should create");
     assert_eq!(database_member_count(&root, "retryable"), 2);
 
@@ -997,9 +1169,9 @@ fn rejects_database_creation_after_mount_capacity() {
     for mount_id in 11..32767 {
         conn.execute(
             "INSERT INTO databases
-             (database_id, db_file_name, mount_id, active_mount_id, status, schema_version,
+             (database_id, name, db_file_name, mount_id, active_mount_id, status, schema_version,
               logical_size_bytes, created_at_ms, updated_at_ms)
-             VALUES (?1, ?2, ?3, ?3, 'hot', 'vfs_store:current', 0, 1, 1)",
+             VALUES (?1, ?1, ?2, ?3, ?3, 'hot', 'vfs_store:current', 0, 1, 1)",
             params![
                 format!("reserved_{mount_id}"),
                 format!("reserved_{mount_id}.sqlite3"),

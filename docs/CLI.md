@@ -22,7 +22,7 @@ target/release/kinic-vfs-cli --canister-id <canister-id> database current
 GitHub Actions also produces unsigned `kinic-vfs-cli` artifacts with SHA-256 checksums. See [`RELEASE.md`](RELEASE.md).
 
 Authenticated commands require `icp-cli` on `PATH`. The CLI signs with the identity selected by `icp identity default`.
-Internet Identity-backed identities are accepted when the session key is stored as plaintext; default keyring storage is rejected with an explicit re-link message.
+Internet Identity-backed identities are the default authenticated path. Non-II `icp-cli` identities are rejected unless `--allow-non-ii-identity` is passed.
 
 ## Connection
 
@@ -76,16 +76,18 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode anonymous --da
 Create a database before reading or writing:
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create <database-id>
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create "<database-name>")"
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database list
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> <principal> reader
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database link <database-id>
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant "$DB_ID" <principal> reader
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database link "$DB_ID"
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- write-node --path /Wiki/file.md --input file.md
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- search-remote "budget" --prefix /Wiki --top-k 10 --json
 ```
 
-`database create <database-id>` creates the requested database ID and prints it on success.
+`database create <database-name>` creates a generated database ID and prints it on success.
 `database list` prints databases attached to the caller principal.
+
+Database names are a breaking index-schema change. Existing local or canister index databases from older builds must be recreated; no automatic backfill is provided.
 
 For public browser reads, grant anonymous reader access explicitly:
 
@@ -96,7 +98,7 @@ cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> da
 ## Identity Mode
 
 Authenticated CLI calls depend on `icp-cli`.
-`kinic-vfs-cli` shells out to `icp identity default`, `icp identity export <name>`, and for II identities expects the delegation created by `icp identity link ii` / refreshed by `icp identity login`.
+`kinic-vfs-cli` shells out to `icp identity default`, `icp identity export <name>`, and expects an Internet Identity delegation created by `icp identity link ii` / refreshed by `icp identity login`.
 Install an `icp` version that supports II linking:
 
 ```bash
@@ -106,6 +108,7 @@ icp identity link ii --help
 The CLI uses the default `icp identity` for mutating and owner operations.
 Read-only DB commands default to `--identity-mode auto`: private databases use the selected `icp identity`; public databases use the selected identity when it is a DB member, otherwise anonymous.
 The auto check calls `status` as anonymous once. If anonymous can read, it checks `list_databases` with the selected identity so owner/writer/reader context is preserved for public DBs owned by the caller.
+By default, the selected identity must be an Internet Identity identity. Pass `--allow-non-ii-identity` only for explicit operator workflows that need PEM or other non-II `icp-cli` identities.
 
 ```bash
 icp identity link ii kinic-ii --host https://<wiki-canister-id>.icp0.io
@@ -128,6 +131,7 @@ Use explicit modes when automation must avoid auto selection:
 ```bash
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode identity --database-id <database-id> read-node --path /Wiki/index.md
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --identity-mode anonymous --database-id <public-database-id> read-node --path /Wiki/index.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --allow-non-ii-identity --identity-mode identity --database-id <database-id> status
 ```
 
 `--identity-mode anonymous` is valid only for read-only public operations.

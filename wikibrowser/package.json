@@ -7,6 +7,7 @@
     "build": "next build && node scripts/normalize-typegen-tsconfig.mjs",
     "lint": "eslint .",
     "smoke": "node scripts/smoke-ui.mjs",
+    "smoke:mobile": "node scripts/smoke-mobile-layout.mjs",
     "smoke:errors": "node scripts/smoke-errors.mjs",
     "smoke:public": "node scripts/smoke-public.mjs",
     "test": "node scripts/check-candid-drift.mjs && node scripts/check-paths.mjs && node scripts/check-ui-helpers.mjs && node scripts/check-api-errors.mjs && node scripts/check-auth.mjs && node scripts/check-smoke-url.mjs && node scripts/check-dashboard.mjs && node scripts/check-skill-registry.mjs && node scripts/check-url-security.mjs",

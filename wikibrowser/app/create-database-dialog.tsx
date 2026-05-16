@@ -1,6 +1,6 @@
 "use client";
 
-// Home dashboard database creation dialog: collect the irreversible route ID before creating a DB.
+// Home dashboard database creation dialog: collect the display name before creating a DB.
 
 import { Plus, X } from "lucide-react";
 import type { FormEvent } from "react";
@@ -8,7 +8,7 @@ import type { FormEvent } from "react";
 export function CreateDatabaseDialog({
   createDisabled,
   creating,
-  databaseId,
+  databaseName,
   open,
   validationError,
   onCancel,
@@ -17,7 +17,7 @@ export function CreateDatabaseDialog({
 }: {
   createDisabled: boolean;
   creating: boolean;
-  databaseId: string;
+  databaseName: string;
   open: boolean;
   validationError: string | null;
   onCancel: () => void;
@@ -38,27 +38,27 @@ export function CreateDatabaseDialog({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold text-ink">Create database</h3>
-            <p className="mt-2 text-sm leading-6 text-muted">Database ID becomes the route and access-management key.</p>
+            <p className="mt-2 text-sm leading-6 text-muted">A generated database ID will be used for routes and access.</p>
           </div>
           <button aria-label="Close" className="rounded-lg border border-line bg-white p-2 text-muted hover:border-accent hover:text-ink disabled:cursor-not-allowed disabled:opacity-60" disabled={creating} type="button" onClick={onCancel}>
             <X aria-hidden size={16} />
           </button>
         </div>
         <div className="mt-5 grid gap-2">
-          <label className="text-xs uppercase tracking-[0.12em] text-muted" htmlFor="database-id-input">
-            Database ID
+          <label className="text-xs uppercase tracking-[0.12em] text-muted" htmlFor="database-name-input">
+            Database name
           </label>
           <input
-            id="database-id-input"
-            className="w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm text-ink outline-none focus:border-accent"
-            maxLength={64}
-            placeholder="team-skills"
+            id="database-name-input"
+            className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+            maxLength={80}
+            placeholder="Team skills"
             type="text"
-            value={databaseId}
+            value={databaseName}
             onChange={(event) => onChange(event.target.value)}
           />
-          <p className="text-xs leading-5 text-muted">Use 1..64 ASCII letters, digits, hyphen, or underscore.</p>
-          {databaseId.trim().length > 0 && validationError ? <p className="text-xs text-red-700">{validationError}</p> : null}
+          <p className="text-xs leading-5 text-muted">Use 1..80 characters. The name can be changed later.</p>
+          {databaseName.trim().length > 0 && validationError ? <p className="text-xs text-red-700">{validationError}</p> : null}
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink hover:border-accent disabled:cursor-not-allowed disabled:opacity-60" disabled={creating} type="button" onClick={onCancel}>

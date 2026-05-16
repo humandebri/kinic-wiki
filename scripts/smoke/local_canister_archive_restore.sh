@@ -78,9 +78,9 @@ CLI_WORKSPACE="${TMP_DIR}/cli-workspace"
 mkdir -p "${CLI_WORKSPACE}"
 printf '# CLI Archive Smoke\n\nalpha archive restore smoke\n' > "$INPUT_FILE"
 
-VFS=(cargo run --manifest-path "${REPO_ROOT}/Cargo.toml" -p kinic-vfs-cli --bin kinic-vfs-cli -- --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID")
-CLI_DB="${CLI_DB:-archive-smoke-cli}"
-(cd "$CLI_WORKSPACE" && "${VFS[@]}" database create "$CLI_DB")
+VFS=(cargo run --manifest-path "${REPO_ROOT}/Cargo.toml" -p kinic-vfs-cli --bin kinic-vfs-cli -- --allow-non-ii-identity --replica-host "$REPLICA_HOST" --canister-id "$CANISTER_ID")
+CLI_DB_NAME="${CLI_DB_NAME:-Archive smoke CLI}"
+CLI_DB="$(cd "$CLI_WORKSPACE" && "${VFS[@]}" database create "$CLI_DB_NAME")"
 (
   cd "$CLI_WORKSPACE"
   "${VFS[@]}" --database-id "$CLI_DB" write-node --path /Wiki/smoke.md --input "$INPUT_FILE"

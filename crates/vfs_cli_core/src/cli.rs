@@ -43,6 +43,12 @@ pub struct ConnectionArgs {
         help = "Canister identity mode: auto, anonymous, or identity"
     )]
     pub identity_mode: IdentityModeArg,
+
+    #[arg(
+        long,
+        help = "Allow authenticated calls with a non-Internet Identity icp-cli identity"
+    )]
+    pub allow_non_ii_identity: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -250,7 +256,11 @@ pub enum VfsCommand {
 #[derive(Subcommand, Debug, Clone)]
 pub enum DatabaseCommand {
     Create {
+        name: String,
+    },
+    Rename {
         database_id: String,
+        name: String,
     },
     List {
         #[arg(long)]

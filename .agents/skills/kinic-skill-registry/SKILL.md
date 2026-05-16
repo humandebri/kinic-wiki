@@ -25,6 +25,7 @@ Core rules:
 - Treat [`../../../docs/SKILL_REGISTRY.md`](../../../docs/SKILL_REGISTRY.md) as the source of truth.
 - Keep `kinic-vfs-cli` as the only public binary; do not introduce `skill-cli` or `wiki-cli`.
 - Use `kinic-vfs-cli skill ...` for package lifecycle commands.
+- Authenticated CLI commands default to Internet Identity through `icp identity default`; use `--allow-non-ii-identity` only for explicit operator workflows that require PEM or another non-II identity.
 - `skill upsert` and `skill import github` write package files through the `write_nodes` batch API.
 - Use `database link` or `--database-id` for DB selection; access control remains database-level.
 - Treat packages as normal VFS nodes, not as canister schema.

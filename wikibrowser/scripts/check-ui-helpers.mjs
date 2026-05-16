@@ -10,15 +10,20 @@ const { folderIndexPath, isFolderIndexNode, isReservedFolderIndexName, visibleCh
 const { cycleTone, formatCycles, formatRawCycles } = await importTs("../lib/cycles.ts");
 const { splitMarkdownPreviewSections } = await importTs("../lib/markdown-sections.ts");
 const { graphRequestKey, nodeRequestKey, searchRequestKey } = await importTs("../lib/request-keys.ts");
+const { publicDatabasePath, publicDatabaseUrl, xShareDatabaseHref } = await importTs("../lib/share-links.ts");
 const { canExpandChildNode, parseModeTab, readIdentityMode } = await importTs("../lib/wiki-helpers.ts");
-const { classifyQueryInput } = await importTs("../lib/query-actions.ts");
+const { classifyQueryInput, queryAnswerSearchTerms } = await importTs("../lib/query-actions.ts");
 const { buildSourceClipDocument, normalizeClipUrl, parseTags, sourceClipPath, renderSourceClipMarkdown } = await importTs("../lib/source-clips.ts");
 const explorerTreeSource = readFileSync(new URL("../components/explorer-tree.tsx", import.meta.url), "utf8");
 const documentPaneSource = readFileSync(new URL("../components/document-pane.tsx", import.meta.url), "utf8");
+const inspectorSource = readFileSync(new URL("../components/inspector.tsx", import.meta.url), "utf8");
 const layoutSource = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
+const databaseLayoutSource = readFileSync(new URL("../app/[databaseId]/layout.tsx", import.meta.url), "utf8");
 const linkPreviewImageSource = readFileSync(new URL("../app/link-preview-image.tsx", import.meta.url), "utf8");
 const openGraphImageSource = readFileSync(new URL("../app/opengraph-image.tsx", import.meta.url), "utf8");
 const twitterImageSource = readFileSync(new URL("../app/twitter-image.tsx", import.meta.url), "utf8");
+const databaseOpenGraphImageSource = readFileSync(new URL("../app/[databaseId]/opengraph-image.tsx", import.meta.url), "utf8");
+const databaseTwitterImageSource = readFileSync(new URL("../app/[databaseId]/twitter-image.tsx", import.meta.url), "utf8");
 const markdownEditDocumentSource = readFileSync(new URL("../components/markdown-edit-document.tsx", import.meta.url), "utf8");
 const markdownEditorSource = readFileSync(new URL("../components/markdown-editor.tsx", import.meta.url), "utf8");
 const panelSource = readFileSync(new URL("../components/panel.tsx", import.meta.url), "utf8");
@@ -27,6 +32,7 @@ const wikiBrowserSource = readFileSync(new URL("../components/wiki-browser.tsx",
 const queryPanelSource = readFileSync(new URL("../components/query-panel.tsx", import.meta.url), "utf8");
 const queryContextSource = readFileSync(new URL("../lib/query-context.ts", import.meta.url), "utf8");
 const vfsClientSource = readFileSync(new URL("../lib/vfs-client.ts", import.meta.url), "utf8");
+const databasePreviewSource = readFileSync(new URL("../lib/database-preview.ts", import.meta.url), "utf8");
 const globalsCss = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 const tailwindConfig = readFileSync(new URL("../tailwind.config.ts", import.meta.url), "utf8");
 
@@ -46,8 +52,13 @@ assert.match(wikiBrowserSource, /onClick=\{onLogin\}/);
 assert.match(wikiBrowserSource, /src="\/icon\.png"/);
 assert.doesNotMatch(wikiBrowserSource, /LayoutDashboard/);
 assert.match(wikiBrowserSource, /aria-label="Back to database dashboard"/);
-assert.match(wikiBrowserSource, /md:grid-cols-\[auto_auto_minmax\(0,1fr\)\]/);
+assert.match(wikiBrowserSource, /lg:grid-cols-\[auto_minmax\(280px,720px\)_auto\]/);
+assert.match(wikiBrowserSource, /lg:col-start-2 lg:row-start-1/);
+assert.match(wikiBrowserSource, /lg:col-start-3 lg:row-start-1 lg:justify-end/);
 assert.match(wikiBrowserSource, /inline-flex items-center gap-1 rounded-lg border px-3 py-2/);
+assert.match(wikiBrowserSource, /Share2/);
+assert.match(wikiBrowserSource, /xShareDatabaseHref/);
+assert.match(wikiBrowserSource, /\{publicReadable \? \(\s*<a[\s\S]*xShareDatabaseHref\(\{ databaseId, databaseName: currentDatabaseName \}\)[\s\S]*title="Share on X"[\s\S]*<\/a>\s*\) : null\}/);
 assert.doesNotMatch(wikiBrowserSource, /hidden items-center gap-1 rounded-lg border border-line[\s\S]*md:flex/);
 assert.match(wikiBrowserSource, /value === "edit"/);
 assert.match(wikiBrowserSource, /canLeaveDirtyEdit/);
@@ -69,6 +80,12 @@ assert.doesNotMatch(wikiBrowserSource, /currentFolderIndexNode\.data\?\.path ===
 assert.match(wikiBrowserSource, /memberDatabases\.find/);
 assert.match(wikiBrowserSource, /SIDEBAR_TABS: ModeTab\[\] = \["explorer", "query", "ingest", "sources"\]/);
 assert.match(wikiBrowserSource, /publicDatabaseIds/);
+assert.match(wikiBrowserSource, /databaseName=\{currentDatabase\?\.name \?\? databaseId\}/);
+assert.match(inspectorSource, /databaseName: string/);
+assert.match(inspectorSource, /label="database"/);
+assert.match(inspectorSource, /label="database_id"/);
+assert.match(inspectorSource, /label="created_at"/);
+assert.match(inspectorSource, /label="metadata_json"/);
 assert.match(layoutSource, /title: "Kinic Wiki Database Dashboard"/);
 assert.match(layoutSource, /description: "Browse, search, edit, and manage Kinic Wiki canister databases\."/);
 assert.match(layoutSource, /metadataBase: new URL\("https:\/\/wiki\.kinic\.xyz"\)/);
@@ -84,6 +101,18 @@ assert.match(linkPreviewImageSource, /height: 630/);
 assert.match(linkPreviewImageSource, /Kinic Wiki/);
 assert.match(openGraphImageSource, /renderLinkPreviewImage/);
 assert.match(twitterImageSource, /renderLinkPreviewImage/);
+assert.match(databaseLayoutSource, /generateMetadata/);
+assert.match(databaseLayoutSource, /loadDatabasePreview/);
+assert.match(databaseLayoutSource, /databasePreviewTitle/);
+assert.match(databaseLayoutSource, /opengraph-image/);
+assert.match(databaseLayoutSource, /twitter-image/);
+assert.match(databaseOpenGraphImageSource, /Kinic Wiki database/);
+assert.match(databaseOpenGraphImageSource, /preview\.databaseName/);
+assert.match(databaseTwitterImageSource, /Kinic Wiki database/);
+assert.match(databaseTwitterImageSource, /preview\.databaseName/);
+assert.match(databasePreviewSource, /databasePreviewTitle/);
+assert.match(databasePreviewSource, /databasePreviewDescription/);
+assert.match(databasePreviewSource, /listDatabasesPublic/);
 assert.match(queryPanelSource, /authorizeQueryAnswerSession/);
 assert.match(queryPanelSource, /Login with Internet Identity to ask wiki questions/);
 assert.match(queryPanelSource, /sessionNonce/);
@@ -94,7 +123,9 @@ assert.match(queryPanelSource, /Search by default/);
 assert.match(queryPanelSource, /non-LLM/);
 assert.match(queryPanelSource, /read-only/);
 assert.match(queryContextSource, /isAnswerContextNode\(input\.currentNode\)/);
-assert.match(queryContextSource, /node\.kind === "file" && isContextPath\(node\.path\) && node\.content\.trim\(\)\.length > 0/);
+assert.match(queryContextSource, /queryAnswerSearchTerms\(input\.question\)/);
+assert.match(queryContextSource, /readNodeContext\(input\.canisterId, input\.databaseId, hit\.path, 5/);
+assert.match(queryContextSource, /node\.kind === "file" \|\| node\.kind === "source"/);
 assert.match(wikiBrowserSource, /ExplorerHeaderActions/);
 assert.match(wikiBrowserSource, /ExplorerCreateForm/);
 assert.match(wikiBrowserSource, /ExplorerMoveForm/);
@@ -205,6 +236,8 @@ assert.equal(canExpandChildNode(child("/Wiki/file-parent", "file-parent", "file"
 assert.equal(canExpandChildNode(child("/Wiki/file-leaf.md", "file-leaf.md", "file", false)), false);
 assert.equal(canExpandChildNode(child("/Wiki/folder", "folder", "folder", false)), true);
 assert.equal(parseModeTab("query"), "query");
+assert.deepEqual(queryAnswerSearchTerms("vetkeyについて教えて"), ["vetkey"]);
+assert.deepEqual(queryAnswerSearchTerms("What does the wiki say about vetKey?"), ["vetKey"]);
 assert.equal(parseModeTab("recent"), "explorer");
 assert.equal(readIdentityMode(null, true, true, true, true), "user");
 assert.equal(readIdentityMode(null, true, false, true, true), "anonymous");
@@ -303,6 +336,13 @@ assert.notEqual(
   graphRequestKey("aaaaa-aa", "alpha", "/Wiki/index.md", 1, "aaaaa-aa")
 );
 assert.notEqual(searchRequestKey("aaaaa-aa", "alpha", "path", "budget"), searchRequestKey("aaaaa-aa", "alpha", "path", "budget", "aaaaa-aa"));
+assert.equal(publicDatabasePath("alpha/db"), "/alpha%2Fdb/Wiki?read=anonymous");
+assert.equal(publicDatabaseUrl("alpha db"), "https://wiki.kinic.xyz/alpha%20db/Wiki?read=anonymous");
+assert.equal(publicDatabaseUrl("alpha db", "http://127.0.0.1:3000"), "http://127.0.0.1:3000/alpha%20db/Wiki?read=anonymous");
+assert.equal(
+  xShareDatabaseHref({ databaseId: "alpha db", databaseName: "Research DB", origin: "https://wiki.kinic.xyz" }),
+  "https://twitter.com/intent/tweet?text=Kinic+Wiki%3A+Research+DB&url=https%3A%2F%2Fwiki.kinic.xyz%2Falpha%2520db%2FWiki%3Fread%3Danonymous"
+);
 
 const cachedNodeContext = {
   node: {

@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
                 "database id is required for identity membership check; pass --database-id or link a workspace database"
             )
         })?;
-        match new_identity_client(&connection).await {
+        match new_identity_client(&connection, cli.connection.allow_non_ii_identity).await {
             Ok(client) => match identity_is_database_member(&client, database_id).await {
                 Ok(is_member) => {
                     if is_member {
@@ -103,14 +103,17 @@ async fn main() -> Result<()> {
         }
         ClientIdentityMode::Identity => match identity_client {
             Some(client) => client,
-            None => new_identity_client(&connection).await?,
+            None => new_identity_client(&connection, cli.connection.allow_non_ii_identity).await?,
         },
     };
     run_command(&client, cli, &connection).await
 }
 
-async fn new_identity_client(connection: &ResolvedConnection) -> Result<CanisterVfsClient> {
-    let identity = load_default_identity(&connection.canister_id).await?;
+async fn new_identity_client(
+    connection: &ResolvedConnection,
+    allow_non_ii_identity: bool,
+) -> Result<CanisterVfsClient> {
+    let identity = load_default_identity(&connection.canister_id, allow_non_ii_identity).await?;
     CanisterVfsClient::new_with_boxed_identity(
         &connection.replica_host,
         &connection.canister_id,

@@ -12,11 +12,12 @@ import {
   listDatabaseMembersPublic,
   listDatabasesAuthenticated,
   listDatabasesPublic,
+  renameDatabaseAuthenticated,
   revokeDatabaseAccessAuthenticated
 } from "@/lib/vfs-client";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type BusyAction = { kind: "grant"; principalText: string; role: DatabaseRole } | { kind: "revoke"; principalText: string };
+type BusyAction = { kind: "grant"; principalText: string; role: DatabaseRole } | { kind: "revoke"; principalText: string } | { kind: "rename" };
 type DatabaseAccessSummary = DatabaseSummary & { publicReadable: boolean };
 
 export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) {
@@ -205,6 +206,25 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
     }
   }
 
+  async function renameDatabase(name: string) {
+    if (!authClient || !databaseId) return;
+    setBusy(true);
+    setBusyAction({ kind: "rename" });
+    setActionMessage(null);
+    try {
+      await renameDatabaseAuthenticated(canisterId, authClient.getIdentity(), databaseId, name);
+      setActionTone("info");
+      setActionMessage("Database name updated.");
+      await refresh(authClient, databaseId);
+    } catch (cause) {
+      setActionTone("error");
+      setActionMessage(errorMessage(cause));
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
+    }
+  }
+
   return (
     <main className="min-h-screen px-6 py-8">
       <section className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -218,7 +238,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
                 Skill Registry
               </Link>
             ) : null}
-            <h1 className="mt-2 text-3xl font-semibold text-ink">Database access</h1>
+            <h1 className="mt-2 text-3xl font-semibold text-ink">{database?.name ?? "Database access"}</h1>
             <p className="mt-1 font-mono text-xs text-muted">{databaseId || "unknown database"}</p>
           </div>
           <AuthControls authReady={Boolean(authClient)} loading={loadState === "loading"} principal={principal} onLogin={login} onLogout={logout} />
@@ -232,7 +252,7 @@ export function DashboardDatabaseClient({ databaseId }: { databaseId: string }) 
 
         {database ? (
           canManage ? (
-            <OwnerPanel busy={busy} busyAction={busyAction} members={members} principal={principal ?? "anonymous"} onGrant={grantAccess} onRevoke={revokeAccess} />
+            <OwnerPanel busy={busy} busyAction={busyAction} databaseName={database.name} members={members} principal={principal ?? "anonymous"} onGrant={grantAccess} onRename={renameDatabase} onRevoke={revokeAccess} />
           ) : database.publicReadable ? (
             <ReadonlyMembersPanel memberError={memberError} members={members} principal={principal ?? "anonymous"} />
           ) : principal ? (
@@ -271,5 +291,5 @@ function mergeDatabaseRows(memberDatabases: DatabaseSummary[], publicDatabases: 
   for (const database of memberDatabases) {
     rows.set(database.databaseId, { ...database, publicReadable: publicIds.has(database.databaseId) });
   }
-  return [...rows.values()].sort((left, right) => left.databaseId.localeCompare(right.databaseId));
+  return [...rows.values()].sort((left, right) => left.name.localeCompare(right.name) || left.databaseId.localeCompare(right.databaseId));
 }
