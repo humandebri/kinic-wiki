@@ -69,10 +69,10 @@ test("database dropdown options include only hot owner and writer databases", ()
     rawDatabase("archived-db", "Owner", "Archived")
   ]);
   assert.deepEqual(
-    databases.map((database) => [database.databaseId, database.role, database.status]),
+    databases.map((database) => [database.databaseId, database.name, database.role, database.status]),
     [
-      ["owner-db", "Owner", "Hot"],
-      ["writer-db", "Writer", "Hot"]
+      ["owner-db", "owner-db name", "Owner", "Hot"],
+      ["writer-db", "writer-db name", "Writer", "Hot"]
     ]
   );
 });
@@ -118,6 +118,7 @@ test("ChatGPT export confirmation references Internet Identity principal", () =>
 function rawDatabase(databaseId, role, status) {
   return {
     database_id: databaseId,
+    name: `${databaseId} name`,
     role: { [role]: null },
     status: { [status]: null },
     logical_size_bytes: 0n,
