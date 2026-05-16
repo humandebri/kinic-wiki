@@ -82,7 +82,7 @@ canister_id = "aaaaa-aa"
 
 Use `--local` to target `http://127.0.0.1:8000`, or `--replica-host http://127.0.0.1:8001` for a project-local network on another port. Otherwise the default host is `https://icp0.io`.
 
-Authenticated CLI commands require `icp-cli` on `PATH` and use `icp identity default`. `--identity-mode auto` is the default: private reads and member public reads use the selected identity, while public non-member reads stay anonymous.
+Authenticated CLI commands require `icp-cli` on `PATH` and use `icp identity default`. Internet Identity is the default authenticated path; pass `--allow-non-ii-identity` to use a non-II identity explicitly. `--identity-mode auto` is the default: private reads and member public reads use the selected identity, while public non-member reads stay anonymous.
 
 ### Skill Knowledge Base
 
@@ -105,12 +105,14 @@ The demo script can be rerun; if the database already exists, it links and conti
 DB-backed commands require `--database-id` or `VFS_DATABASE_ID`; no production `default` DB is created implicitly. Older single-DB commands such as `kinic-vfs-cli read-node --path /Wiki/index.md` must now select a DB:
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> --database-id <database-id> write-node --path /Wiki/index.md --input index.md
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant <database-id> 2vxsx-fae reader
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database create "<database-name>")"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> --database-id "$DB_ID" write-node --path /Wiki/index.md --input index.md
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id <canister-id> database grant "$DB_ID" 2vxsx-fae reader
 ```
 
-`database create` prints the generated DB ID. Use that ID for `--database-id` and grants. Public browser reads use the anonymous principal `2vxsx-fae`, so public DBs must grant that principal `reader`. Public readable DBs also expose the database member list, including principals and roles, through the public dashboard.
+`database create <database-name>` creates a generated DB ID and prints that ID on success. Use that ID for `--database-id` and grants. Public browser reads use the anonymous principal `2vxsx-fae`, so public DBs must grant that principal `reader`. Public readable DBs also expose the database member list, including principals and roles, through the public dashboard.
+
+Database names are a breaking index-schema change. Existing local or canister index databases from older builds must be recreated; no automatic backfill is provided.
 
 ## Main Interfaces
 

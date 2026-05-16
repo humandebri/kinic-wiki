@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Check, FilePlus, FolderPlus, GitBranch, MoveRight, Network, PanelRight, Pencil, Search, Trash2, X } from "lucide-react";
+import { Check, FilePlus, FolderPlus, GitBranch, Menu, MoveRight, Network, PanelRight, Pencil, Search, Share2, Trash2, X } from "lucide-react";
 import { CycleBattery } from "@/components/cycle-battery";
 import { DocumentHeader, DocumentPane, type DocumentEditState } from "@/components/document-pane";
 import { ExplorerTree } from "@/components/explorer-tree";
@@ -21,6 +21,7 @@ import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import { readBrowserNodeCache } from "@/lib/browser-node-cache";
 import { hrefForDatabaseSwitch, hrefForGraph, hrefForPath, hrefForSearch, parentPath } from "@/lib/paths";
 import { nodeRequestKey } from "@/lib/request-keys";
+import { xShareDatabaseHref } from "@/lib/share-links";
 import type { ChildNode, DatabaseRole, DatabaseSummary, NodeContext, WikiNode } from "@/lib/types";
 import { listDatabasesAuthenticated, listDatabasesPublic } from "@/lib/vfs-client";
 import { folderIndexPath, isReservedFolderIndexName, visibleChildren } from "@/lib/folder-index";
@@ -39,6 +40,7 @@ import {
 } from "@/lib/wiki-helpers";
 
 const SIDEBAR_TABS: ModeTab[] = ["explorer", "query", "ingest", "sources"];
+const HEADER_ICON_LINK_CLASS = "inline-flex h-9 items-center justify-center gap-1 rounded-lg border px-3 text-sm no-underline";
 const EMPTY_EDIT_STATE: DocumentEditState = { dirty: false, saveState: "idle" };
 const UNSAVED_MARKDOWN_MESSAGE = "You have unsaved Markdown changes. Leave edit mode?";
 const GraphPanel = dynamic(() => import("@/components/graph-panel").then((module) => module.GraphPanel), {
@@ -82,6 +84,7 @@ export function WikiBrowser() {
   const [publicDatabaseIds, setPublicDatabaseIds] = useState<Set<string>>(() => new Set());
   const [memberDatabasesLoaded, setMemberDatabasesLoaded] = useState(false);
   const [databaseListError, setDatabaseListError] = useState<string | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const currentDatabaseRole = useMemo(
     () => readIdentity ? memberDatabases.find((database) => database.databaseId === databaseId)?.role ?? null : null,
     [databaseId, memberDatabases, readIdentity]
@@ -350,6 +353,7 @@ export function WikiBrowser() {
     }
   }, [canLeaveDirtyEdit, logout]);
   const databaseOptions = useMemo(() => withCurrentDatabase(databases, databaseId), [databaseId, databases]);
+  const currentDatabase = useMemo(() => databaseOptions.find((database) => database.databaseId === databaseId) ?? null, [databaseId, databaseOptions]);
   const explorerSelectionKey = nodeRequestKey(canisterId, databaseId, selectedPath, readPrincipal);
   const selectedExplorerNode = selectedExplorerState?.key === explorerSelectionKey
     ? selectedExplorerState.node
@@ -368,7 +372,8 @@ export function WikiBrowser() {
     : undefined;
   const explorerDeleteTarget = explorerMutationTarget && isDeletableWikiExplorerNode(explorerMutationTarget, selectedExplorerChildren) ? explorerMutationTarget : null;
   useEffect(() => {
-    setExplorerMoveTargets(loadedWikiFolders(childNodesCache.current, explorerMutationTarget));
+    const nextTargets = loadedWikiFolders(childNodesCache.current, explorerMutationTarget);
+    setExplorerMoveTargets((currentTargets) => sameStringList(currentTargets, nextTargets) ? currentTargets : nextTargets);
   }, [explorerMutationTarget, explorerRevision]);
   const rememberSelectedExplorerNode = useCallback((nextNode: ChildNode) => {
     const key = nodeRequestKey(canisterId, databaseId, nextNode.path, readPrincipal);
@@ -578,7 +583,7 @@ export function WikiBrowser() {
   }, [canisterId, currentChildren.error, currentNode.error, databaseId, graphCenter, graphDepth, isGraphPage, isSearchPage, query, readMode, router, searchKind, selectedPath, tab, view]);
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
+    <main className="flex min-h-screen flex-col bg-canvas text-ink lg:h-screen lg:overflow-hidden">
       <TopBar
         canisterId={canisterId}
         databaseId={databaseId}
@@ -592,15 +597,23 @@ export function WikiBrowser() {
         graphCenter={graphCenter}
         readMode={readMode}
         databaseOptions={databaseOptions}
+        currentDatabaseName={currentDatabase?.name ?? databaseId}
+        publicReadable={publicDatabaseIds.has(databaseId)}
         databaseListError={databaseListError}
         selectedPath={selectedPath}
         authReady={Boolean(authClient)}
+        mobileSidebarOpen={mobileSidebarOpen}
         onLogin={login}
         onLogout={guardedLogout}
+        onMobileSidebarToggle={() => setMobileSidebarOpen((open) => !open)}
         canLeaveDirtyEdit={canLeaveDirtyEdit}
       />
-      <section className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
-        <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
+      <section className={`grid min-h-0 grid-cols-1 gap-3 p-3 lg:flex-1 ${isSearchPage || isGraphPage ? "lg:grid-cols-[320px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)_320px]"}`}>
+        <aside
+          id="wiki-mobile-sidebar"
+          data-tid="wiki-explorer-panel"
+          className={`${mobileSidebarOpen ? "order-1 flex" : "hidden"} min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:order-1 lg:flex lg:overflow-hidden`}
+        >
           <PanelHeader
             icon={<GitBranch size={15} />}
             title={tabTitle(tab)}
@@ -695,7 +708,7 @@ export function WikiBrowser() {
             onSelectedExplorerNode={rememberSelectedExplorerNode}
           />
         </aside>
-        <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-sm">
+        <section data-tid="wiki-document-panel" className={`${mobileSidebarOpen ? "order-2" : "order-1"} flex min-h-0 flex-col rounded-2xl border border-line bg-white shadow-sm lg:order-2 lg:overflow-hidden`}>
           {isGraphPage ? (
             <GraphPanel canisterId={canisterId} databaseId={databaseId} centerPath={graphCenter} depth={graphDepth} readIdentity={effectiveReadIdentity} readMode={readMode} />
           ) : isSearchPage ? (
@@ -742,11 +755,12 @@ export function WikiBrowser() {
           )}
         </section>
         {!isSearchPage && !isGraphPage ? (
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-paper/90 shadow-sm">
+          <aside data-tid="wiki-inspector-panel" className="order-3 hidden min-h-0 flex-col rounded-2xl border border-line bg-paper/90 shadow-sm lg:flex lg:overflow-hidden">
             <PanelHeader icon={<PanelRight size={15} />} title="Inspector" subtitle="metadata and hints" />
             <Inspector
               canisterId={canisterId}
               databaseId={databaseId}
+              databaseName={currentDatabase?.name ?? databaseId}
               path={selectedPath}
               node={currentNode.data}
               childNodes={currentChildren.data ?? []}
@@ -1109,6 +1123,10 @@ function loadedWikiFolders(cache: Map<string, ChildNode[]>, excludedNode: ChildN
   return [...paths].sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
 }
 
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function isExcludedMoveFolder(path: string, node: ChildNode | null): boolean {
   if (!node) return false;
   if (node.kind !== "folder") return false;
@@ -1186,11 +1204,15 @@ function TopBar({
   graphCenter,
   readMode,
   databaseOptions,
+  currentDatabaseName,
+  publicReadable,
   databaseListError,
   selectedPath,
   authReady,
+  mobileSidebarOpen,
   onLogin,
   onLogout,
+  onMobileSidebarToggle,
   canLeaveDirtyEdit
 }: {
   canisterId: string;
@@ -1205,15 +1227,22 @@ function TopBar({
   graphCenter: string | null;
   readMode: "anonymous" | null;
   databaseOptions: DatabaseSummary[];
+  currentDatabaseName: string;
+  publicReadable: boolean;
   databaseListError: string | null;
   selectedPath: string;
   authReady: boolean;
+  mobileSidebarOpen: boolean;
   onLogin: () => void;
   onLogout: () => void;
+  onMobileSidebarToggle: () => void;
   canLeaveDirtyEdit: () => boolean;
 }) {
   const router = useRouter();
   const graphLinkCenter = isGraphPage ? graphCenter : selectedPath;
+  const graphHref = isGraphPage
+    ? hrefForPath(canisterId, databaseId, graphLinkCenter ?? "/Wiki", undefined, undefined, undefined, undefined, readMode)
+    : hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode);
   const visibleError = authError ?? databaseListError;
 
   function switchDatabase(event: ChangeEvent<HTMLSelectElement>) {
@@ -1233,40 +1262,81 @@ function TopBar({
   }
 
   return (
-    <header className="grid min-h-[52px] grid-cols-1 gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur md:grid-cols-[auto_auto_minmax(0,1fr)] md:items-center md:gap-4">
-      <div className="min-w-0">
-        <Link className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent" href="/" aria-label="Back to database dashboard">
-          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} unoptimized />
-          Knowledge IDE
-        </Link>
-      </div>
-      <div className="flex min-w-0 shrink-0 items-center gap-1 text-xs text-muted">
-        <label className="hidden font-mono sm:inline" htmlFor="database-switcher">
-          db:
-        </label>
-        <select
-          id="database-switcher"
-          className="w-[132px] rounded-lg border border-line bg-white px-2 py-1.5 font-mono text-xs text-ink outline-none sm:w-[180px]"
-          value={databaseId}
-          onChange={switchDatabase}
-          aria-label="Switch database"
+    <header className="grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto] gap-2 border-b border-line bg-paper/80 px-3 py-2 backdrop-blur lg:grid-cols-[auto_minmax(280px,720px)_auto] lg:items-center lg:gap-4">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={`inline-flex items-center justify-center rounded-lg border p-2 lg:hidden ${mobileSidebarOpen ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
+          aria-controls="wiki-mobile-sidebar"
+          aria-expanded={mobileSidebarOpen}
+          aria-label="Toggle Explorer tabs"
+          data-tid="mobile-sidebar-toggle"
+          onClick={onMobileSidebarToggle}
         >
-          {databaseOptions.map((database) => (
-            <option key={database.databaseId} value={database.databaseId}>
-              {database.databaseId}
-            </option>
-          ))}
-        </select>
+          <Menu size={18} aria-hidden />
+        </button>
+        <Link
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-1.5 text-sm font-semibold leading-tight text-ink no-underline hover:border-accent"
+          href="/"
+          aria-label="Back to database dashboard"
+        >
+          <Image className="h-5 w-5 rounded-md" src="/icon.png" alt="" width={20} height={20} unoptimized />
+          Kinic Wiki
+        </Link>
+        <div className="flex min-w-0 shrink-0 items-center gap-1 text-xs text-muted">
+          <label className="hidden font-mono sm:inline" htmlFor="database-switcher">
+            db:
+          </label>
+          <select
+            id="database-switcher"
+            className="w-[132px] rounded-lg border border-line bg-white px-2 py-1.5 font-mono text-xs text-ink outline-none sm:w-[180px]"
+            value={databaseId}
+            onChange={switchDatabase}
+            aria-label="Switch database"
+          >
+            {databaseOptions.map((database) => (
+              <option key={database.databaseId} value={database.databaseId}>
+                {database.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
+      <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-2 lg:row-start-1">
+        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} readMode={readMode} canLeaveDirtyEdit={canLeaveDirtyEdit} />
+      </div>
+      <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:justify-end">
         {visibleError ? <span className="hidden max-w-[220px] truncate text-xs text-red-700 md:inline">{visibleError}</span> : null}
+        {publicReadable ? (
+          <a
+            aria-label={`Share ${currentDatabaseName} on X`}
+            className={`${HEADER_ICON_LINK_CLASS} border-line bg-white text-ink hover:border-accent hover:bg-accentSoft`}
+            href={xShareDatabaseHref({ databaseId, databaseName: currentDatabaseName })}
+            rel="noreferrer"
+            target="_blank"
+            title="Share on X"
+          >
+            <Share2 aria-hidden size={18} />
+            <span className="hidden sm:inline">Share</span>
+          </a>
+        ) : null}
+        <Link
+          className={`${HEADER_ICON_LINK_CLASS} ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
+          href={graphHref}
+          aria-label="Graph"
+          title={isGraphPage ? "Close graph" : "Graph"}
+        >
+          <Network size={18} aria-hidden />
+          <span className="sr-only sm:not-sr-only">Graph</span>
+        </Link>
+        <CycleBattery canisterId={canisterId} />
         {principal ? (
-          <button className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" type="button" onClick={onLogout}>
+          <button className="ml-auto rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink lg:ml-0" type="button" onClick={onLogout}>
             Logout
           </button>
         ) : (
           <button
-            className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
+            className="ml-auto rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60 lg:ml-0"
             data-tid="header-login-button"
             disabled={!authReady}
             type="button"
@@ -1275,15 +1345,6 @@ function TopBar({
             Login
           </button>
         )}
-        <Link
-          className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm no-underline ${isGraphPage ? "border-accent bg-accent text-white" : "border-line bg-white text-ink hover:border-accent hover:bg-accentSoft"}`}
-          href={hrefForGraph(canisterId, databaseId, graphLinkCenter, undefined, readMode)}
-        >
-          <Network size={15} />
-          Graph
-        </Link>
-        <CycleBattery canisterId={canisterId} />
-        <HeaderSearch canisterId={canisterId} databaseId={databaseId} query={query} searchKind={searchKind} readMode={readMode} canLeaveDirtyEdit={canLeaveDirtyEdit} />
       </div>
     </header>
   );
@@ -1307,6 +1368,7 @@ function withCurrentDatabase(databases: DatabaseSummary[], databaseId: string): 
   return [
     {
       databaseId,
+      name: databaseId,
       role: "reader",
       status: "hot",
       logicalSizeBytes: "0",
@@ -1355,12 +1417,12 @@ function HeaderSearch({
   }
 
   return (
-    <form className="flex min-w-0 flex-1 basis-full items-center gap-2 rounded-xl border border-line bg-white px-2 py-1.5 text-sm sm:basis-[360px] lg:max-w-[720px]" onSubmit={submitSearch}>
+    <form className="flex min-w-0 flex-1 basis-full items-center gap-1.5 rounded-xl border border-line bg-white px-2 py-1.5 text-sm sm:basis-[360px] sm:gap-2 lg:max-w-[720px]" onSubmit={submitSearch}>
       <div className="flex shrink-0 rounded-lg border border-line bg-paper p-1 text-xs">
         <SearchKindButton active={kind === "path"} label="Path" onClick={() => setDraft({ key: draftKey, text, kind: "path" })} />
         <SearchKindButton active={kind === "full"} label="Full text" onClick={() => setDraft({ key: draftKey, text, kind: "full" })} />
       </div>
-      <Search size={15} className="shrink-0 text-muted" />
+      <Search size={15} className="hidden shrink-0 text-muted min-[360px]:block" />
       <input
         className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted"
         value={text}
@@ -1368,8 +1430,9 @@ function HeaderSearch({
         placeholder="Search wiki"
         aria-label="Search wiki"
       />
-      <button className="rounded-2xl bg-action px-3 py-1.5 font-bold text-white hover:-translate-y-[3px] hover:bg-accent" type="submit">
-        Search
+      <button className="inline-flex shrink-0 items-center justify-center gap-1 rounded-2xl bg-action px-2.5 py-1.5 font-bold text-white hover:-translate-y-[3px] hover:bg-accent sm:px-3" type="submit">
+        <Search size={15} aria-hidden />
+        <span className="sr-only sm:not-sr-only">Search</span>
       </button>
     </form>
   );

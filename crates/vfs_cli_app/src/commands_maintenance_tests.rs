@@ -26,6 +26,7 @@ fn test_cli(command: Command) -> Cli {
             local: false,
             replica_host: None,
             identity_mode: IdentityModeArg::Auto,
+            allow_non_ii_identity: false,
             canister_id: Some("aaaaa-aa".to_string()),
         },
         command,

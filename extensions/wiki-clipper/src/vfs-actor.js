@@ -25,6 +25,7 @@ function idlFactory({ IDL: idl }) {
   });
   const DatabaseSummary = idl.Record({
     status: DatabaseStatus,
+    name: idl.Text,
     role: DatabaseRole,
     logical_size_bytes: idl.Nat64,
     database_id: idl.Text,
@@ -89,6 +90,7 @@ export function normalizeWritableDatabases(rawDatabases) {
 function normalizeDatabaseSummary(raw) {
   return {
     databaseId: raw.database_id,
+    name: String(raw.name || ""),
     role: variantKey(raw.role),
     status: variantKey(raw.status),
     logicalSizeBytes: raw.logical_size_bytes?.toString?.() ?? String(raw.logical_size_bytes ?? "0")

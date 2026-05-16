@@ -23,6 +23,9 @@ type ChildNode = record {
   has_children : bool;
   is_virtual : bool;
 };
+type CreateDatabaseRequest = record { name : text };
+type CreateDatabaseResult = record { name : text; database_id : text };
+type RenameDatabaseRequest = record { name : text; database_id : text };
 type DatabaseArchiveChunk = record { bytes : blob };
 type DatabaseArchiveInfo = record { size_bytes : nat64; database_id : text };
 type DatabaseMember = record {
@@ -40,6 +43,7 @@ type DatabaseRole = variant { Reader; Writer; Owner };
 type DatabaseStatus = variant { Hot; Restoring; Archiving; Archived; Deleted };
 type DatabaseSummary = record {
   status : DatabaseStatus;
+  name : text;
   role : DatabaseRole;
   logical_size_bytes : nat64;
   database_id : text;
@@ -271,7 +275,7 @@ type Result_22 = variant { Ok : vec SearchNodeHit; Err : text };
 type Result_23 = variant { Ok : SourceEvidence; Err : text };
 type Result_24 = variant { Ok : vec WriteNodeResult; Err : text };
 type Result_3 = variant { Ok : OpsAnswerSessionCheckResult; Err : text };
-type Result_4 = variant { Ok : text; Err : text };
+type Result_4 = variant { Ok : CreateDatabaseResult; Err : text };
 type Result_5 = variant { Ok : DeleteNodeResult; Err : text };
 type Result_6 = variant { Ok : EditNodeResult; Err : text };
 type Result_7 = variant { Ok : ExportSnapshotResponse; Err : text };
@@ -356,7 +360,7 @@ service : () -> {
   check_url_ingest_trigger_session : (UrlIngestTriggerSessionCheckRequest) -> (
       Result_1,
     ) query;
-  create_database : () -> (Result_4);
+  create_database : (CreateDatabaseRequest) -> (Result_4);
   delete_database : (text) -> (Result_1);
   delete_node : (DeleteNodeRequest) -> (Result_5);
   edit_node : (EditNodeRequest) -> (Result_6);
@@ -384,6 +388,7 @@ service : () -> {
   read_node : (text, text) -> (Result_19) query;
   read_node_context : (NodeContextRequest) -> (Result_20) query;
   recent_nodes : (RecentNodesRequest) -> (Result_21) query;
+  rename_database : (RenameDatabaseRequest) -> (Result_1);
   revoke_database_access : (text, text) -> (Result_1);
   search_node_paths : (SearchNodePathsRequest) -> (Result_22) query;
   search_nodes : (SearchNodesRequest) -> (Result_22) query;

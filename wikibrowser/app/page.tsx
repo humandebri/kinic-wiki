@@ -3,6 +3,8 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { Plus } from "lucide-react";
+import { CreateDatabaseDialog } from "./create-database-dialog";
 import { AuthControls, CreatedDatabasePanel, DatabaseBody, StatusPanel } from "./home-ui";
 import { AUTH_CLIENT_CREATE_OPTIONS, authLoginOptions } from "@/lib/auth";
 import type { DatabaseSummary } from "@/lib/types";
@@ -21,7 +23,9 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [publicError, setPublicError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [createdDatabaseId, setCreatedDatabaseId] = useState<string | null>(null);
+  const [createdDatabase, setCreatedDatabase] = useState<{ databaseId: string; name: string } | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newDatabaseName, setNewDatabaseName] = useState("");
   const [creating, setCreating] = useState(false);
 
   const refreshDatabases = useCallback(
@@ -107,7 +111,9 @@ export default function HomePage() {
     if (!authClient) return;
     await authClient.logout();
     setPrincipal(null);
-    setCreatedDatabaseId(null);
+    setCreatedDatabase(null);
+    setCreateDialogOpen(false);
+    setNewDatabaseName("");
     setError(null);
     setPublicError(null);
     await refreshDatabases(null);
@@ -115,11 +121,20 @@ export default function HomePage() {
 
   async function createDatabase() {
     if (!authClient || !canisterId) return;
+    const databaseNameInput = newDatabaseName.trim();
+    const validationError = databaseNameError(databaseNameInput);
+    if (validationError) {
+      setError(validationError);
+      setLoadState("error");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
-      const databaseId = await createDatabaseAuthenticated(canisterId, authClient.getIdentity());
-      setCreatedDatabaseId(databaseId);
+      const result = await createDatabaseAuthenticated(canisterId, authClient.getIdentity(), databaseNameInput);
+      setCreatedDatabase({ databaseId: result.database_id, name: result.name });
+      setCreateDialogOpen(false);
+      setNewDatabaseName("");
       await refreshDatabases(authClient);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -131,6 +146,9 @@ export default function HomePage() {
 
   const myDatabases = databases.filter((database) => database.member);
   const publicDatabases = databases.filter((database) => !database.member && database.publicReadable);
+  const trimmedDatabaseName = newDatabaseName.trim();
+  const databaseNameValidationError = databaseNameError(trimmedDatabaseName);
+  const createDisabled = creating || loadState === "loading" || databaseNameValidationError !== null;
 
   return (
     <main className="min-h-screen px-6 py-8">
@@ -157,7 +175,21 @@ export default function HomePage() {
 
         {error ? <StatusPanel tone="error" message={error} /> : null}
         {warning ? <StatusPanel tone="info" message={warning} /> : null}
-        {createdDatabaseId ? <CreatedDatabasePanel databaseId={createdDatabaseId} /> : null}
+        {createdDatabase ? <CreatedDatabasePanel databaseId={createdDatabase.databaseId} name={createdDatabase.name} /> : null}
+        <CreateDatabaseDialog
+          createDisabled={createDisabled}
+          creating={creating}
+          databaseName={newDatabaseName}
+          open={createDialogOpen}
+          validationError={databaseNameValidationError}
+          onCancel={() => {
+            if (creating) return;
+            setCreateDialogOpen(false);
+            setNewDatabaseName("");
+          }}
+          onChange={setNewDatabaseName}
+          onSubmit={() => void createDatabase()}
+        />
 
         <section className="rounded-lg border border-line bg-paper shadow-sm">
           {principal ? (
@@ -167,12 +199,13 @@ export default function HomePage() {
                 <p className="mt-1 font-mono text-xs text-muted">{principal}</p>
               </div>
               <button
-                className="rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-action bg-action px-3 py-2 text-sm font-bold text-white hover:-translate-y-[3px] hover:border-accent hover:bg-accent disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
                 disabled={creating || loadState === "loading"}
                 type="button"
-                onClick={createDatabase}
+                onClick={() => setCreateDialogOpen(true)}
               >
-                {creating ? "Creating..." : "Create database"}
+                <Plus aria-hidden size={15} />
+                <span>{creating ? "Creating..." : "Create database"}</span>
               </button>
             </div>
           ) : (
@@ -207,4 +240,10 @@ function listWarning(publicResult: PromiseSettledResult<DatabaseSummary[]>, memb
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Unexpected error";
+}
+
+function databaseNameError(databaseName: string): string | null {
+  if (databaseName.length === 0) return "Database name is required.";
+  if ([...databaseName].length > 80) return "Database name must be 1..80 characters.";
+  return /[\u0000-\u001f\u007f]/.test(databaseName) ? "Database name may not contain control characters." : null;
 }

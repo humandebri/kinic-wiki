@@ -9,10 +9,14 @@ export const expectedTypes = {
       role: "DatabaseRole",
       logical_size_bytes: "nat64",
       database_id: "text",
+      name: "text",
       archived_at_ms: "opt int64",
       deleted_at_ms: "opt int64"
     }
   },
+  CreateDatabaseRequest: { kind: "record", fields: { name: "text" } },
+  CreateDatabaseResult: { kind: "record", fields: { name: "text", database_id: "text" } },
+  RenameDatabaseRequest: { kind: "record", fields: { name: "text", database_id: "text" } },
   DatabaseMember: {
     kind: "record",
     fields: {
@@ -189,7 +193,7 @@ export const expectedTypes = {
     fields: { incoming_links: "vec LinkEdge", node: "Node", outgoing_links: "vec LinkEdge" }
   },
   ResultChildren: { kind: "variant", cases: { Ok: "vec ChildNode", Err: "text" } },
-  ResultCreateDatabase: { kind: "variant", cases: { Ok: "text", Err: "text" } },
+  ResultCreateDatabase: { kind: "variant", cases: { Ok: "CreateDatabaseResult", Err: "text" } },
   ResultDatabases: { kind: "variant", cases: { Ok: "vec DatabaseSummary", Err: "text" } },
   ResultMembers: { kind: "variant", cases: { Ok: "vec DatabaseMember", Err: "text" } },
   ResultUnit: { kind: "variant", cases: { Ok: "null", Err: "text" } },
@@ -264,6 +268,7 @@ export const expectedTypes = {
 
 export const didTypeAliases = {
   OpsAnswerSessionCheckRequest: "OpsAnswerSessionRequest",
+  RenameDatabaseRequest: "CreateDatabaseResult",
   UrlIngestTriggerSessionRequest: "OpsAnswerSessionRequest",
   ResultChildren: "Result_11",
   ResultCreateDatabase: "Result_4",
@@ -290,9 +295,10 @@ export const expectedMethods = {
   canister_health: { input: [], output: "CanisterHealth", mode: "query" },
   check_ops_answer_session: { input: ["OpsAnswerSessionCheckRequest"], output: "ResultOpsAnswerSessionCheck", mode: "query" },
   check_url_ingest_trigger_session: { input: ["UrlIngestTriggerSessionCheckRequest"], output: "ResultUnit", mode: "query" },
-  create_database: { input: [], output: "ResultCreateDatabase", mode: "update" },
+  create_database: { input: ["CreateDatabaseRequest"], output: "ResultCreateDatabase", mode: "update" },
   delete_node: { input: ["DeleteNodeRequest"], output: "ResultDeleteNode", mode: "update" },
   grant_database_access: { input: ["text", "text", "DatabaseRole"], output: "ResultUnit", mode: "update" },
+  rename_database: { input: ["RenameDatabaseRequest"], output: "ResultUnit", mode: "update" },
   graph_links: { input: ["GraphLinksRequest"], output: "ResultLinks", mode: "query" },
   graph_neighborhood: { input: ["GraphNeighborhoodRequest"], output: "ResultLinks", mode: "query" },
   incoming_links: { input: ["IncomingLinksRequest"], output: "ResultLinks", mode: "query" },

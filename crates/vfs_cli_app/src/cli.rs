@@ -420,7 +420,8 @@ impl Command {
         match self {
             Self::Database { command } => matches!(
                 command,
-                DatabaseCommand::Create
+                DatabaseCommand::Create { .. }
+                    | DatabaseCommand::Rename { .. }
                     | DatabaseCommand::Grant { .. }
                     | DatabaseCommand::Revoke { .. }
                     | DatabaseCommand::Members { .. }
@@ -794,6 +795,26 @@ mod tests {
 
     #[test]
     fn main_cli_parses_database_link_commands() {
+        let cli = Cli::parse_from(["kinic-vfs-cli", "database", "create", "team-db"]);
+        let Command::Database {
+            command: DatabaseCommand::Create { name },
+        } = cli.command
+        else {
+            panic!("expected database create command");
+        };
+        assert_eq!(name, "team-db");
+        assert!(Cli::try_parse_from(["kinic-vfs-cli", "database", "create"]).is_err());
+
+        let cli = Cli::parse_from(["kinic-vfs-cli", "database", "rename", "db_alpha", "Alpha"]);
+        let Command::Database {
+            command: DatabaseCommand::Rename { database_id, name },
+        } = cli.command
+        else {
+            panic!("expected database rename command");
+        };
+        assert_eq!(database_id, "db_alpha");
+        assert_eq!(name, "Alpha");
+
         let cli = Cli::parse_from(["kinic-vfs-cli", "database", "link", "team-db"]);
         let Command::Database {
             command: DatabaseCommand::Link { database_id },
@@ -895,6 +916,7 @@ mod tests {
         let default_cli =
             Cli::parse_from(["kinic-vfs-cli", "read-node", "--path", "/Wiki/index.md"]);
         assert_eq!(default_cli.connection.identity_mode, IdentityModeArg::Auto);
+        assert!(!default_cli.connection.allow_non_ii_identity);
 
         let anonymous_cli = Cli::parse_from([
             "kinic-vfs-cli",
@@ -923,6 +945,15 @@ mod tests {
             identity_cli.connection.identity_mode,
             IdentityModeArg::Identity
         );
+
+        let non_ii_cli = Cli::parse_from([
+            "kinic-vfs-cli",
+            "--allow-non-ii-identity",
+            "read-node",
+            "--path",
+            "/Wiki/index.md",
+        ]);
+        assert!(non_ii_cli.connection.allow_non_ii_identity);
     }
 
     #[test]

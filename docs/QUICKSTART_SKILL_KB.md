@@ -22,11 +22,11 @@ Use `--local` in each database setup command when targeting a local replica.
 
 Create and link a database.
 `database create` is only needed the first time.
-If `team-skills` already exists and you have access, start from `database link`.
+If the database already exists and you have access, start from `database link <database-id>`.
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database create team-skills
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database link team-skills
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database create "Team skills")"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- --canister-id "$CANISTER_ID" database link "$DB_ID"
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database current
 ```
 

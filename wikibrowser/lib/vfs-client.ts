@@ -56,8 +56,14 @@ type RawDatabaseSummary = {
   role: Variant;
   logical_size_bytes: bigint;
   database_id: string;
+  name: string;
   archived_at_ms: [] | [bigint];
   deleted_at_ms: [] | [bigint];
+};
+
+type RawCreateDatabaseResult = {
+  database_id: string;
+  name: string;
 };
 
 type RawDatabaseMember = {
@@ -190,7 +196,7 @@ type VfsActor = {
   canister_health: () => Promise<RawCanisterHealth>;
   check_ops_answer_session: (request: RawQueryAnswerSessionCheckRequest) => Promise<{ Ok: RawQueryAnswerSessionCheckResult } | { Err: string }>;
   check_url_ingest_trigger_session: (request: RawUrlIngestTriggerSessionCheckRequest) => Promise<{ Ok: null } | { Err: string }>;
-  create_database: () => Promise<{ Ok: string } | { Err: string }>;
+  create_database: (request: { name: string }) => Promise<{ Ok: RawCreateDatabaseResult } | { Err: string }>;
   delete_node: (request: RawDeleteNodeRequest) => Promise<{ Ok: RawDeleteNodeResult } | { Err: string }>;
   grant_database_access: (databaseId: string, principal: string, role: Variant) => Promise<{ Ok: null } | { Err: string }>;
   mkdir_node: (request: RawMkdirNodeRequest) => Promise<{ Ok: RawMkdirNodeResult } | { Err: string }>;
@@ -198,6 +204,7 @@ type VfsActor = {
   list_databases: () => Promise<{ Ok: RawDatabaseSummary[] } | { Err: string }>;
   list_database_members: (databaseId: string) => Promise<{ Ok: RawDatabaseMember[] } | { Err: string }>;
   revoke_database_access: (databaseId: string, principal: string) => Promise<{ Ok: null } | { Err: string }>;
+  rename_database: (request: { database_id: string; name: string }) => Promise<{ Ok: null } | { Err: string }>;
   read_node: (databaseId: string, path: string) => Promise<{ Ok: [] | [RawNode] } | { Err: string }>;
   list_children: (request: { database_id: string; path: string }) => Promise<{ Ok: RawChild[] } | { Err: string }>;
   recent_nodes: (request: { database_id: string; path: [] | [string]; limit: number }) => Promise<
@@ -360,14 +367,24 @@ export async function listDatabasesPublic(canisterId: string): Promise<DatabaseS
   });
 }
 
-export async function createDatabaseAuthenticated(canisterId: string, identity: Identity): Promise<string> {
+export async function createDatabaseAuthenticated(canisterId: string, identity: Identity, name: string): Promise<RawCreateDatabaseResult> {
   return callVfs(async () => {
     const actor = await createAuthenticatedActor(canisterId, identity);
-    const result = await actor.create_database();
+    const result = await actor.create_database({ name });
     if ("Err" in result) {
       throw new Error(result.Err);
     }
     return result.Ok;
+  });
+}
+
+export async function renameDatabaseAuthenticated(canisterId: string, identity: Identity, databaseId: string, name: string): Promise<void> {
+  return callVfs(async () => {
+    const actor = await createAuthenticatedActor(canisterId, identity);
+    const result = await actor.rename_database({ database_id: databaseId, name });
+    if ("Err" in result) {
+      throw new Error(result.Err);
+    }
   });
 }
 
@@ -724,6 +741,7 @@ function normalizeCanisterHealth(raw: RawCanisterHealth): CanisterHealth {
 function normalizeDatabaseSummary(raw: RawDatabaseSummary): DatabaseSummary {
   return {
     databaseId: raw.database_id,
+    name: raw.name,
     role: normalizeDatabaseRole(raw.role),
     status: normalizeDatabaseStatus(raw.status),
     logicalSizeBytes: raw.logical_size_bytes.toString(),

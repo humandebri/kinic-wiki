@@ -12,7 +12,10 @@ use ic_agent::identity::{DelegatedIdentity, Delegation, SignedDelegation};
 use serde::Deserialize;
 use tokio::process::Command;
 
-pub async fn load_default_identity(canister_id: &str) -> Result<Box<dyn ic_agent::Identity>> {
+pub async fn load_default_identity(
+    canister_id: &str,
+    allow_non_ii_identity: bool,
+) -> Result<Box<dyn ic_agent::Identity>> {
     let identity_name = command_stdout("icp", &["identity", "default"])
         .await
         .context("failed to read active icp-cli identity")?;
@@ -29,11 +32,25 @@ pub async fn load_default_identity(canister_id: &str) -> Result<Box<dyn ic_agent
         }
         "pending-delegation" => Err(refresh_required(identity_name)),
         "anonymous" => bail!("active icp-cli identity `{identity_name}` is anonymous"),
-        _ => {
+        kind => {
+            ensure_identity_kind_allowed(kind, identity_name, allow_non_ii_identity)?;
             let identity_pem = export_identity_pem(identity_name).await?;
             vfs_client::identity_from_pem(&identity_pem)
         }
     }
+}
+
+fn ensure_identity_kind_allowed(
+    kind: &str,
+    identity_name: &str,
+    allow_non_ii_identity: bool,
+) -> Result<()> {
+    if allow_non_ii_identity {
+        return Ok(());
+    }
+    bail!(
+        "active icp-cli identity `{identity_name}` is `{kind}`, but kinic-vfs-cli defaults to Internet Identity; run `icp identity link ii <name> --host https://<wiki-canister-id>.icp0.io` and `icp identity default <name>`, or pass `--allow-non-ii-identity`"
+    )
 }
 
 async fn export_identity_pem(identity_name: &str) -> Result<Vec<u8>> {
@@ -319,6 +336,14 @@ mod tests {
             "internet-identity"
         );
         assert!(read_identity_metadata(temp_dir.path(), "missing").is_err());
+    }
+
+    #[test]
+    fn non_ii_identity_requires_explicit_opt_in() {
+        let error = ensure_identity_kind_allowed("pem", "dev", false).unwrap_err();
+
+        assert!(error.to_string().contains("--allow-non-ii-identity"));
+        ensure_identity_kind_allowed("pem", "dev", true).unwrap();
     }
 
     #[test]

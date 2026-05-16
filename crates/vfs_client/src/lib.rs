@@ -11,17 +11,18 @@ use ic_agent::{
 };
 use k256::{SecretKey, pkcs8::DecodePrivateKey};
 use vfs_types::{
-    AppendNodeRequest, CanisterHealth, ChildNode, DatabaseArchiveChunk, DatabaseArchiveInfo,
-    DatabaseMember, DatabaseRestoreChunkRequest, DatabaseRole, DatabaseSummary, DeleteNodeRequest,
-    DeleteNodeResult, EditNodeRequest, EditNodeResult, ExportSnapshotRequest,
-    ExportSnapshotResponse, FetchUpdatesRequest, FetchUpdatesResponse, GlobNodeHit,
-    GlobNodesRequest, GraphLinksRequest, GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge,
-    ListChildrenRequest, ListNodesRequest, MemoryManifest, MkdirNodeRequest, MkdirNodeResult,
-    MoveNodeRequest, MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext,
+    AppendNodeRequest, CanisterHealth, ChildNode, CreateDatabaseRequest, CreateDatabaseResult,
+    DatabaseArchiveChunk, DatabaseArchiveInfo, DatabaseMember, DatabaseRestoreChunkRequest,
+    DatabaseRole, DatabaseSummary, DeleteNodeRequest, DeleteNodeResult, EditNodeRequest,
+    EditNodeResult, ExportSnapshotRequest, ExportSnapshotResponse, FetchUpdatesRequest,
+    FetchUpdatesResponse, GlobNodeHit, GlobNodesRequest, GraphLinksRequest,
+    GraphNeighborhoodRequest, IncomingLinksRequest, LinkEdge, ListChildrenRequest,
+    ListNodesRequest, MemoryManifest, MkdirNodeRequest, MkdirNodeResult, MoveNodeRequest,
+    MoveNodeResult, MultiEditNodeRequest, MultiEditNodeResult, Node, NodeContext,
     NodeContextRequest, NodeEntry, OutgoingLinksRequest, QueryContext, QueryContextRequest,
-    RecentNodeHit, RecentNodesRequest, SearchNodeHit, SearchNodePathsRequest, SearchNodesRequest,
-    SourceEvidence, SourceEvidenceRequest, Status, WriteNodeRequest, WriteNodeResult,
-    WriteNodesRequest,
+    RecentNodeHit, RecentNodesRequest, RenameDatabaseRequest, SearchNodeHit,
+    SearchNodePathsRequest, SearchNodesRequest, SourceEvidence, SourceEvidenceRequest, Status,
+    WriteNodeRequest, WriteNodeResult, WriteNodesRequest,
 };
 
 #[async_trait]
@@ -33,8 +34,11 @@ pub trait VfsApi: Sync {
     async fn memory_manifest(&self) -> Result<MemoryManifest> {
         Err(anyhow!("memory_manifest is not implemented by this client"))
     }
-    async fn create_database(&self) -> Result<String> {
+    async fn create_database(&self, _name: &str) -> Result<CreateDatabaseResult> {
         Err(anyhow!("create_database is not implemented by this client"))
+    }
+    async fn rename_database(&self, _database_id: &str, _name: &str) -> Result<()> {
+        Err(anyhow!("rename_database is not implemented by this client"))
     }
     async fn grant_database_access(
         &self,
@@ -358,8 +362,28 @@ impl VfsApi for CanisterVfsClient {
         self.query("memory_manifest", &()).await
     }
 
-    async fn create_database(&self) -> Result<String> {
-        let result: Result<String, String> = self.update("create_database", &()).await?;
+    async fn create_database(&self, name: &str) -> Result<CreateDatabaseResult> {
+        let result: Result<CreateDatabaseResult, String> = self
+            .update(
+                "create_database",
+                &CreateDatabaseRequest {
+                    name: name.to_string(),
+                },
+            )
+            .await?;
+        result.map_err(|error| anyhow!(error))
+    }
+
+    async fn rename_database(&self, database_id: &str, name: &str) -> Result<()> {
+        let result: Result<(), String> = self
+            .update(
+                "rename_database",
+                &RenameDatabaseRequest {
+                    database_id: database_id.to_string(),
+                    name: name.to_string(),
+                },
+            )
+            .await?;
         result.map_err(|error| anyhow!(error))
     }
 

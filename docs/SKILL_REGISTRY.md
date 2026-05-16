@@ -141,8 +141,8 @@ They are thin wrappers over normal VFS nodes and do not add canister schema or p
 For the manual first-run flow, see [`QUICKSTART_SKILL_KB.md`](QUICKSTART_SKILL_KB.md).
 
 ```bash
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database create team-skills
-cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database link team-skills
+DB_ID="$(cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database create "Team skills")"
+cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- database link "$DB_ID"
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill upsert --source-dir ./skills/legal-review --id legal-review
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill find "review contract redlines"
 cargo run -p kinic-vfs-cli --bin kinic-vfs-cli -- skill inspect legal-review --json

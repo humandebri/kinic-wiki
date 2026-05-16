@@ -26,6 +26,7 @@ if [[ -z "${CANISTER_ID}" ]]; then
 fi
 REPLICA_HOST="${BENCH_REPLICA_HOST:-$(bench_replica_host)}"
 LOCAL_ARGS=(--replica-host "${REPLICA_HOST}")
+CLI_ARGS=(--allow-non-ii-identity "${LOCAL_ARGS[@]}")
 CANISTER_STATUS_ENVIRONMENT="$(bench_icp_environment)"
 unset CANISTER_STATUS_NETWORK
 
@@ -44,8 +45,9 @@ cargo build -p kinic-vfs-cli --bin vfs_bench --bin kinic-vfs-cli >/dev/null
 BENCH_BIN="$(bench_vfs_bench_bin)"
 CLI_BIN="$(bench_kinic_vfs_cli_bin)"
 bench_log "creating benchmark database"
-DATABASE_ID="$("${CLI_BIN}" "${LOCAL_ARGS[@]}" --canister-id "${CANISTER_ID}" database create)"
-"${CLI_BIN}" "${LOCAL_ARGS[@]}" --canister-id "${CANISTER_ID}" database grant "${DATABASE_ID}" 2vxsx-fae writer >/dev/null
+DATABASE_NAME="${DATABASE_NAME:-Benchmark latency}"
+DATABASE_ID="$("${CLI_BIN}" "${CLI_ARGS[@]}" --canister-id "${CANISTER_ID}" database create "${DATABASE_NAME}")"
+"${CLI_BIN}" "${CLI_ARGS[@]}" --canister-id "${CANISTER_ID}" database grant "${DATABASE_ID}" 2vxsx-fae writer >/dev/null
 printf 'database_id=%s\n' "${DATABASE_ID}" >> "${SUMMARY_FILE}"
 
 node -e '

@@ -113,7 +113,7 @@ function renderDatabaseOptions(databases, selectedDatabaseId, placeholder = "No 
   for (const database of databases) {
     const option = document.createElement("option");
     option.value = database.databaseId;
-    option.textContent = `${database.databaseId} (${database.role})`;
+    option.textContent = `${database.name || database.databaseId} (${database.role})`;
     databaseSelect.append(option);
   }
   databaseSelect.value = databases.some((database) => database.databaseId === selectedDatabaseId)

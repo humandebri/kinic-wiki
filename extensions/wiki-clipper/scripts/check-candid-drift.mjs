@@ -14,6 +14,7 @@ const expectedTypes = {
     kind: "record",
     fields: {
       status: "DatabaseStatus",
+      name: "text",
       role: "DatabaseRole",
       logical_size_bytes: "nat64",
       database_id: "text",

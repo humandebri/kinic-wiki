@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import type { Identity } from "@icp-sdk/core/agent";
-import { FileText, Folder, Loader2 } from "lucide-react";
+import { FileCode, FileText, Folder, Loader2, Route } from "lucide-react";
 import { hrefForPath, hrefForSearch } from "@/lib/paths";
 import { splitMarkdownPreviewSections } from "@/lib/markdown-sections";
 import type { ChildNode, DatabaseRole, WikiNode } from "@/lib/types";
@@ -59,18 +59,7 @@ export function DocumentHeader({
     }
   }
   return (
-    <div className="flex min-h-[60px] flex-col gap-2 border-b border-line bg-paper/80 px-5 py-3 md:flex-row md:items-center md:justify-between">
-      <div className="min-w-0">
-        <p className="font-mono text-xs text-muted">{isDirectory ? "directory" : "node"}</p>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 className="truncate text-lg font-semibold tracking-[-0.035em]">{displayPath(path)}</h2>
-          {view === "edit" ? <HeaderBadge label="Editing" tone="blue" /> : null}
-          {view === "edit" && editState.dirty ? <HeaderBadge label="Unsaved" tone="yellow" /> : null}
-          {view === "edit" && editState.saveState === "saving" ? <HeaderBadge label="Saving" tone="blue" /> : null}
-          {view === "edit" && editState.saveState === "saved" ? <HeaderBadge label="Saved" tone="green" /> : null}
-          {copyStatus ? <HeaderBadge label={copyStatus} tone={copyStatus.endsWith("failed") ? "yellow" : "green"} /> : null}
-        </div>
-      </div>
+    <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-line bg-paper/80 px-5 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-xl border border-line bg-white p-1 text-sm">
           <ViewButton active={view === "preview"} label="Preview" onClick={() => onViewChange("preview")} />
@@ -78,22 +67,37 @@ export function DocumentHeader({
           {!isDirectory || canEditDirectory ? <ViewButton active={view === "edit"} label="Edit" onClick={() => onViewChange("edit")} /> : null}
         </div>
         <div className="flex rounded-xl border border-line bg-white p-1 text-xs">
-          <button className="rounded-lg px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink" type="button" onClick={() => void copyText("Path", path)}>
-            Copy path
+          <button
+            aria-label="Copy path"
+            className="inline-flex size-8 items-center justify-center rounded-lg text-muted hover:bg-paper hover:text-ink"
+            title="Copy path"
+            type="button"
+            onClick={() => void copyText("Path", path)}
+          >
+            <Route aria-hidden="true" size={15} />
           </button>
           {rawContent !== null ? (
-            <button className="rounded-lg px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink" type="button" onClick={() => void copyText("Raw", rawContent)}>
-              Copy raw
+            <button
+              aria-label="Copy raw"
+              className="inline-flex size-8 items-center justify-center rounded-lg text-muted hover:bg-paper hover:text-ink"
+              title="Copy raw"
+              type="button"
+              onClick={() => void copyText("Raw", rawContent)}
+            >
+              <FileCode aria-hidden="true" size={15} />
             </button>
           ) : null}
         </div>
       </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
+        {view === "edit" ? <HeaderBadge label="Editing" tone="blue" /> : null}
+        {view === "edit" && editState.dirty ? <HeaderBadge label="Unsaved" tone="yellow" /> : null}
+        {view === "edit" && editState.saveState === "saving" ? <HeaderBadge label="Saving" tone="blue" /> : null}
+        {view === "edit" && editState.saveState === "saved" ? <HeaderBadge label="Saved" tone="green" /> : null}
+        {copyStatus ? <HeaderBadge label={copyStatus} tone={copyStatus.endsWith("failed") ? "yellow" : "green"} /> : null}
+      </div>
     </div>
   );
-}
-
-function displayPath(path: string): string {
-  return path.startsWith("/Wiki/") ? path.slice("/Wiki/".length) : path;
 }
 
 export function DocumentPane({
